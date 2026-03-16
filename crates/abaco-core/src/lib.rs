@@ -1,0 +1,258 @@
+use serde::{Deserialize, Serialize};
+use std::fmt;
+
+/// Core numeric value type for Abaco.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Value {
+    Integer(i64),
+    Float(f64),
+    Fraction(i64, i64),
+    Complex(f64, f64),
+    Text(String),
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Value::Integer(n) => write!(f, "{n}"),
+            Value::Float(n) => {
+                if n.fract() == 0.0 && n.abs() < 1e15 {
+                    write!(f, "{n:.1}")
+                } else {
+                    write!(f, "{n}")
+                }
+            }
+            Value::Fraction(num, den) => write!(f, "{num}/{den}"),
+            Value::Complex(re, im) => {
+                if *im >= 0.0 {
+                    write!(f, "{re}+{im}i")
+                } else {
+                    write!(f, "{re}{im}i")
+                }
+            }
+            Value::Text(s) => write!(f, "{s}"),
+        }
+    }
+}
+
+impl Value {
+    /// Convert to f64 for arithmetic.
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Value::Integer(n) => Some(*n as f64),
+            Value::Float(n) => Some(*n),
+            Value::Fraction(num, den) => {
+                if *den == 0 {
+                    None
+                } else {
+                    Some(*num as f64 / *den as f64)
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Category of physical unit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum UnitCategory {
+    Length,
+    Mass,
+    Temperature,
+    Time,
+    DataSize,
+    Speed,
+    Area,
+    Volume,
+    Energy,
+    Pressure,
+}
+
+impl fmt::Display for UnitCategory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UnitCategory::Length => write!(f, "Length"),
+            UnitCategory::Mass => write!(f, "Mass"),
+            UnitCategory::Temperature => write!(f, "Temperature"),
+            UnitCategory::Time => write!(f, "Time"),
+            UnitCategory::DataSize => write!(f, "Data Size"),
+            UnitCategory::Speed => write!(f, "Speed"),
+            UnitCategory::Area => write!(f, "Area"),
+            UnitCategory::Volume => write!(f, "Volume"),
+            UnitCategory::Energy => write!(f, "Energy"),
+            UnitCategory::Pressure => write!(f, "Pressure"),
+        }
+    }
+}
+
+/// A physical or digital unit of measurement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Unit {
+    pub name: String,
+    pub symbol: String,
+    pub category: UnitCategory,
+    /// Multiply by this factor to convert to the base unit of the category.
+    pub to_base_factor: f64,
+    /// Add this offset after multiplication (used for temperature).
+    pub to_base_offset: f64,
+}
+
+impl Unit {
+    pub fn new(
+        name: &str,
+        symbol: &str,
+        category: UnitCategory,
+        to_base_factor: f64,
+        to_base_offset: f64,
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            symbol: symbol.to_string(),
+            category,
+            to_base_factor,
+            to_base_offset,
+        }
+    }
+}
+
+impl fmt::Display for Unit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} ({})", self.name, self.symbol)
+    }
+}
+
+/// Result of a unit conversion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversionResult {
+    pub from_value: f64,
+    pub from_unit: String,
+    pub to_value: f64,
+    pub to_unit: String,
+}
+
+impl fmt::Display for ConversionResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {} = {} {}",
+            self.from_value, self.from_unit, self.to_value, self.to_unit
+        )
+    }
+}
+
+/// A currency for conversion.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Currency {
+    pub code: String,
+    pub name: String,
+    pub symbol: String,
+}
+
+impl Currency {
+    pub fn new(code: &str, name: &str, symbol: &str) -> Self {
+        Self {
+            code: code.to_string(),
+            name: name.to_string(),
+            symbol: symbol.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for Currency {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} ({}) {}", self.code, self.symbol, self.name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_value_display_integer() {
+        assert_eq!(Value::Integer(42).to_string(), "42");
+    }
+
+    #[test]
+    fn test_value_display_float() {
+        assert_eq!(Value::Float(3.14).to_string(), "3.14");
+    }
+
+    #[test]
+    fn test_value_display_float_whole() {
+        assert_eq!(Value::Float(7.0).to_string(), "7.0");
+    }
+
+    #[test]
+    fn test_value_display_fraction() {
+        assert_eq!(Value::Fraction(1, 3).to_string(), "1/3");
+    }
+
+    #[test]
+    fn test_value_display_complex_positive_im() {
+        assert_eq!(Value::Complex(3.0, 4.0).to_string(), "3+4i");
+    }
+
+    #[test]
+    fn test_value_display_complex_negative_im() {
+        assert_eq!(Value::Complex(3.0, -4.0).to_string(), "3-4i");
+    }
+
+    #[test]
+    fn test_value_display_text() {
+        assert_eq!(Value::Text("hello".to_string()).to_string(), "hello");
+    }
+
+    #[test]
+    fn test_value_as_f64_integer() {
+        assert_eq!(Value::Integer(5).as_f64(), Some(5.0));
+    }
+
+    #[test]
+    fn test_value_as_f64_fraction() {
+        assert_eq!(Value::Fraction(1, 2).as_f64(), Some(0.5));
+    }
+
+    #[test]
+    fn test_value_as_f64_fraction_zero_den() {
+        assert_eq!(Value::Fraction(1, 0).as_f64(), None);
+    }
+
+    #[test]
+    fn test_unit_creation() {
+        let u = Unit::new("meter", "m", UnitCategory::Length, 1.0, 0.0);
+        assert_eq!(u.name, "meter");
+        assert_eq!(u.symbol, "m");
+        assert_eq!(u.category, UnitCategory::Length);
+    }
+
+    #[test]
+    fn test_unit_display() {
+        let u = Unit::new("kilogram", "kg", UnitCategory::Mass, 1.0, 0.0);
+        assert_eq!(u.to_string(), "kilogram (kg)");
+    }
+
+    #[test]
+    fn test_category_display() {
+        assert_eq!(UnitCategory::Temperature.to_string(), "Temperature");
+        assert_eq!(UnitCategory::DataSize.to_string(), "Data Size");
+    }
+
+    #[test]
+    fn test_currency_creation() {
+        let c = Currency::new("USD", "US Dollar", "$");
+        assert_eq!(c.code, "USD");
+        assert_eq!(c.symbol, "$");
+    }
+
+    #[test]
+    fn test_conversion_result_display() {
+        let r = ConversionResult {
+            from_value: 5.0,
+            from_unit: "km".to_string(),
+            to_value: 3.10686,
+            to_unit: "mi".to_string(),
+        };
+        assert!(r.to_string().contains("5 km"));
+    }
+}

@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/abaco-core",
+    "crates/abaco-eval",
+    "crates/abaco-units",
+    "crates/abaco-ai",
+]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal"] }
+reqwest = { version = "0.12", features = ["json"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+
+[package]
+name = "abaco"
+version = "2026.3.16"
+edition = "2024"
+description = "AI-native calculator and unit converter for AGNOS"
+license = "GPL-3.0"
+
+[dependencies]
+abaco-core = { path = "crates/abaco-core" }
+abaco-eval = { path = "crates/abaco-eval" }
+abaco-units = { path = "crates/abaco-units" }
+abaco-ai = { path = "crates/abaco-ai" }
+clap = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+
+[[bin]]
+name = "abaco"
+path = "src/main.rs"

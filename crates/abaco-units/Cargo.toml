@@ -1,0 +1,11 @@
+[package]
+name = "abaco-units"
+version = "2026.3.16"
+edition = "2024"
+description = "Unit conversion engine for Abaco"
+license = "GPL-3.0"
+
+[dependencies]
+abaco-core = { path = "../abaco-core" }
+thiserror = { workspace = true }
+tracing = { workspace = true }

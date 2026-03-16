@@ -1,0 +1,16 @@
+[package]
+name = "abaco-ai"
+version = "2026.3.16"
+edition = "2024"
+description = "Natural language math parsing for Abaco"
+license = "GPL-3.0"
+
+[dependencies]
+abaco-core = { path = "../abaco-core" }
+abaco-eval = { path = "../abaco-eval" }
+abaco-units = { path = "../abaco-units" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
