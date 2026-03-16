@@ -68,6 +68,44 @@ pub enum UnitCategory {
     Pressure,
 }
 
+impl UnitCategory {
+    /// Returns a slice of all `UnitCategory` variants.
+    pub fn all_categories() -> &'static [UnitCategory] {
+        &[
+            UnitCategory::Length,
+            UnitCategory::Mass,
+            UnitCategory::Temperature,
+            UnitCategory::Time,
+            UnitCategory::DataSize,
+            UnitCategory::Speed,
+            UnitCategory::Area,
+            UnitCategory::Volume,
+            UnitCategory::Energy,
+            UnitCategory::Pressure,
+        ]
+    }
+}
+
+impl std::str::FromStr for UnitCategory {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "length" => Ok(UnitCategory::Length),
+            "mass" | "weight" => Ok(UnitCategory::Mass),
+            "temperature" | "temp" => Ok(UnitCategory::Temperature),
+            "time" => Ok(UnitCategory::Time),
+            "datasize" | "data_size" | "data size" | "data" => Ok(UnitCategory::DataSize),
+            "speed" | "velocity" => Ok(UnitCategory::Speed),
+            "area" => Ok(UnitCategory::Area),
+            "volume" => Ok(UnitCategory::Volume),
+            "energy" => Ok(UnitCategory::Energy),
+            "pressure" => Ok(UnitCategory::Pressure),
+            _ => Err(format!("unknown unit category: '{s}'")),
+        }
+    }
+}
+
 impl fmt::Display for UnitCategory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

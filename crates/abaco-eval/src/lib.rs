@@ -300,28 +300,40 @@ impl Evaluator {
     }
 
     fn call_function(&self, name: &str, args: &[f64]) -> Result<f64> {
-        if args.len() != 1 {
-            return Err(EvalError::ParseError(format!(
-                "Function {name} expects 1 argument, got {}",
-                args.len()
-            )));
-        }
-        let x = args[0];
-        match name {
-            "sqrt" => Ok(x.sqrt()),
-            "sin" => Ok(x.sin()),
-            "cos" => Ok(x.cos()),
-            "tan" => Ok(x.tan()),
-            "log" | "log10" => Ok(x.log10()),
-            "ln" => Ok(x.ln()),
-            "abs" => Ok(x.abs()),
-            "ceil" => Ok(x.ceil()),
-            "floor" => Ok(x.floor()),
-            "round" => Ok(x.round()),
-            "exp" => Ok(x.exp()),
-            "asin" => Ok(x.asin()),
-            "acos" => Ok(x.acos()),
-            "atan" => Ok(x.atan()),
+        match (name, args.len()) {
+            // 1-arg functions
+            ("sqrt", 1) => Ok(args[0].sqrt()),
+            ("sin", 1) => Ok(args[0].sin()),
+            ("cos", 1) => Ok(args[0].cos()),
+            ("tan", 1) => Ok(args[0].tan()),
+            ("log" | "log10", 1) => Ok(args[0].log10()),
+            ("ln", 1) => Ok(args[0].ln()),
+            ("log2", 1) => Ok(args[0].log2()),
+            ("abs", 1) => Ok(args[0].abs()),
+            ("ceil", 1) => Ok(args[0].ceil()),
+            ("floor", 1) => Ok(args[0].floor()),
+            ("round", 1) => Ok(args[0].round()),
+            ("exp", 1) => Ok(args[0].exp()),
+            ("asin", 1) => Ok(args[0].asin()),
+            ("acos", 1) => Ok(args[0].acos()),
+            ("atan", 1) => Ok(args[0].atan()),
+            // 2-arg functions
+            ("min", 2) => Ok(args[0].min(args[1])),
+            ("max", 2) => Ok(args[0].max(args[1])),
+            ("pow", 2) => Ok(args[0].powf(args[1])),
+            ("atan2", 2) => Ok(args[0].atan2(args[1])),
+            // Unknown function or wrong arity
+            ("sqrt" | "sin" | "cos" | "tan" | "log" | "log10" | "ln" | "log2"
+            | "abs" | "ceil" | "floor" | "round" | "exp" | "asin" | "acos" | "atan", n) => {
+                Err(EvalError::ParseError(format!(
+                    "Function {name} expects 1 argument, got {n}"
+                )))
+            }
+            ("min" | "max" | "pow" | "atan2", n) => {
+                Err(EvalError::ParseError(format!(
+                    "Function {name} expects 2 arguments, got {n}"
+                )))
+            }
             _ => Err(EvalError::UnknownFunction(name.to_string())),
         }
     }
@@ -451,6 +463,52 @@ mod tests {
         assert_eq!(eval_f64("floor(3.7)"), 3.0);
         assert_eq!(eval_f64("ceil(3.2)"), 4.0);
         assert_eq!(eval_f64("round(3.5)"), 4.0);
+    }
+
+    #[test]
+    fn test_min_function() {
+        assert_eq!(eval_f64("min(3, 5)"), 3.0);
+        assert_eq!(eval_f64("min(7, 2)"), 2.0);
+        assert_eq!(eval_f64("min(-1, -5)"), -5.0);
+    }
+
+    #[test]
+    fn test_max_function() {
+        assert_eq!(eval_f64("max(3, 5)"), 5.0);
+        assert_eq!(eval_f64("max(7, 2)"), 7.0);
+        assert_eq!(eval_f64("max(-1, -5)"), -1.0);
+    }
+
+    #[test]
+    fn test_pow_function() {
+        assert_eq!(eval_f64("pow(2, 10)"), 1024.0);
+        assert_eq!(eval_f64("pow(3, 0)"), 1.0);
+        assert_eq!(eval_f64("pow(9, 0.5)"), 3.0);
+    }
+
+    #[test]
+    fn test_log2_function() {
+        assert_eq!(eval_f64("log2(8)"), 3.0);
+        assert_eq!(eval_f64("log2(1)"), 0.0);
+        assert!((eval_f64("log2(2)") - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_atan2_function() {
+        let result = eval_f64("atan2(1, 1)");
+        assert!((result - std::f64::consts::FRAC_PI_4).abs() < 1e-10);
+        let result = eval_f64("atan2(0, 1)");
+        assert!(result.abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_multi_arg_wrong_arity() {
+        let result = Evaluator::new().eval("min(1)");
+        assert!(result.is_err());
+        let result = Evaluator::new().eval("max(1, 2, 3)");
+        assert!(result.is_err());
+        let result = Evaluator::new().eval("sqrt(1, 2)");
+        assert!(result.is_err());
     }
 
     #[test]

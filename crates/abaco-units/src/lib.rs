@@ -151,6 +151,25 @@ impl UnitRegistry {
         self.add(Unit::new("cup", "cup", UnitCategory::Volume, 0.236588, 0.0));
         self.add(Unit::new("tablespoon", "tbsp", UnitCategory::Volume, 0.0147868, 0.0));
         self.add(Unit::new("teaspoon", "tsp", UnitCategory::Volume, 0.00492892, 0.0));
+
+        // Energy (base: joule)
+        self.add(Unit::new("joule", "J", UnitCategory::Energy, 1.0, 0.0));
+        self.add(Unit::new("kilojoule", "kJ", UnitCategory::Energy, 1000.0, 0.0));
+        self.add(Unit::new("calorie", "cal", UnitCategory::Energy, 4.184, 0.0));
+        self.add(Unit::new("kilocalorie", "kcal", UnitCategory::Energy, 4184.0, 0.0));
+        self.add(Unit::new("watt_hour", "Wh", UnitCategory::Energy, 3600.0, 0.0));
+        self.add(Unit::new("kilowatt_hour", "kWh", UnitCategory::Energy, 3_600_000.0, 0.0));
+        self.add(Unit::new("btu", "BTU", UnitCategory::Energy, 1055.06, 0.0));
+        self.add(Unit::new("electronvolt", "eV", UnitCategory::Energy, 1.602176634e-19, 0.0));
+
+        // Pressure (base: pascal)
+        self.add(Unit::new("pascal", "Pa", UnitCategory::Pressure, 1.0, 0.0));
+        self.add(Unit::new("kilopascal", "kPa", UnitCategory::Pressure, 1000.0, 0.0));
+        self.add(Unit::new("bar", "bar", UnitCategory::Pressure, 100_000.0, 0.0));
+        self.add(Unit::new("atmosphere", "atm", UnitCategory::Pressure, 101_325.0, 0.0));
+        self.add(Unit::new("psi", "psi", UnitCategory::Pressure, 6894.76, 0.0));
+        self.add(Unit::new("mmhg", "mmHg", UnitCategory::Pressure, 133.322, 0.0));
+        self.add(Unit::new("torr", "torr", UnitCategory::Pressure, 133.322, 0.0));
     }
 
     /// Find a unit by name or symbol (case-insensitive).
@@ -314,5 +333,29 @@ mod tests {
     fn test_hours_to_minutes() {
         let r = reg().convert(2.0, "hour", "minute").unwrap();
         assert!((r.to_value - 120.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_joule_to_calorie() {
+        let r = reg().convert(1.0, "joule", "calorie").unwrap();
+        assert!((r.to_value - 0.239).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_kwh_to_btu() {
+        let r = reg().convert(1.0, "kWh", "BTU").unwrap();
+        assert!((r.to_value - 3412.14).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_atm_to_psi() {
+        let r = reg().convert(1.0, "atm", "psi").unwrap();
+        assert!((r.to_value - 14.696).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_bar_to_pascal() {
+        let r = reg().convert(1.0, "bar", "Pa").unwrap();
+        assert!((r.to_value - 100_000.0).abs() < 0.1);
     }
 }
