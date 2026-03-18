@@ -192,12 +192,26 @@ impl Evaluator {
                     left /= right;
                 }
                 Token::Percent => {
+                    // Check if this is postfix percentage (e.g. "15%" → 0.15)
+                    // or binary modulo (e.g. "10 % 3" → 1).
+                    // It's postfix if the next token can't start an operand.
+                    let next = tokens.get(*pos + 1);
+                    let is_postfix = match next {
+                        None => true,
+                        Some(Token::RParen | Token::Comma) => true,
+                        Some(Token::Plus | Token::Minus | Token::Star | Token::Slash | Token::Percent | Token::Power) => true,
+                        _ => false,
+                    };
                     *pos += 1;
-                    let right = self.parse_power(tokens, pos)?;
-                    if right == 0.0 {
-                        return Err(EvalError::DivisionByZero);
+                    if is_postfix {
+                        left /= 100.0;
+                    } else {
+                        let right = self.parse_power(tokens, pos)?;
+                        if right == 0.0 {
+                            return Err(EvalError::DivisionByZero);
+                        }
+                        left %= right;
                     }
-                    left %= right;
                 }
                 _ => break,
             }
@@ -509,6 +523,31 @@ mod tests {
         assert!(result.is_err());
         let result = Evaluator::new().eval("sqrt(1, 2)");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_percent_shorthand() {
+        // 15% → 0.15
+        assert!((eval_f64("15%") - 0.15).abs() < 1e-10);
+        // 50% → 0.5
+        assert!((eval_f64("50%") - 0.5).abs() < 1e-10);
+        // 100% → 1.0
+        assert!((eval_f64("100%") - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_percent_in_expression() {
+        // 200 * 15% → 200 * 0.15 = 30
+        assert!((eval_f64("200 * 15%") - 30.0).abs() < 1e-10);
+        // 50% + 0.25 → 0.75
+        assert!((eval_f64("50% + 0.25") - 0.75).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_modulo_still_works() {
+        // Binary % with operand on right is still modulo
+        assert_eq!(eval("10 % 3"), Value::Integer(1));
+        assert_eq!(eval("7 % 2"), Value::Integer(1));
     }
 
     #[test]
