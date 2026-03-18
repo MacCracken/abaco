@@ -10,7 +10,7 @@ pub fn calculator_view(ui: &mut egui::Ui, app: &mut AbacoApp) {
     // Expression input
     let response = ui.add(
         egui::TextEdit::singleline(&mut app.calc_input)
-            .hint_text("Type an expression... (e.g. sqrt(144) + 15%)")
+            .hint_text("e.g. sqrt(144) + 15%, what is 20% of 500, convert 5 km to miles")
             .desired_width(f32::INFINITY)
             .font(egui::TextStyle::Monospace),
     );

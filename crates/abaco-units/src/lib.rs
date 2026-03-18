@@ -353,10 +353,131 @@ impl UnitRegistry {
             133.322,
             0.0,
         ));
+
+        // Angle (base: radian)
+        self.add(Unit::new("radian", "rad", UnitCategory::Angle, 1.0, 0.0));
+        self.add(Unit::new(
+            "degree",
+            "deg",
+            UnitCategory::Angle,
+            std::f64::consts::PI / 180.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "gradian",
+            "grad",
+            UnitCategory::Angle,
+            std::f64::consts::PI / 200.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "arcminute",
+            "arcmin",
+            UnitCategory::Angle,
+            std::f64::consts::PI / 10800.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "arcsecond",
+            "arcsec",
+            UnitCategory::Angle,
+            std::f64::consts::PI / 648000.0,
+            0.0,
+        ));
+
+        // Frequency (base: hertz)
+        self.add(Unit::new("hertz", "Hz", UnitCategory::Frequency, 1.0, 0.0));
+        self.add(Unit::new(
+            "kilohertz",
+            "kHz",
+            UnitCategory::Frequency,
+            1_000.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "megahertz",
+            "MHz",
+            UnitCategory::Frequency,
+            1_000_000.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "gigahertz",
+            "GHz",
+            UnitCategory::Frequency,
+            1_000_000_000.0,
+            0.0,
+        ));
+
+        // Force (base: newton)
+        self.add(Unit::new("newton", "N", UnitCategory::Force, 1.0, 0.0));
+        self.add(Unit::new(
+            "kilonewton",
+            "kN",
+            UnitCategory::Force,
+            1_000.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "pound_force",
+            "lbf",
+            UnitCategory::Force,
+            4.44822,
+            0.0,
+        ));
+        self.add(Unit::new("dyne", "dyn", UnitCategory::Force, 0.00001, 0.0));
+        self.add(Unit::new(
+            "kilogram_force",
+            "kgf",
+            UnitCategory::Force,
+            9.80665,
+            0.0,
+        ));
+
+        // Power (base: watt)
+        self.add(Unit::new("watt", "W", UnitCategory::Power, 1.0, 0.0));
+        self.add(Unit::new(
+            "kilowatt",
+            "kW",
+            UnitCategory::Power,
+            1_000.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "megawatt",
+            "MW",
+            UnitCategory::Power,
+            1_000_000.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "horsepower",
+            "hp",
+            UnitCategory::Power,
+            745.7,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "milliwatt",
+            "mW",
+            UnitCategory::Power,
+            0.001,
+            0.0,
+        ));
     }
 
-    /// Find a unit by name or symbol (case-insensitive).
+    /// Find a unit by name or symbol.
+    /// Tries exact symbol match first, then case-insensitive name/symbol, then plurals.
     pub fn find_unit(&self, name_or_symbol: &str) -> Option<&Unit> {
+        // Exact symbol match first (important for case-sensitive symbols like mW vs MW)
+        for units in self.units.values() {
+            for unit in units {
+                if unit.symbol == name_or_symbol {
+                    return Some(unit);
+                }
+            }
+        }
+        // Case-insensitive name or symbol
         let query = name_or_symbol.to_lowercase();
         for units in self.units.values() {
             for unit in units {
@@ -538,5 +659,291 @@ mod tests {
     fn test_bar_to_pascal() {
         let r = reg().convert(1.0, "bar", "Pa").unwrap();
         assert!((r.to_value - 100_000.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_degrees_to_radians() {
+        let r = reg().convert(180.0, "degree", "radian").unwrap();
+        assert!((r.to_value - std::f64::consts::PI).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_radians_to_degrees() {
+        let r = reg().convert(std::f64::consts::PI, "rad", "deg").unwrap();
+        assert!((r.to_value - 180.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_mhz_to_ghz() {
+        let r = reg().convert(1000.0, "MHz", "GHz").unwrap();
+        assert!((r.to_value - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_hz_to_khz() {
+        let r = reg().convert(44100.0, "Hz", "kHz").unwrap();
+        assert!((r.to_value - 44.1).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_newton_to_lbf() {
+        let r = reg().convert(1.0, "newton", "lbf").unwrap();
+        assert!((r.to_value - 0.22481).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_kw_to_hp() {
+        let r = reg().convert(1.0, "kW", "hp").unwrap();
+        assert!((r.to_value - 1.341).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_hp_to_watt() {
+        let r = reg().convert(1.0, "hp", "W").unwrap();
+        assert!((r.to_value - 745.7).abs() < 0.1);
+    }
+
+    // --- Length additional ---
+    #[test]
+    fn test_inches_to_cm() {
+        let r = reg().convert(1.0, "inch", "cm").unwrap();
+        assert!((r.to_value - 2.54).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_yards_to_meters() {
+        let r = reg().convert(1.0, "yard", "meter").unwrap();
+        assert!((r.to_value - 0.9144).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_nautical_mile_to_km() {
+        let r = reg().convert(1.0, "nautical_mile", "km").unwrap();
+        assert!((r.to_value - 1.852).abs() < 0.001);
+    }
+
+    // --- Mass additional ---
+    #[test]
+    fn test_ounces_to_grams() {
+        let r = reg().convert(1.0, "ounce", "gram").unwrap();
+        assert!((r.to_value - 28.3495).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_stone_to_kg() {
+        let r = reg().convert(1.0, "stone", "kg").unwrap();
+        assert!((r.to_value - 6.35029).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_ton_to_kg() {
+        let r = reg().convert(1.0, "ton", "kg").unwrap();
+        assert!((r.to_value - 1000.0).abs() < 0.1);
+    }
+
+    // --- Temperature additional ---
+    #[test]
+    fn test_kelvin_to_fahrenheit() {
+        let r = reg().convert(373.15, "kelvin", "fahrenheit").unwrap();
+        assert!((r.to_value - 212.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_absolute_zero_kelvin() {
+        let r = reg().convert(0.0, "kelvin", "celsius").unwrap();
+        assert!((r.to_value - (-273.15)).abs() < 0.1);
+    }
+
+    // --- Time additional ---
+    #[test]
+    fn test_days_to_hours() {
+        let r = reg().convert(1.0, "day", "hour").unwrap();
+        assert!((r.to_value - 24.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_weeks_to_days() {
+        let r = reg().convert(1.0, "week", "day").unwrap();
+        assert!((r.to_value - 7.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_year_to_days() {
+        let r = reg().convert(1.0, "year", "day").unwrap();
+        assert!((r.to_value - 365.25).abs() < 0.1);
+    }
+
+    // --- Data size additional ---
+    #[test]
+    fn test_tb_to_gb() {
+        let r = reg().convert(1.0, "TB", "GB").unwrap();
+        assert!((r.to_value - 1024.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_mb_to_kb() {
+        let r = reg().convert(1.0, "MB", "KB").unwrap();
+        assert!((r.to_value - 1024.0).abs() < 0.1);
+    }
+
+    // --- Speed additional ---
+    #[test]
+    fn test_kmh_to_mph() {
+        let r = reg().convert(100.0, "km/h", "mph").unwrap();
+        assert!((r.to_value - 62.137).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_knot_to_kmh() {
+        let r = reg().convert(1.0, "knot", "km/h").unwrap();
+        assert!((r.to_value - 1.852).abs() < 0.01);
+    }
+
+    // --- Area additional ---
+    #[test]
+    fn test_hectare_to_acres() {
+        let r = reg().convert(1.0, "hectare", "acre").unwrap();
+        assert!((r.to_value - 2.471).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_sqkm_to_hectare() {
+        let r = reg().convert(1.0, "km2", "ha").unwrap();
+        assert!((r.to_value - 100.0).abs() < 0.1);
+    }
+
+    // --- Volume additional ---
+    #[test]
+    fn test_cups_to_ml() {
+        let r = reg().convert(1.0, "cup", "mL").unwrap();
+        assert!((r.to_value - 236.588).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_tablespoon_to_teaspoon() {
+        let r = reg().convert(1.0, "tablespoon", "teaspoon").unwrap();
+        assert!((r.to_value - 3.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_pint_to_cups() {
+        let r = reg().convert(1.0, "pint", "cup").unwrap();
+        assert!((r.to_value - 2.0).abs() < 0.1);
+    }
+
+    // --- Energy additional ---
+    #[test]
+    fn test_kcal_to_kj() {
+        let r = reg().convert(1.0, "kcal", "kJ").unwrap();
+        assert!((r.to_value - 4.184).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_wh_to_joule() {
+        let r = reg().convert(1.0, "Wh", "J").unwrap();
+        assert!((r.to_value - 3600.0).abs() < 0.1);
+    }
+
+    // --- Pressure additional ---
+    #[test]
+    fn test_kpa_to_atm() {
+        let r = reg().convert(101.325, "kPa", "atm").unwrap();
+        assert!((r.to_value - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_mmhg_to_torr() {
+        // mmHg and torr are essentially the same
+        let r = reg().convert(1.0, "mmhg", "torr").unwrap();
+        assert!((r.to_value - 1.0).abs() < 0.01);
+    }
+
+    // --- Angle additional ---
+    #[test]
+    fn test_full_circle_degrees_to_rad() {
+        let r = reg().convert(360.0, "degree", "radian").unwrap();
+        assert!((r.to_value - std::f64::consts::TAU).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_gradian_to_degree() {
+        let r = reg().convert(100.0, "gradian", "degree").unwrap();
+        assert!((r.to_value - 90.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_arcminute_to_degree() {
+        let r = reg().convert(60.0, "arcminute", "degree").unwrap();
+        assert!((r.to_value - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_arcsecond_to_arcminute() {
+        let r = reg().convert(60.0, "arcsecond", "arcminute").unwrap();
+        assert!((r.to_value - 1.0).abs() < 0.001);
+    }
+
+    // --- Frequency additional ---
+    #[test]
+    fn test_ghz_to_hz() {
+        let r = reg().convert(1.0, "GHz", "Hz").unwrap();
+        assert!((r.to_value - 1e9).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_khz_to_mhz() {
+        let r = reg().convert(1000.0, "kHz", "MHz").unwrap();
+        assert!((r.to_value - 1.0).abs() < 0.001);
+    }
+
+    // --- Force additional ---
+    #[test]
+    fn test_kgf_to_newton() {
+        let r = reg().convert(1.0, "kgf", "N").unwrap();
+        assert!((r.to_value - 9.80665).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_dyne_to_newton() {
+        let r = reg().convert(100000.0, "dyne", "N").unwrap();
+        assert!((r.to_value - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_kn_to_newton() {
+        let r = reg().convert(1.0, "kN", "N").unwrap();
+        assert!((r.to_value - 1000.0).abs() < 0.1);
+    }
+
+    // --- Power additional ---
+    #[test]
+    fn test_mw_to_watt() {
+        let r = reg().convert(1.0, "MW", "W").unwrap();
+        assert!((r.to_value - 1_000_000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_milliwatt_to_watt() {
+        let r = reg().convert(1000.0, "mW", "W").unwrap();
+        assert!((r.to_value - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_hp_to_kw() {
+        let r = reg().convert(1.0, "hp", "kW").unwrap();
+        assert!((r.to_value - 0.7457).abs() < 0.001);
+    }
+
+    // --- Cross-category error ---
+    #[test]
+    fn test_angle_vs_frequency_incompatible() {
+        let result = reg().convert(1.0, "degree", "Hz");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_force_vs_power_incompatible() {
+        let result = reg().convert(1.0, "newton", "watt");
+        assert!(result.is_err());
     }
 }

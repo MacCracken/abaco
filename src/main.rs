@@ -106,7 +106,7 @@ fn main() {
                     Err(e) => {
                         eprintln!("Error: {e}");
                         eprintln!(
-                            "Available categories: length, mass, temperature, time, datasize, speed, area, volume, energy, pressure"
+                            "Available categories: length, mass, temperature, time, datasize, speed, area, volume, energy, pressure, angle, frequency, force, power"
                         );
                         std::process::exit(1);
                     }

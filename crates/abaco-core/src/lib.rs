@@ -66,6 +66,10 @@ pub enum UnitCategory {
     Volume,
     Energy,
     Pressure,
+    Angle,
+    Frequency,
+    Force,
+    Power,
 }
 
 impl UnitCategory {
@@ -82,6 +86,10 @@ impl UnitCategory {
             UnitCategory::Volume,
             UnitCategory::Energy,
             UnitCategory::Pressure,
+            UnitCategory::Angle,
+            UnitCategory::Frequency,
+            UnitCategory::Force,
+            UnitCategory::Power,
         ]
     }
 }
@@ -101,6 +109,10 @@ impl std::str::FromStr for UnitCategory {
             "volume" => Ok(UnitCategory::Volume),
             "energy" => Ok(UnitCategory::Energy),
             "pressure" => Ok(UnitCategory::Pressure),
+            "angle" => Ok(UnitCategory::Angle),
+            "frequency" | "freq" => Ok(UnitCategory::Frequency),
+            "force" => Ok(UnitCategory::Force),
+            "power" | "wattage" => Ok(UnitCategory::Power),
             _ => Err(format!("unknown unit category: '{s}'")),
         }
     }
@@ -119,6 +131,10 @@ impl fmt::Display for UnitCategory {
             UnitCategory::Volume => write!(f, "Volume"),
             UnitCategory::Energy => write!(f, "Energy"),
             UnitCategory::Pressure => write!(f, "Pressure"),
+            UnitCategory::Angle => write!(f, "Angle"),
+            UnitCategory::Frequency => write!(f, "Frequency"),
+            UnitCategory::Force => write!(f, "Force"),
+            UnitCategory::Power => write!(f, "Power"),
         }
     }
 }

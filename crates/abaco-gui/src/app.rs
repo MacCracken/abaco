@@ -1,6 +1,6 @@
 //! AbacoApp — eframe::App implementation for the Abaco desktop GUI.
 
-use abaco_ai::CalculationHistory;
+use abaco_ai::{CalculationHistory, NlParser, ParsedQuery};
 use abaco_eval::Evaluator;
 use abaco_units::UnitRegistry;
 
@@ -23,6 +23,7 @@ pub struct AbacoApp {
     pub calc_result: Option<String>,
     pub calc_error: Option<String>,
     pub evaluator: Evaluator,
+    pub nl_parser: NlParser,
 
     // Converter state
     pub registry: UnitRegistry,
@@ -56,6 +57,7 @@ impl AbacoApp {
             calc_result: None,
             calc_error: None,
             evaluator: Evaluator::new(),
+            nl_parser: NlParser::new(),
 
             registry: UnitRegistry::new(),
             conv_value_str: String::new(),
@@ -113,6 +115,52 @@ impl AbacoApp {
             }
         }
 
+        // Try NL parsing (handles "what is", "convert X to Y", "X% of Y", etc.)
+        if let Ok(query) = self.nl_parser.parse_natural(input) {
+            match query {
+                ParsedQuery::Conversion { value, from, to } => {
+                    match self.registry.convert(value, &from, &to) {
+                        Ok(result) => {
+                            let result_str = result.to_string();
+                            self.history.push(input, &result_str);
+                            self.calc_result = Some(result_str);
+                            self.calc_error = None;
+                        }
+                        Err(e) => {
+                            self.calc_result = None;
+                            self.calc_error = Some(e.to_string());
+                        }
+                    }
+                    return;
+                }
+                ParsedQuery::CurrencyConversion { value, from, to } => {
+                    let msg = format!(
+                        "{value} {from} -> {to} (live rates via hoosh — not yet connected)"
+                    );
+                    self.history.push(input, &msg);
+                    self.calc_result = Some(msg);
+                    self.calc_error = None;
+                    return;
+                }
+                ParsedQuery::Calculation(expr) => {
+                    match self.evaluator.eval(&expr) {
+                        Ok(value) => {
+                            let result_str = value.to_string();
+                            self.history.push(input, &result_str);
+                            self.calc_result = Some(result_str);
+                            self.calc_error = None;
+                        }
+                        Err(e) => {
+                            self.calc_result = None;
+                            self.calc_error = Some(e.to_string());
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+
+        // Fall back to direct eval
         match self.evaluator.eval(input) {
             Ok(value) => {
                 let result_str = value.to_string();

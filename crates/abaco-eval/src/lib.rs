@@ -87,6 +87,16 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>> {
                 while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
                     i += 1;
                 }
+                // Scientific notation: 1e10, 1.5e-3, 2E+6
+                if i < chars.len() && (chars[i] == 'e' || chars[i] == 'E') {
+                    i += 1;
+                    if i < chars.len() && (chars[i] == '+' || chars[i] == '-') {
+                        i += 1;
+                    }
+                    while i < chars.len() && chars[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                }
                 let num_str: String = chars[start..i].iter().collect();
                 let num = num_str
                     .parse::<f64>()
@@ -338,6 +348,20 @@ impl Evaluator {
             ("asin", 1) => Ok(args[0].asin()),
             ("acos", 1) => Ok(args[0].acos()),
             ("atan", 1) => Ok(args[0].atan()),
+            // Hyperbolic
+            ("sinh", 1) => Ok(args[0].sinh()),
+            ("cosh", 1) => Ok(args[0].cosh()),
+            ("tanh", 1) => Ok(args[0].tanh()),
+            ("asinh", 1) => Ok(args[0].asinh()),
+            ("acosh", 1) => Ok(args[0].acosh()),
+            ("atanh", 1) => Ok(args[0].atanh()),
+            // Rounding/sign
+            ("trunc", 1) => Ok(args[0].trunc()),
+            ("fract", 1) => Ok(args[0].fract()),
+            ("sign" | "sgn", 1) => Ok(args[0].signum()),
+            // Degree/radian conversion
+            ("deg", 1) => Ok(args[0].to_degrees()),
+            ("rad", 1) => Ok(args[0].to_radians()),
             // 2-arg functions
             ("min", 2) => Ok(args[0].min(args[1])),
             ("max", 2) => Ok(args[0].max(args[1])),
@@ -346,7 +370,8 @@ impl Evaluator {
             // Unknown function or wrong arity
             (
                 "sqrt" | "sin" | "cos" | "tan" | "log" | "log10" | "ln" | "log2" | "abs" | "ceil"
-                | "floor" | "round" | "exp" | "asin" | "acos" | "atan",
+                | "floor" | "round" | "exp" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh"
+                | "asinh" | "acosh" | "atanh" | "trunc" | "fract" | "sign" | "sgn" | "deg" | "rad",
                 n,
             ) => Err(EvalError::ParseError(format!(
                 "Function {name} expects 1 argument, got {n}"
@@ -554,6 +579,39 @@ mod tests {
         // Binary % with operand on right is still modulo
         assert_eq!(eval("10 % 3"), Value::Integer(1));
         assert_eq!(eval("7 % 2"), Value::Integer(1));
+    }
+
+    #[test]
+    fn test_scientific_notation() {
+        assert_eq!(eval_f64("1e3"), 1000.0);
+        assert_eq!(eval_f64("1.5e2"), 150.0);
+        assert!((eval_f64("1e-3") - 0.001).abs() < 1e-15);
+        assert_eq!(eval_f64("2.5E+2"), 250.0);
+        assert_eq!(eval_f64("1e3 + 1e2"), 1100.0);
+    }
+
+    #[test]
+    fn test_hyperbolic_functions() {
+        assert!((eval_f64("sinh(0)")).abs() < 1e-10);
+        assert!((eval_f64("cosh(0)") - 1.0).abs() < 1e-10);
+        assert!((eval_f64("tanh(0)")).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_deg_rad_functions() {
+        assert!((eval_f64("deg(pi)") - 180.0).abs() < 1e-10);
+        assert!((eval_f64("rad(180)") - std::f64::consts::PI).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_sign_trunc_fract() {
+        assert_eq!(eval_f64("sign(42)"), 1.0);
+        assert_eq!(eval_f64("sign(-5)"), -1.0);
+        // Note: IEEE 754 signum(+0.0) = +1.0
+        assert_eq!(eval_f64("sign(0)"), 1.0);
+        assert_eq!(eval_f64("trunc(3.7)"), 3.0);
+        assert_eq!(eval_f64("trunc(-3.7)"), -3.0);
+        assert!((eval_f64("fract(3.75)") - 0.75).abs() < 1e-10);
     }
 
     #[test]
