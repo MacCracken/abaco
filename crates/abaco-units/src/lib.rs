@@ -35,28 +35,55 @@ impl UnitRegistry {
     }
 
     fn add(&mut self, unit: Unit) {
-        self.units
-            .entry(unit.category)
-            .or_default()
-            .push(unit);
+        self.units.entry(unit.category).or_default().push(unit);
     }
 
     fn populate_defaults(&mut self) {
         // Length (base: meter)
         self.add(Unit::new("meter", "m", UnitCategory::Length, 1.0, 0.0));
-        self.add(Unit::new("kilometer", "km", UnitCategory::Length, 1000.0, 0.0));
-        self.add(Unit::new("centimeter", "cm", UnitCategory::Length, 0.01, 0.0));
-        self.add(Unit::new("millimeter", "mm", UnitCategory::Length, 0.001, 0.0));
+        self.add(Unit::new(
+            "kilometer",
+            "km",
+            UnitCategory::Length,
+            1000.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "centimeter",
+            "cm",
+            UnitCategory::Length,
+            0.01,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "millimeter",
+            "mm",
+            UnitCategory::Length,
+            0.001,
+            0.0,
+        ));
         self.add(Unit::new("mile", "mi", UnitCategory::Length, 1609.344, 0.0));
         self.add(Unit::new("yard", "yd", UnitCategory::Length, 0.9144, 0.0));
         self.add(Unit::new("foot", "ft", UnitCategory::Length, 0.3048, 0.0));
         self.add(Unit::new("inch", "in", UnitCategory::Length, 0.0254, 0.0));
-        self.add(Unit::new("nautical_mile", "nmi", UnitCategory::Length, 1852.0, 0.0));
+        self.add(Unit::new(
+            "nautical_mile",
+            "nmi",
+            UnitCategory::Length,
+            1852.0,
+            0.0,
+        ));
 
         // Mass (base: kilogram)
         self.add(Unit::new("kilogram", "kg", UnitCategory::Mass, 1.0, 0.0));
         self.add(Unit::new("gram", "g", UnitCategory::Mass, 0.001, 0.0));
-        self.add(Unit::new("milligram", "mg", UnitCategory::Mass, 0.000001, 0.0));
+        self.add(Unit::new(
+            "milligram",
+            "mg",
+            UnitCategory::Mass,
+            0.000001,
+            0.0,
+        ));
         self.add(Unit::new("pound", "lb", UnitCategory::Mass, 0.453592, 0.0));
         self.add(Unit::new("ounce", "oz", UnitCategory::Mass, 0.0283495, 0.0));
         self.add(Unit::new("ton", "t", UnitCategory::Mass, 1000.0, 0.0));
@@ -67,7 +94,13 @@ impl UnitRegistry {
         // Celsius is the base: factor=1, offset=0
         // Fahrenheit: C = (F - 32) * 5/9 => offset=-32, factor=5/9
         // Kelvin: C = K - 273.15 => offset=-273.15, factor=1
-        self.add(Unit::new("celsius", "C", UnitCategory::Temperature, 1.0, 0.0));
+        self.add(Unit::new(
+            "celsius",
+            "C",
+            UnitCategory::Temperature,
+            1.0,
+            0.0,
+        ));
         self.add(Unit::new(
             "fahrenheit",
             "F",
@@ -93,8 +126,20 @@ impl UnitRegistry {
 
         // Data size (base: byte)
         self.add(Unit::new("byte", "B", UnitCategory::DataSize, 1.0, 0.0));
-        self.add(Unit::new("kilobyte", "KB", UnitCategory::DataSize, 1024.0, 0.0));
-        self.add(Unit::new("megabyte", "MB", UnitCategory::DataSize, 1_048_576.0, 0.0));
+        self.add(Unit::new(
+            "kilobyte",
+            "KB",
+            UnitCategory::DataSize,
+            1024.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "megabyte",
+            "MB",
+            UnitCategory::DataSize,
+            1_048_576.0,
+            0.0,
+        ));
         self.add(Unit::new(
             "gigabyte",
             "GB",
@@ -118,7 +163,13 @@ impl UnitRegistry {
         ));
 
         // Speed (base: m/s)
-        self.add(Unit::new("meters_per_second", "m/s", UnitCategory::Speed, 1.0, 0.0));
+        self.add(Unit::new(
+            "meters_per_second",
+            "m/s",
+            UnitCategory::Speed,
+            1.0,
+            0.0,
+        ));
         self.add(Unit::new(
             "kilometers_per_hour",
             "km/h",
@@ -136,40 +187,172 @@ impl UnitRegistry {
         self.add(Unit::new("knot", "kn", UnitCategory::Speed, 0.514444, 0.0));
 
         // Area (base: sq meter)
-        self.add(Unit::new("square_meter", "m2", UnitCategory::Area, 1.0, 0.0));
-        self.add(Unit::new("square_kilometer", "km2", UnitCategory::Area, 1_000_000.0, 0.0));
-        self.add(Unit::new("hectare", "ha", UnitCategory::Area, 10_000.0, 0.0));
-        self.add(Unit::new("acre", "ac", UnitCategory::Area, 4046.8564224, 0.0));
-        self.add(Unit::new("square_foot", "ft2", UnitCategory::Area, 0.092903, 0.0));
+        self.add(Unit::new(
+            "square_meter",
+            "m2",
+            UnitCategory::Area,
+            1.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "square_kilometer",
+            "km2",
+            UnitCategory::Area,
+            1_000_000.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "hectare",
+            "ha",
+            UnitCategory::Area,
+            10_000.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "acre",
+            "ac",
+            UnitCategory::Area,
+            4046.8564224,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "square_foot",
+            "ft2",
+            UnitCategory::Area,
+            0.092903,
+            0.0,
+        ));
 
         // Volume (base: liter)
         self.add(Unit::new("liter", "L", UnitCategory::Volume, 1.0, 0.0));
-        self.add(Unit::new("milliliter", "mL", UnitCategory::Volume, 0.001, 0.0));
-        self.add(Unit::new("gallon", "gal", UnitCategory::Volume, 3.78541, 0.0));
-        self.add(Unit::new("quart", "qt", UnitCategory::Volume, 0.946353, 0.0));
+        self.add(Unit::new(
+            "milliliter",
+            "mL",
+            UnitCategory::Volume,
+            0.001,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "gallon",
+            "gal",
+            UnitCategory::Volume,
+            3.78541,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "quart",
+            "qt",
+            UnitCategory::Volume,
+            0.946353,
+            0.0,
+        ));
         self.add(Unit::new("pint", "pt", UnitCategory::Volume, 0.473176, 0.0));
         self.add(Unit::new("cup", "cup", UnitCategory::Volume, 0.236588, 0.0));
-        self.add(Unit::new("tablespoon", "tbsp", UnitCategory::Volume, 0.0147868, 0.0));
-        self.add(Unit::new("teaspoon", "tsp", UnitCategory::Volume, 0.00492892, 0.0));
+        self.add(Unit::new(
+            "tablespoon",
+            "tbsp",
+            UnitCategory::Volume,
+            0.0147868,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "teaspoon",
+            "tsp",
+            UnitCategory::Volume,
+            0.00492892,
+            0.0,
+        ));
 
         // Energy (base: joule)
         self.add(Unit::new("joule", "J", UnitCategory::Energy, 1.0, 0.0));
-        self.add(Unit::new("kilojoule", "kJ", UnitCategory::Energy, 1000.0, 0.0));
-        self.add(Unit::new("calorie", "cal", UnitCategory::Energy, 4.184, 0.0));
-        self.add(Unit::new("kilocalorie", "kcal", UnitCategory::Energy, 4184.0, 0.0));
-        self.add(Unit::new("watt_hour", "Wh", UnitCategory::Energy, 3600.0, 0.0));
-        self.add(Unit::new("kilowatt_hour", "kWh", UnitCategory::Energy, 3_600_000.0, 0.0));
+        self.add(Unit::new(
+            "kilojoule",
+            "kJ",
+            UnitCategory::Energy,
+            1000.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "calorie",
+            "cal",
+            UnitCategory::Energy,
+            4.184,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "kilocalorie",
+            "kcal",
+            UnitCategory::Energy,
+            4184.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "watt_hour",
+            "Wh",
+            UnitCategory::Energy,
+            3600.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "kilowatt_hour",
+            "kWh",
+            UnitCategory::Energy,
+            3_600_000.0,
+            0.0,
+        ));
         self.add(Unit::new("btu", "BTU", UnitCategory::Energy, 1055.06, 0.0));
-        self.add(Unit::new("electronvolt", "eV", UnitCategory::Energy, 1.602176634e-19, 0.0));
+        self.add(Unit::new(
+            "electronvolt",
+            "eV",
+            UnitCategory::Energy,
+            1.602176634e-19,
+            0.0,
+        ));
 
         // Pressure (base: pascal)
         self.add(Unit::new("pascal", "Pa", UnitCategory::Pressure, 1.0, 0.0));
-        self.add(Unit::new("kilopascal", "kPa", UnitCategory::Pressure, 1000.0, 0.0));
-        self.add(Unit::new("bar", "bar", UnitCategory::Pressure, 100_000.0, 0.0));
-        self.add(Unit::new("atmosphere", "atm", UnitCategory::Pressure, 101_325.0, 0.0));
-        self.add(Unit::new("psi", "psi", UnitCategory::Pressure, 6894.76, 0.0));
-        self.add(Unit::new("mmhg", "mmHg", UnitCategory::Pressure, 133.322, 0.0));
-        self.add(Unit::new("torr", "torr", UnitCategory::Pressure, 133.322, 0.0));
+        self.add(Unit::new(
+            "kilopascal",
+            "kPa",
+            UnitCategory::Pressure,
+            1000.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "bar",
+            "bar",
+            UnitCategory::Pressure,
+            100_000.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "atmosphere",
+            "atm",
+            UnitCategory::Pressure,
+            101_325.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "psi",
+            "psi",
+            UnitCategory::Pressure,
+            6894.76,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "mmhg",
+            "mmHg",
+            UnitCategory::Pressure,
+            133.322,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "torr",
+            "torr",
+            UnitCategory::Pressure,
+            133.322,
+            0.0,
+        ));
     }
 
     /// Find a unit by name or symbol (case-insensitive).
@@ -177,9 +360,7 @@ impl UnitRegistry {
         let query = name_or_symbol.to_lowercase();
         for units in self.units.values() {
             for unit in units {
-                if unit.name.to_lowercase() == query
-                    || unit.symbol.to_lowercase() == query
-                {
+                if unit.name.to_lowercase() == query || unit.symbol.to_lowercase() == query {
                     return Some(unit);
                 }
             }

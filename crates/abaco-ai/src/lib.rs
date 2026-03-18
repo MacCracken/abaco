@@ -98,9 +98,7 @@ impl NlParser {
     }
 
     fn try_parse_conversion(&self, input: &str) -> Option<ParsedQuery> {
-        let input = input
-            .strip_prefix("convert ")
-            .unwrap_or(input);
+        let input = input.strip_prefix("convert ").unwrap_or(input);
 
         // Pattern: "<number> <unit> to/in <unit>"
         let words: Vec<&str> = input.split_whitespace().collect();

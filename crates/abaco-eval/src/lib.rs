@@ -196,12 +196,19 @@ impl Evaluator {
                     // or binary modulo (e.g. "10 % 3" → 1).
                     // It's postfix if the next token can't start an operand.
                     let next = tokens.get(*pos + 1);
-                    let is_postfix = match next {
-                        None => true,
-                        Some(Token::RParen | Token::Comma) => true,
-                        Some(Token::Plus | Token::Minus | Token::Star | Token::Slash | Token::Percent | Token::Power) => true,
-                        _ => false,
-                    };
+                    let is_postfix = matches!(
+                        next,
+                        None | Some(
+                            Token::RParen
+                                | Token::Comma
+                                | Token::Plus
+                                | Token::Minus
+                                | Token::Star
+                                | Token::Slash
+                                | Token::Percent
+                                | Token::Power
+                        )
+                    );
                     *pos += 1;
                     if is_postfix {
                         left /= 100.0;
@@ -337,17 +344,16 @@ impl Evaluator {
             ("pow", 2) => Ok(args[0].powf(args[1])),
             ("atan2", 2) => Ok(args[0].atan2(args[1])),
             // Unknown function or wrong arity
-            ("sqrt" | "sin" | "cos" | "tan" | "log" | "log10" | "ln" | "log2"
-            | "abs" | "ceil" | "floor" | "round" | "exp" | "asin" | "acos" | "atan", n) => {
-                Err(EvalError::ParseError(format!(
-                    "Function {name} expects 1 argument, got {n}"
-                )))
-            }
-            ("min" | "max" | "pow" | "atan2", n) => {
-                Err(EvalError::ParseError(format!(
-                    "Function {name} expects 2 arguments, got {n}"
-                )))
-            }
+            (
+                "sqrt" | "sin" | "cos" | "tan" | "log" | "log10" | "ln" | "log2" | "abs" | "ceil"
+                | "floor" | "round" | "exp" | "asin" | "acos" | "atan",
+                n,
+            ) => Err(EvalError::ParseError(format!(
+                "Function {name} expects 1 argument, got {n}"
+            ))),
+            ("min" | "max" | "pow" | "atan2", n) => Err(EvalError::ParseError(format!(
+                "Function {name} expects 2 arguments, got {n}"
+            ))),
             _ => Err(EvalError::UnknownFunction(name.to_string())),
         }
     }

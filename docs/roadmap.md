@@ -1,8 +1,7 @@
 # Roadmap
 
-## MVP — Core Calculator & Units (current)
+## V1 — Core Calculator, Units & GUI (done)
 
-### Done
 - Expression evaluator with recursive descent parser
 - 75+ built-in units across 10 categories (length, mass, temperature, time, data, speed, area, volume, energy, pressure)
 - Temperature conversion with offset support
@@ -16,16 +15,17 @@
 - `list` subcommand to browse available units by category
 - MCP tool server (`abaco_eval`, `abaco_convert`, `abaco_currency`, `abaco_history`, `abaco_units`)
 - Percentage shorthand in evaluator (e.g. `15%` as `0.15`)
-- 74+ tests, 0 warnings
-
-## Post-V1 — GUI & Live Currency
-
 - egui desktop interface with expression input and result display
 - Unit conversion picker with category browser
+- Function plotter (f(x) graphing with egui_plot)
+- 79+ tests, 0 warnings
+
+## Next — Live Currency & Persistence
+
 - Live currency exchange rates via hoosh (port 8088)
 - Rate caching and offline fallback
-- Conversion history with search and persistence
-- Graph plotting for functions
+- Conversion history persistence (JSON file)
+- History search
 
 ## Future — Advanced Math & NL
 

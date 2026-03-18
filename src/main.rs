@@ -1,10 +1,17 @@
 use clap::{Parser, Subcommand};
-use serde_json::{json, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 
 #[derive(Parser)]
-#[command(name = "abaco", about = "AI-native calculator and unit converter for AGNOS")]
+#[command(
+    name = "abaco",
+    about = "AI-native calculator and unit converter for AGNOS"
+)]
 struct Cli {
+    /// Launch the desktop GUI
+    #[arg(long)]
+    gui: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -33,12 +40,19 @@ enum Commands {
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
     let cli = Cli::parse();
+
+    if cli.gui {
+        if let Err(e) = abaco_gui::run() {
+            eprintln!("GUI error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
 
     match cli.command {
         Some(Commands::Eval { expression }) => {
@@ -82,21 +96,21 @@ fn main() {
         Some(Commands::List { category }) => {
             let registry = abaco_units::UnitRegistry::new();
             match category {
-                Some(cat_str) => {
-                    match cat_str.parse::<abaco_core::UnitCategory>() {
-                        Ok(cat) => {
-                            println!("{}:", cat);
-                            for unit in registry.list_units(cat) {
-                                println!("  {}", unit);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Error: {e}");
-                            eprintln!("Available categories: length, mass, temperature, time, datasize, speed, area, volume, energy, pressure");
-                            std::process::exit(1);
+                Some(cat_str) => match cat_str.parse::<abaco_core::UnitCategory>() {
+                    Ok(cat) => {
+                        println!("{}:", cat);
+                        for unit in registry.list_units(cat) {
+                            println!("  {}", unit);
                         }
                     }
-                }
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        eprintln!(
+                            "Available categories: length, mass, temperature, time, datasize, speed, area, volume, energy, pressure"
+                        );
+                        std::process::exit(1);
+                    }
+                },
                 None => {
                     for cat in abaco_core::UnitCategory::all_categories() {
                         println!("{}:", cat);
@@ -183,7 +197,7 @@ fn mcp_handle_initialize() -> JsonValue {
     json!({
         "protocolVersion": "2024-11-05",
         "capabilities": { "tools": {} },
-        "serverInfo": { "name": "abaco", "version": "2026.3.16" }
+        "serverInfo": { "name": "abaco", "version": "2026.3.18" }
     })
 }
 
@@ -325,10 +339,7 @@ fn mcp_tool_currency(args: &JsonValue) -> Result<String, String> {
 }
 
 fn mcp_tool_history(args: &JsonValue) -> Result<String, String> {
-    let limit = args
-        .get("limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(10) as usize;
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
     // MCP server is stateless per invocation, so history is always empty
     let _ = limit;
     Ok("No history entries (MCP server is stateless per invocation)".to_string())
@@ -408,7 +419,7 @@ fn run_repl() {
                 && var_name
                     .chars()
                     .next()
-                    .map_or(false, |c| c.is_ascii_alphabetic() || c == '_')
+                    .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
                 && var_name
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || c == '_');
@@ -440,19 +451,18 @@ fn run_repl() {
                 }
             }
             Ok(abaco_ai::ParsedQuery::CurrencyConversion { value, from, to }) => {
-                let msg = format!("{value} {from} -> {to} (live rates via hoosh — not yet connected)");
+                let msg =
+                    format!("{value} {from} -> {to} (live rates via hoosh — not yet connected)");
                 println!("{msg}");
                 history.push(input, &msg);
             }
-            Ok(abaco_ai::ParsedQuery::Calculation(expr)) => {
-                match evaluator.eval(&expr) {
-                    Ok(value) => {
-                        println!("{value}");
-                        history.push(input, &value.to_string());
-                    }
-                    Err(e) => eprintln!("Error: {e}"),
+            Ok(abaco_ai::ParsedQuery::Calculation(expr)) => match evaluator.eval(&expr) {
+                Ok(value) => {
+                    println!("{value}");
+                    history.push(input, &value.to_string());
                 }
-            }
+                Err(e) => eprintln!("Error: {e}"),
+            },
             Err(_) => {
                 // Fall back to direct eval
                 match evaluator.eval(input) {

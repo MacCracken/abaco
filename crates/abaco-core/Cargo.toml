@@ -1,6 +1,6 @@
 [package]
 name = "abaco-core"
-version = "2026.3.16"
+version = "2026.3.18"
 edition = "2024"
 description = "Core types for Abaco calculator and unit converter"
 license = "GPL-3.0"
