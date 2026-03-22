@@ -1,4 +1,4 @@
-use abaco_core::Value;
+use crate::core::Value;
 use std::collections::HashMap;
 
 #[derive(Debug, thiserror::Error)]

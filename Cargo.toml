@@ -1,49 +1,32 @@
-[workspace]
-resolver = "2"
-members = [
-    "crates/abaco-core",
-    "crates/abaco-eval",
-    "crates/abaco-units",
-    "crates/abaco-ai",
-    "crates/abaco-gui",
-]
-
-[workspace.dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal"] }
-reqwest = { version = "0.12", features = ["json"] }
-chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1", features = ["v4", "serde"] }
-thiserror = "2"
-anyhow = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-clap = { version = "4", features = ["derive"] }
-egui = "0.33"
-eframe = { version = "0.33", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
-egui_plot = "0.34"
-
 [package]
 name = "abaco"
-version = "2026.3.18"
+version = "0.1.0"
 edition = "2024"
-description = "AI-native calculator and unit converter for AGNOS"
+rust-version = "1.89"
 license = "GPL-3.0"
+description = "Math engine — expression evaluation, unit conversion, and numeric types for Rust"
+homepage = "https://github.com/MacCracken/abaco"
+repository = "https://github.com/MacCracken/abaco"
+readme = "README.md"
+keywords = ["math", "calculator", "units", "conversion", "expression"]
+categories = ["mathematics", "science"]
+
+[features]
+default = []
+ai = ["dep:reqwest", "dep:tokio"]
+full = ["ai"]
 
 [dependencies]
-abaco-core = { path = "crates/abaco-core" }
-abaco-eval = { path = "crates/abaco-eval" }
-abaco-units = { path = "crates/abaco-units" }
-abaco-ai = { path = "crates/abaco-ai" }
-abaco-gui = { path = "crates/abaco-gui" }
-clap = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-anyhow = { workspace = true }
-serde_json = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
 
-[[bin]]
-name = "abaco"
-path = "src/main.rs"
+# AI deps (optional)
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"], optional = true }
+
+[dev-dependencies]
+criterion = "0.5"

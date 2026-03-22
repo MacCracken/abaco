@@ -1,4 +1,4 @@
-use abaco_core::{ConversionResult, Unit, UnitCategory};
+use crate::core::{ConversionResult, Unit, UnitCategory};
 use std::collections::HashMap;
 
 #[derive(Debug, thiserror::Error)]
