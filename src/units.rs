@@ -524,6 +524,24 @@ impl UnitRegistry {
             ));
         }
 
+        // Short-circuit: same unit returns identity
+        if from_unit.symbol == to_unit.symbol {
+            return Ok(ConversionResult {
+                from_value: value,
+                from_unit: from_unit.symbol.clone(),
+                to_value: value,
+                to_unit: to_unit.symbol.clone(),
+            });
+        }
+
+        // Guard against zero conversion factor
+        if to_unit.to_base_factor == 0.0 {
+            return Err(UnitError::ConversionError(format!(
+                "Unit '{}' has zero conversion factor",
+                to_unit.name
+            )));
+        }
+
         // Convert to base unit, then from base to target
         let base_value = (value + from_unit.to_base_offset) * from_unit.to_base_factor;
         let result = base_value / to_unit.to_base_factor - to_unit.to_base_offset;
@@ -945,5 +963,78 @@ mod tests {
     fn test_force_vs_power_incompatible() {
         let result = reg().convert(1.0, "newton", "watt");
         assert!(result.is_err());
+    }
+
+    // --- Hardening tests ---
+
+    #[test]
+    fn test_same_unit_identity() {
+        let r = reg().convert(42.0, "km", "km").unwrap();
+        assert_eq!(r.to_value, 42.0);
+    }
+
+    #[test]
+    fn test_zero_celsius_to_fahrenheit() {
+        let r = reg().convert(0.0, "celsius", "fahrenheit").unwrap();
+        assert!((r.to_value - 32.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_negative_40_crossover() {
+        let r = reg().convert(-40.0, "celsius", "fahrenheit").unwrap();
+        assert!((r.to_value - (-40.0)).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_very_large_byte_conversion() {
+        let r = reg().convert(1_125_899_906_842_624.0, "byte", "PB").unwrap();
+        assert!((r.to_value - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_very_small_mass_conversion() {
+        let r = reg().convert(0.001, "kg", "mg").unwrap();
+        assert!((r.to_value - 1000.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_symbol_uniqueness() {
+        let r = reg();
+        let mut seen = std::collections::HashSet::new();
+        for cat in UnitCategory::all_categories() {
+            for unit in r.list_units(*cat) {
+                assert!(
+                    seen.insert(unit.symbol.clone()),
+                    "Duplicate symbol: {}",
+                    unit.symbol
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_all_categories_populated() {
+        let r = reg();
+        for cat in UnitCategory::all_categories() {
+            assert!(
+                !r.list_units(*cat).is_empty(),
+                "Category {cat:?} has no units"
+            );
+        }
+    }
+
+    #[test]
+    fn test_case_sensitive_mw_vs_megawatt() {
+        let r = reg();
+        let mw = r.find_unit("mW").unwrap();
+        assert_eq!(mw.name, "milliwatt");
+        let big_mw = r.find_unit("MW").unwrap();
+        assert_eq!(big_mw.name, "megawatt");
+    }
+
+    #[test]
+    fn test_registry_default() {
+        let r = UnitRegistry::default();
+        assert!(r.find_unit("km").is_some());
     }
 }

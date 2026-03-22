@@ -11,6 +11,8 @@ pub enum EvalError {
     UnknownVariable(String),
     #[error("Parse error: {0}")]
     ParseError(String),
+    #[error("Math error: {0}")]
+    MathError(String),
     #[error("Invalid expression")]
     InvalidExpression,
 }
@@ -157,8 +159,8 @@ impl Evaluator {
                 "Unexpected token at position {pos}"
             )));
         }
-        // Return as integer if the result is a whole number
-        if result.fract() == 0.0 && result.abs() < i64::MAX as f64 {
+        // Return as integer if the result is a whole number within safe i64 range
+        if result.fract() == 0.0 && result.abs() < 9_007_199_254_740_992.0 {
             Ok(Value::Integer(result as i64))
         } else {
             Ok(Value::Float(result))
@@ -330,57 +332,77 @@ impl Evaluator {
         }
     }
 
+    /// Check a function result for NaN/Infinity and return a MathError if invalid.
+    fn check_result(name: &str, val: f64) -> Result<f64> {
+        if val.is_nan() {
+            Err(EvalError::MathError(format!(
+                "{name} produced undefined result (NaN)"
+            )))
+        } else if val.is_infinite() {
+            Err(EvalError::MathError(format!(
+                "{name} produced infinite result"
+            )))
+        } else {
+            Ok(val)
+        }
+    }
+
     fn call_function(&self, name: &str, args: &[f64]) -> Result<f64> {
-        match (name, args.len()) {
+        let result = match (name, args.len()) {
             // 1-arg functions
-            ("sqrt", 1) => Ok(args[0].sqrt()),
-            ("sin", 1) => Ok(args[0].sin()),
-            ("cos", 1) => Ok(args[0].cos()),
-            ("tan", 1) => Ok(args[0].tan()),
-            ("log" | "log10", 1) => Ok(args[0].log10()),
-            ("ln", 1) => Ok(args[0].ln()),
-            ("log2", 1) => Ok(args[0].log2()),
-            ("abs", 1) => Ok(args[0].abs()),
-            ("ceil", 1) => Ok(args[0].ceil()),
-            ("floor", 1) => Ok(args[0].floor()),
-            ("round", 1) => Ok(args[0].round()),
-            ("exp", 1) => Ok(args[0].exp()),
-            ("asin", 1) => Ok(args[0].asin()),
-            ("acos", 1) => Ok(args[0].acos()),
-            ("atan", 1) => Ok(args[0].atan()),
+            ("sqrt", 1) => args[0].sqrt(),
+            ("sin", 1) => args[0].sin(),
+            ("cos", 1) => args[0].cos(),
+            ("tan", 1) => args[0].tan(),
+            ("log" | "log10", 1) => args[0].log10(),
+            ("ln", 1) => args[0].ln(),
+            ("log2", 1) => args[0].log2(),
+            ("abs", 1) => args[0].abs(),
+            ("ceil", 1) => args[0].ceil(),
+            ("floor", 1) => args[0].floor(),
+            ("round", 1) => args[0].round(),
+            ("exp", 1) => args[0].exp(),
+            ("asin", 1) => args[0].asin(),
+            ("acos", 1) => args[0].acos(),
+            ("atan", 1) => args[0].atan(),
             // Hyperbolic
-            ("sinh", 1) => Ok(args[0].sinh()),
-            ("cosh", 1) => Ok(args[0].cosh()),
-            ("tanh", 1) => Ok(args[0].tanh()),
-            ("asinh", 1) => Ok(args[0].asinh()),
-            ("acosh", 1) => Ok(args[0].acosh()),
-            ("atanh", 1) => Ok(args[0].atanh()),
+            ("sinh", 1) => args[0].sinh(),
+            ("cosh", 1) => args[0].cosh(),
+            ("tanh", 1) => args[0].tanh(),
+            ("asinh", 1) => args[0].asinh(),
+            ("acosh", 1) => args[0].acosh(),
+            ("atanh", 1) => args[0].atanh(),
             // Rounding/sign
-            ("trunc", 1) => Ok(args[0].trunc()),
-            ("fract", 1) => Ok(args[0].fract()),
-            ("sign" | "sgn", 1) => Ok(args[0].signum()),
+            ("trunc", 1) => args[0].trunc(),
+            ("fract", 1) => args[0].fract(),
+            ("sign" | "sgn", 1) => args[0].signum(),
             // Degree/radian conversion
-            ("deg", 1) => Ok(args[0].to_degrees()),
-            ("rad", 1) => Ok(args[0].to_radians()),
+            ("deg", 1) => args[0].to_degrees(),
+            ("rad", 1) => args[0].to_radians(),
             // 2-arg functions
-            ("min", 2) => Ok(args[0].min(args[1])),
-            ("max", 2) => Ok(args[0].max(args[1])),
-            ("pow", 2) => Ok(args[0].powf(args[1])),
-            ("atan2", 2) => Ok(args[0].atan2(args[1])),
+            ("min", 2) => args[0].min(args[1]),
+            ("max", 2) => args[0].max(args[1]),
+            ("pow", 2) => args[0].powf(args[1]),
+            ("atan2", 2) => args[0].atan2(args[1]),
             // Unknown function or wrong arity
             (
                 "sqrt" | "sin" | "cos" | "tan" | "log" | "log10" | "ln" | "log2" | "abs" | "ceil"
                 | "floor" | "round" | "exp" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh"
                 | "asinh" | "acosh" | "atanh" | "trunc" | "fract" | "sign" | "sgn" | "deg" | "rad",
                 n,
-            ) => Err(EvalError::ParseError(format!(
-                "Function {name} expects 1 argument, got {n}"
-            ))),
-            ("min" | "max" | "pow" | "atan2", n) => Err(EvalError::ParseError(format!(
-                "Function {name} expects 2 arguments, got {n}"
-            ))),
-            _ => Err(EvalError::UnknownFunction(name.to_string())),
-        }
+            ) => {
+                return Err(EvalError::ParseError(format!(
+                    "Function {name} expects 1 argument, got {n}"
+                )));
+            }
+            ("min" | "max" | "pow" | "atan2", n) => {
+                return Err(EvalError::ParseError(format!(
+                    "Function {name} expects 2 arguments, got {n}"
+                )));
+            }
+            _ => return Err(EvalError::UnknownFunction(name.to_string())),
+        };
+        Self::check_result(name, result)
     }
 }
 
@@ -621,5 +643,208 @@ mod tests {
         assert_eq!(tokens[0], Token::Number(2.0));
         assert_eq!(tokens[1], Token::Plus);
         assert_eq!(tokens[2], Token::Number(3.0));
+    }
+
+    // --- NaN/Infinity guard tests ---
+
+    #[test]
+    fn test_sqrt_negative_errors() {
+        assert!(Evaluator::new().eval("sqrt(-1)").is_err());
+    }
+
+    #[test]
+    fn test_ln_negative_errors() {
+        assert!(Evaluator::new().eval("ln(-1)").is_err());
+    }
+
+    #[test]
+    fn test_ln_zero_errors() {
+        assert!(Evaluator::new().eval("ln(0)").is_err());
+    }
+
+    #[test]
+    fn test_log_negative_errors() {
+        assert!(Evaluator::new().eval("log(-1)").is_err());
+    }
+
+    #[test]
+    fn test_acos_out_of_domain() {
+        assert!(Evaluator::new().eval("acos(2)").is_err());
+    }
+
+    #[test]
+    fn test_asin_out_of_domain() {
+        assert!(Evaluator::new().eval("asin(2)").is_err());
+    }
+
+    #[test]
+    fn test_acosh_out_of_domain() {
+        assert!(Evaluator::new().eval("acosh(0.5)").is_err());
+    }
+
+    #[test]
+    fn test_atanh_out_of_domain() {
+        assert!(Evaluator::new().eval("atanh(2)").is_err());
+    }
+
+    // --- Edge case expressions ---
+
+    #[test]
+    fn test_empty_string() {
+        assert!(Evaluator::new().eval("").is_err());
+    }
+
+    #[test]
+    fn test_whitespace_only() {
+        assert!(Evaluator::new().eval("   ").is_err());
+    }
+
+    #[test]
+    fn test_just_a_number() {
+        assert_eq!(eval("42"), Value::Integer(42));
+    }
+
+    #[test]
+    fn test_deeply_nested_parens() {
+        assert_eq!(eval("((((1))))"), Value::Integer(1));
+    }
+
+    #[test]
+    fn test_trailing_operator_errors() {
+        assert!(Evaluator::new().eval("1 +").is_err());
+    }
+
+    #[test]
+    fn test_leading_star_errors() {
+        assert!(Evaluator::new().eval("* 3").is_err());
+    }
+
+    #[test]
+    fn test_unmatched_open_paren() {
+        assert!(Evaluator::new().eval("(1 + 2").is_err());
+    }
+
+    #[test]
+    fn test_unmatched_close_paren() {
+        assert!(Evaluator::new().eval("1 + 2)").is_err());
+    }
+
+    #[test]
+    fn test_double_unary_plus() {
+        assert_eq!(eval("++3"), Value::Integer(3));
+    }
+
+    #[test]
+    fn test_power_right_associative() {
+        // 2^3^2 = 2^(3^2) = 2^9 = 512
+        assert_eq!(eval("2 ^ 3 ^ 2"), Value::Integer(512));
+    }
+
+    #[test]
+    fn test_double_star_power() {
+        assert_eq!(eval("2 ** 3"), Value::Integer(8));
+    }
+
+    #[test]
+    fn test_negative_exponent() {
+        assert!((eval_f64("2 ^ -3") - 0.125).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_very_large_number() {
+        let val = eval_f64("1e308");
+        assert!(val > 1e307);
+    }
+
+    #[test]
+    fn test_very_small_number() {
+        let val = eval_f64("1e-308");
+        assert!(val > 0.0 && val < 1e-307);
+    }
+
+    #[test]
+    fn test_tau_constant() {
+        let result = eval_f64("tau");
+        assert!((result - std::f64::consts::TAU).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_sgn_alias() {
+        assert_eq!(eval_f64("sgn(-5)"), -1.0);
+        assert_eq!(eval_f64("sgn(10)"), 1.0);
+    }
+
+    #[test]
+    fn test_zero_arg_function_errors() {
+        assert!(Evaluator::new().eval("sqrt()").is_err());
+    }
+
+    #[test]
+    fn test_too_many_args_single_arg_fn() {
+        assert!(Evaluator::new().eval("abs(1, 2)").is_err());
+    }
+
+    #[test]
+    fn test_division_by_zero_float() {
+        assert!(Evaluator::new().eval("1 / 0.0").is_err());
+    }
+
+    #[test]
+    fn test_modulo_by_zero_errors() {
+        assert!(Evaluator::new().eval("10 % 0").is_err());
+    }
+
+    #[test]
+    fn test_percent_chain() {
+        // 200 * 50% + 1 = 200 * 0.5 + 1 = 101
+        assert!((eval_f64("200 * 50% + 1") - 101.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_multiple_variables() {
+        let mut ev = Evaluator::new();
+        ev.set_variable("x", 3.0);
+        ev.set_variable("y", 7.0);
+        assert_eq!(ev.eval("x + y").unwrap(), Value::Integer(10));
+    }
+
+    #[test]
+    fn test_overwrite_variable() {
+        let mut ev = Evaluator::new();
+        ev.set_variable("x", 5.0);
+        ev.set_variable("x", 10.0);
+        assert_eq!(ev.get_variable("x"), Some(10.0));
+        assert_eq!(ev.eval("x").unwrap(), Value::Integer(10));
+    }
+
+    #[test]
+    fn test_variable_shadows_constant() {
+        // Variable named "pi" should not be reachable since constants are checked in parse_primary
+        // actually constants are checked first, so the constant wins
+        let mut ev = Evaluator::new();
+        ev.set_variable("pi", 42.0);
+        let result = match ev.eval("pi").unwrap() {
+            Value::Integer(n) => n as f64,
+            Value::Float(n) => n,
+            _ => panic!("unexpected"),
+        };
+        // Constants take precedence in the current implementation
+        assert!((result - std::f64::consts::PI).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_long_addition_chain() {
+        assert_eq!(eval("1+2+3+4+5+6+7+8+9+10"), Value::Integer(55));
+    }
+
+    #[test]
+    fn test_unexpected_character() {
+        assert!(Evaluator::new().eval("2 & 3").is_err());
+    }
+
+    #[test]
+    fn test_evaluator_default() {
+        let ev = Evaluator::default();
+        assert_eq!(ev.eval("1 + 1").unwrap(), Value::Integer(2));
     }
 }

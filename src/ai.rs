@@ -330,4 +330,96 @@ mod tests {
         h.clear();
         assert!(h.is_empty());
     }
+
+    #[test]
+    fn test_parse_how_much_is() {
+        let q = parser().parse_natural("how much is 5 + 3").unwrap();
+        assert_eq!(q, ParsedQuery::Calculation("5 + 3".to_string()));
+    }
+
+    #[test]
+    fn test_parse_compute() {
+        let q = parser().parse_natural("compute sqrt(16)").unwrap();
+        assert_eq!(q, ParsedQuery::Calculation("sqrt(16)".to_string()));
+    }
+
+    #[test]
+    fn test_parse_eval_prefix() {
+        let q = parser().parse_natural("eval 2^10").unwrap();
+        assert_eq!(q, ParsedQuery::Calculation("2^10".to_string()));
+    }
+
+    #[test]
+    fn test_standalone_percent_of() {
+        let q = parser().parse_natural("15% of 200").unwrap();
+        match q {
+            ParsedQuery::Calculation(expr) => {
+                assert!(expr.contains("200"));
+                assert!(expr.contains("15"));
+            }
+            other => panic!("Expected Calculation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_currency_with_in() {
+        let q = parser().parse_natural("50 gbp in jpy").unwrap();
+        assert_eq!(
+            q,
+            ParsedQuery::CurrencyConversion {
+                value: 50.0,
+                from: "GBP".to_string(),
+                to: "JPY".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_conversion_without_prefix() {
+        let q = parser().parse_natural("100 fahrenheit to celsius").unwrap();
+        assert_eq!(
+            q,
+            ParsedQuery::Conversion {
+                value: 100.0,
+                from: "fahrenheit".to_string(),
+                to: "celsius".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_unparseable_input() {
+        assert!(parser().parse_natural("hello world").is_err());
+    }
+
+    #[test]
+    fn test_number_only_input() {
+        let q = parser().parse_natural("42").unwrap();
+        assert_eq!(q, ParsedQuery::Calculation("42".to_string()));
+    }
+
+    #[test]
+    fn test_history_default() {
+        let h = CalculationHistory::default();
+        assert!(h.is_empty());
+        assert_eq!(h.len(), 0);
+    }
+
+    #[test]
+    fn test_nl_parser_default() {
+        let p = NlParser::default();
+        let q = p.parse_natural("what is 1 + 1").unwrap();
+        assert_eq!(q, ParsedQuery::Calculation("1 + 1".to_string()));
+    }
+
+    #[test]
+    fn test_history_entries_accessor() {
+        let mut h = CalculationHistory::new(10);
+        h.push("a", "b");
+        h.push("c", "d");
+        assert_eq!(h.entries().len(), 2);
+        assert_eq!(h.entries()[0].input, "a");
+        assert_eq!(h.entries()[0].result, "b");
+        assert_eq!(h.entries()[1].input, "c");
+    }
 }

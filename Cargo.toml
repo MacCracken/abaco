@@ -29,4 +29,8 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], optional = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"], optional = true }
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "benchmarks"
+harness = false

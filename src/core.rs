@@ -309,4 +309,56 @@ mod tests {
         };
         assert!(r.to_string().contains("5 km"));
     }
+
+    #[test]
+    fn test_value_float_large_uses_scientific() {
+        // Values >= 1e15 should not use ".0" formatting
+        let s = Value::Float(1e16).to_string();
+        assert!(!s.contains(".0") || s.contains("e"));
+    }
+
+    #[test]
+    fn test_value_complex_as_f64_none() {
+        assert_eq!(Value::Complex(1.0, 2.0).as_f64(), None);
+    }
+
+    #[test]
+    fn test_value_text_as_f64_none() {
+        assert_eq!(Value::Text("hello".into()).as_f64(), None);
+    }
+
+    #[test]
+    fn test_unit_category_from_str_aliases() {
+        use std::str::FromStr;
+        assert_eq!(UnitCategory::from_str("weight").unwrap(), UnitCategory::Mass);
+        assert_eq!(UnitCategory::from_str("temp").unwrap(), UnitCategory::Temperature);
+        assert_eq!(UnitCategory::from_str("velocity").unwrap(), UnitCategory::Speed);
+        assert_eq!(UnitCategory::from_str("wattage").unwrap(), UnitCategory::Power);
+        assert_eq!(UnitCategory::from_str("freq").unwrap(), UnitCategory::Frequency);
+        assert_eq!(UnitCategory::from_str("data").unwrap(), UnitCategory::DataSize);
+        assert_eq!(UnitCategory::from_str("data size").unwrap(), UnitCategory::DataSize);
+        assert_eq!(UnitCategory::from_str("data_size").unwrap(), UnitCategory::DataSize);
+    }
+
+    #[test]
+    fn test_unit_category_from_str_unknown() {
+        use std::str::FromStr;
+        assert!(UnitCategory::from_str("unicorn").is_err());
+    }
+
+    #[test]
+    fn test_unit_category_all_categories_count() {
+        assert_eq!(UnitCategory::all_categories().len(), 14);
+    }
+
+    #[test]
+    fn test_currency_display() {
+        let c = Currency::new("EUR", "Euro", "€");
+        assert_eq!(c.to_string(), "EUR (€) Euro");
+    }
+
+    #[test]
+    fn test_value_float_as_f64() {
+        assert_eq!(Value::Float(3.14).as_f64(), Some(3.14));
+    }
 }
