@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn test_value_display_float() {
-        assert_eq!(Value::Float(3.14).to_string(), "3.14");
+        assert_eq!(Value::Float(std::f64::consts::PI).to_string(), "3.141592653589793");
     }
 
     #[test]
@@ -359,6 +359,6 @@ mod tests {
 
     #[test]
     fn test_value_float_as_f64() {
-        assert_eq!(Value::Float(3.14).as_f64(), Some(3.14));
+        assert_eq!(Value::Float(std::f64::consts::PI).as_f64(), Some(std::f64::consts::PI));
     }
 }

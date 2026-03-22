@@ -47,12 +47,12 @@ impl UnitRegistry {
         // Index by exact symbol
         self.by_symbol.insert(unit.symbol.clone(), (cat, idx));
         // Index by lowercase name and lowercase symbol
-        self.by_lower
-            .insert(unit.name.to_lowercase(), (cat, idx));
+        let lower_name = unit.name.to_lowercase();
         let lower_sym = unit.symbol.to_lowercase();
-        if lower_sym != unit.name.to_lowercase() {
+        if lower_sym != lower_name {
             self.by_lower.insert(lower_sym, (cat, idx));
         }
+        self.by_lower.insert(lower_name, (cat, idx));
         units.push(unit);
     }
 
@@ -534,10 +534,10 @@ impl UnitRegistry {
             return Some(&self.units[&cat][idx]);
         }
         // Plural forms: strip trailing 's'
-        if let Some(singular) = query.strip_suffix('s') {
-            if let Some(&(cat, idx)) = self.by_lower.get(singular) {
-                return Some(&self.units[&cat][idx]);
-            }
+        if let Some(singular) = query.strip_suffix('s')
+            && let Some(&(cat, idx)) = self.by_lower.get(singular)
+        {
+            return Some(&self.units[&cat][idx]);
         }
         None
     }
@@ -1116,5 +1116,92 @@ mod tests {
     fn test_registry_default() {
         let r = UnitRegistry::default();
         assert!(r.find_unit("km").is_some());
+    }
+
+    // --- IEC binary unit tests ---
+
+    #[test]
+    fn test_find_iec_units_by_name() {
+        let r = reg();
+        assert_eq!(r.find_unit("kibibyte").unwrap().symbol, "KiB");
+        assert_eq!(r.find_unit("mebibyte").unwrap().symbol, "MiB");
+        assert_eq!(r.find_unit("gibibyte").unwrap().symbol, "GiB");
+        assert_eq!(r.find_unit("tebibyte").unwrap().symbol, "TiB");
+        assert_eq!(r.find_unit("pebibyte").unwrap().symbol, "PiB");
+    }
+
+    #[test]
+    fn test_find_iec_units_by_symbol() {
+        let r = reg();
+        assert_eq!(r.find_unit("KiB").unwrap().name, "kibibyte");
+        assert_eq!(r.find_unit("MiB").unwrap().name, "mebibyte");
+        assert_eq!(r.find_unit("GiB").unwrap().name, "gibibyte");
+        assert_eq!(r.find_unit("TiB").unwrap().name, "tebibyte");
+        assert_eq!(r.find_unit("PiB").unwrap().name, "pebibyte");
+    }
+
+    #[test]
+    fn test_iec_plural_lookup() {
+        let r = reg();
+        assert_eq!(r.find_unit("kibibytes").unwrap().symbol, "KiB");
+        assert_eq!(r.find_unit("gibibytes").unwrap().symbol, "GiB");
+    }
+
+    #[test]
+    fn test_old_kb_uppercase_finds_kilo() {
+        // "KB" (old symbol) should find kilobyte via case-insensitive lookup
+        let r = reg();
+        let u = r.find_unit("KB").unwrap();
+        assert_eq!(u.name, "kilobyte");
+    }
+
+    #[test]
+    fn test_data_size_unit_count() {
+        let r = reg();
+        let units = r.list_units(UnitCategory::DataSize);
+        // 6 SI (B, kB, MB, GB, TB, PB) + 5 IEC (KiB, MiB, GiB, TiB, PiB)
+        assert_eq!(units.len(), 11);
+    }
+
+    #[test]
+    fn test_si_vs_iec_symbol_distinction() {
+        let r = reg();
+        // kB is SI (1000), KiB is IEC (1024) — different symbols
+        let si = r.find_unit("kB").unwrap();
+        let iec = r.find_unit("KiB").unwrap();
+        assert!((si.to_base_factor - 1000.0).abs() < 0.01);
+        assert!((iec.to_base_factor - 1024.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_kib_to_kb_cross() {
+        // 1 KiB = 1024 bytes = 1.024 kB
+        let r = reg().convert(1.0, "KiB", "kB").unwrap();
+        assert!((r.to_value - 1.024).abs() < 0.001);
+    }
+
+    // --- Category Display coverage ---
+
+    #[test]
+    fn test_all_category_display() {
+        let expected = [
+            (UnitCategory::Length, "Length"),
+            (UnitCategory::Mass, "Mass"),
+            (UnitCategory::Temperature, "Temperature"),
+            (UnitCategory::Time, "Time"),
+            (UnitCategory::DataSize, "Data Size"),
+            (UnitCategory::Speed, "Speed"),
+            (UnitCategory::Area, "Area"),
+            (UnitCategory::Volume, "Volume"),
+            (UnitCategory::Energy, "Energy"),
+            (UnitCategory::Pressure, "Pressure"),
+            (UnitCategory::Angle, "Angle"),
+            (UnitCategory::Frequency, "Frequency"),
+            (UnitCategory::Force, "Force"),
+            (UnitCategory::Power, "Power"),
+        ];
+        for (cat, name) in expected {
+            assert_eq!(cat.to_string(), name);
+        }
     }
 }

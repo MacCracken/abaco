@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn test_nl_parser_default() {
-        let p = NlParser::default();
+        let p: NlParser = Default::default();
         let q = p.parse_natural("what is 1 + 1").unwrap();
         assert_eq!(q, ParsedQuery::Calculation("1 + 1".to_string()));
     }

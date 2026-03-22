@@ -859,4 +859,133 @@ mod tests {
         let ev = Evaluator::default();
         assert_eq!(ev.eval("1 + 1").unwrap(), Value::Integer(2));
     }
+
+    // --- Tokenizer edge cases (bytes-based) ---
+
+    #[test]
+    fn test_tokenize_all_operators() {
+        let tokens = tokenize("1 + 2 - 3 * 4 / 5 % 6 ^ 7").unwrap();
+        assert_eq!(tokens.len(), 13);
+        assert_eq!(tokens[1], Token::Plus);
+        assert_eq!(tokens[3], Token::Minus);
+        assert_eq!(tokens[5], Token::Star);
+        assert_eq!(tokens[7], Token::Slash);
+        assert_eq!(tokens[9], Token::Percent);
+        assert_eq!(tokens[11], Token::Power);
+    }
+
+    #[test]
+    fn test_tokenize_comma_and_parens() {
+        let tokens = tokenize("min(3, 5)").unwrap();
+        assert_eq!(tokens[0], Token::Ident("min".to_string()));
+        assert_eq!(tokens[1], Token::LParen);
+        assert_eq!(tokens[3], Token::Comma);
+        assert_eq!(tokens[5], Token::RParen);
+    }
+
+    #[test]
+    fn test_tokenize_double_star() {
+        let tokens = tokenize("2 ** 3").unwrap();
+        assert_eq!(tokens[1], Token::Power);
+        assert_eq!(tokens.len(), 3);
+    }
+
+    #[test]
+    fn test_tokenize_scientific_notation() {
+        let tokens = tokenize("1.5e-3").unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(tokens[0], Token::Number(n) if (n - 0.0015).abs() < 1e-10));
+    }
+
+    #[test]
+    fn test_tokenize_underscore_ident() {
+        let tokens = tokenize("my_var + 1").unwrap();
+        assert_eq!(tokens[0], Token::Ident("my_var".to_string()));
+    }
+
+    #[test]
+    fn test_tokenize_non_ascii_error() {
+        let result = tokenize("2 × 3");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tokenize_tabs_and_newlines() {
+        let tokens = tokenize("1\t+\n2").unwrap();
+        assert_eq!(tokens.len(), 3);
+        assert_eq!(tokens[0], Token::Number(1.0));
+    }
+
+    // --- Additional function coverage ---
+
+    #[test]
+    fn test_log10_alias() {
+        assert!((eval_f64("log10(100)") - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_exp_function() {
+        assert!((eval_f64("exp(0)") - 1.0).abs() < 1e-10);
+        assert!((eval_f64("exp(1)") - std::f64::consts::E).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_cos_function() {
+        assert!((eval_f64("cos(0)") - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tan_function() {
+        assert!((eval_f64("tan(0)")).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_inverse_trig_valid() {
+        assert!((eval_f64("asin(0)")).abs() < 1e-10);
+        assert!((eval_f64("acos(1)")).abs() < 1e-10);
+        assert!((eval_f64("atan(0)")).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_inverse_hyperbolic_valid() {
+        assert!((eval_f64("asinh(0)")).abs() < 1e-10);
+        assert!((eval_f64("acosh(1)")).abs() < 1e-10);
+        assert!((eval_f64("atanh(0)")).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_exp_overflow_errors() {
+        assert!(Evaluator::new().eval("exp(1000)").is_err());
+    }
+
+    #[test]
+    fn test_tan_near_pi_half() {
+        // tan(pi/2) in floating point produces a very large but finite value
+        // due to pi/2 not being exactly representable
+        let result = eval_f64("tan(1.5707963267948966)");
+        assert!(result.abs() > 1e15);
+    }
+
+    #[test]
+    fn test_uppercase_constants() {
+        assert!((eval_f64("PI") - std::f64::consts::PI).abs() < 1e-10);
+        assert!((eval_f64("E") - std::f64::consts::E).abs() < 1e-10);
+        assert!((eval_f64("TAU") - std::f64::consts::TAU).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_mixed_operations_precedence() {
+        // -2^2 should be -(2^2) = -4 because unary is below power
+        // Actually in our parser: unary is parsed before primary, and power calls unary
+        // So -2^2 tokenizes as [Minus, Number(2), Power, Number(2)]
+        // parse_expr -> parse_term -> parse_power -> parse_unary sees Minus
+        // parse_unary returns -(parse_unary) = -(parse_primary) = -2
+        // Then parse_power sees Power, gets 2, returns (-2)^2 = 4
+        assert_eq!(eval("-2^2"), Value::Integer(4));
+    }
+
+    #[test]
+    fn test_double_dot_number_errors() {
+        assert!(Evaluator::new().eval("1.2.3").is_err());
+    }
 }

@@ -109,6 +109,12 @@ fn bench_unit_conversion(c: &mut Criterion) {
     group.bench_function("bytes_to_gb", |b| {
         b.iter(|| reg.convert(black_box(1_000_000_000.0), "byte", "GB"))
     });
+    group.bench_function("bytes_to_gib", |b| {
+        b.iter(|| reg.convert(black_box(1_073_741_824.0), "byte", "GiB"))
+    });
+    group.bench_function("gb_to_gib_cross", |b| {
+        b.iter(|| reg.convert(black_box(1.0), "GB", "GiB"))
+    });
     group.bench_function("same_unit_identity", |b| {
         b.iter(|| reg.convert(black_box(42.0), "km", "km"))
     });

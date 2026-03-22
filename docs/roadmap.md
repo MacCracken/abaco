@@ -14,34 +14,15 @@ Abaco owns **expression evaluation** and **unit conversion** — the primitives 
 - **Physics simulation** → impetus (wraps rapier)
 - **GUI, CLI, MCP tools** → abacus (consumes abaco)
 
-## V1 — Core Expression Engine & Units (done)
-
-- Recursive descent expression evaluator
-- 95+ built-in units across 14 categories
-- 28+ math functions (trig, hyperbolic, log, rounding, etc.)
-- Temperature conversion with offset support
-- Scientific notation, percentage shorthand
-- Variable assignment and recall
-- Natural language math parsing (feature-gated `ai`)
-- 90+ tests, 0 warnings
-
-## V1.1 — Performance (done, 2026-03-22)
-
-- Bytes-based tokenizer: 43-62% faster expression evaluation
-- HashMap unit index: 94-98% faster lookups (by-name, case-insensitive, plural)
-- One-time registry creation cost (24us) for amortized lookup wins
-- 27 criterion benchmarks
-
-## V2 — Extended Units & Currency
+## 0.23 — Extended Units & Currency
 
 - Live currency exchange rates via hoosh (port 8088)
 - Rate caching and offline fallback
-- Binary vs SI data size distinction (KiB/MiB vs kB/MB)
 - Fuel economy units (mpg, L/100km, km/L)
 - Density, luminosity, viscosity units
 - Unit aliases and abbreviation normalization
 
-## V3 — Expression Engine Enhancements
+## 0.24 — Expression Engine Enhancements
 
 - Implicit multiplication (`2(3 + 4)`, `2pi`)
 - Factorial, gcd, lcm functions
@@ -49,6 +30,15 @@ Abaco owns **expression evaluation** and **unit conversion** — the primitives 
 - Conversion history persistence (JSON)
 - LaTeX output for expressions
 - Live-as-you-type evaluation support (partial parse, error recovery)
+
+## 1.0.0 — Stable Public API
+
+All of the above complete, plus:
+
+- Stable public API for `Evaluator`, `UnitRegistry`, `Value`, `NlParser`
+- Comprehensive documentation with examples for all public types
+- No breaking changes from this point forward
+- Published to crates.io
 
 ## Boundary with Ganit
 

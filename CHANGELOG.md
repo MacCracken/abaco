@@ -2,36 +2,61 @@
 
 All notable changes to Abaco will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.22.3] - 2026-03-22
+
+### Performance
+
+- Tokenizer rewritten to byte-level iteration: 43-62% faster expression evaluation
+- Unit lookup indexed with HashMaps for O(1) symbol/name resolution: 94-98% faster lookups
+- Registry creation pre-allocates HashMap capacity for 100+ units
+- CalculationHistory switched from Vec to VecDeque for O(1) front eviction
+- Function dispatch consolidated: arity check and dispatch in single match
+
+### Added
+
+- IEC binary data size units: KiB, MiB, GiB, TiB, PiB (powers of 1024)
+- SI decimal data sizes corrected: kB, MB, GB, TB, PB now use powers of 1000
+- Cross-conversion between SI and IEC (e.g. 1 GB = 0.931 GiB)
+- 29 criterion benchmarks, 218 tests (all features), 99.4% line coverage
+- CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md
+- codecov.yml with 90% project target
+- Example: examples/basic.rs
+- CI: deny, MSRV, coverage, doc, benchmark, multi-platform test jobs
+- Release workflow with crates.io publish and version verification
+
+### Changed
+
+- License aligned to AGPL-3.0-only across Cargo.toml, LICENSE, README
+- Cargo.toml: added documentation, exclude fields
+- deny.toml: added version fields, Unicode-DFS-2016
+- Makefile: added coverage, test-all, doc with -D warnings
+- CI: 8-job pipeline (was 4), multi-platform testing
+- Release: library publish workflow (was binary packaging)
+- .gitignore: comprehensive (was 6 lines)
+
+### Fixed
+
+- Bench-history script: handles criterion's wrapped benchmark name format
 
 ## [0.1.0] - 2026-03-22
 
 ### Changed — Flatten to shared math crate
 
-- **Refactored** from multi-crate workspace to single flat library crate
-- **Extracted** GUI (abaco-gui) and binary (main.rs, MCP server, REPL) to [abacus](https://github.com/MacCracken/abacus)
-- **Switched** to SemVer 0.D.M versioning for crates.io publication
-- **Feature-gated** AI module behind `ai` feature flag
-- **Added** rustls-tls to reqwest (was missing)
-- **Removed** binary deps (clap, anyhow, tracing-subscriber) — library only
+- Refactored from multi-crate workspace to single flat library crate
+- Extracted GUI and binary to [abacus](https://github.com/MacCracken/abacus)
+- Feature-gated AI module behind `ai` feature flag
+- Added rustls-tls to reqwest
+- Removed binary deps (clap, anyhow, tracing-subscriber) — library only
 
-### Modules (unchanged)
+### Modules
 
-- `core` — Value types (Integer, Float, Fraction, Complex, Text), Unit/UnitCategory (14 categories), Currency
+- `core` — Value types (Integer, Float, Fraction, Complex, Text), Unit, UnitCategory (14 categories), Currency
 - `eval` — Tokenizer, recursive descent parser, evaluator with 28+ functions, variables, scientific notation, percentage shorthand
 - `units` — Unit registry with 95+ built-in units across 14 categories, conversion engine
 - `ai` — Natural language math parsing, calculation history (feature-gated)
 
-## [2026.3.18] - 2026-03-18
-
-### Added — First Release
-
-- **abaco-core**: Value types (Integer, Float, Fraction, Complex, Text), Unit/UnitCategory definitions (14 categories), Currency type
-- **abaco-eval**: Expression tokenizer and recursive descent evaluator with 28 functions (sqrt, sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, asinh, acosh, atanh, log, ln, log2, abs, ceil, floor, round, trunc, fract, sign, exp, deg, rad, min, max, pow, atan2), variables, percentage shorthand, scientific notation, power operator
-- **abaco-units**: Unit conversion engine with 95+ built-in units across 14 categories (length, mass, temperature, time, data, speed, area, volume, energy, pressure, angle, frequency, force, power)
-- **abaco-ai**: Natural language math parsing ("what is 15% of 230", "convert 5 km to miles"), calculation history
-- **abaco-gui**: egui/eframe desktop GUI with calculator (NL + math), unit converter with category browser, history view, function plotter (f(x) graphing), AGNOS dark theme
-- **CLI**: `eval`, `convert`, `list`, interactive REPL, and `--gui` flag for desktop mode
-- **MCP**: JSON-RPC tool server with `abaco_eval`, `abaco_convert`, `abaco_currency`, `abaco_history`, `abaco_units` tools
-- **CI/CD**: GitHub Actions with check, lint, security audit, test, build, release (amd64 + arm64)
-- **90+ tests** across all crates, 0 warnings
+[0.22.3]: https://github.com/MacCracken/abaco/compare/0.1.0...0.22.3
+[0.1.0]: https://github.com/MacCracken/abaco/releases/tag/0.1.0
