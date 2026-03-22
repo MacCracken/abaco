@@ -38,82 +38,88 @@ pub enum Token {
 /// Tokenize an expression string.
 pub fn tokenize(input: &str) -> Result<Vec<Token>> {
     let mut tokens = Vec::new();
-    let chars: Vec<char> = input.chars().collect();
+    let bytes = input.as_bytes();
     let mut i = 0;
 
-    while i < chars.len() {
-        match chars[i] {
-            ' ' | '\t' | '\n' | '\r' => i += 1,
-            '+' => {
+    while i < bytes.len() {
+        match bytes[i] {
+            b' ' | b'\t' | b'\n' | b'\r' => i += 1,
+            b'+' => {
                 tokens.push(Token::Plus);
                 i += 1;
             }
-            '-' => {
+            b'-' => {
                 tokens.push(Token::Minus);
                 i += 1;
             }
-            '*' if i + 1 < chars.len() && chars[i + 1] == '*' => {
+            b'*' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
                 tokens.push(Token::Power);
                 i += 2;
             }
-            '*' => {
+            b'*' => {
                 tokens.push(Token::Star);
                 i += 1;
             }
-            '/' => {
+            b'/' => {
                 tokens.push(Token::Slash);
                 i += 1;
             }
-            '%' => {
+            b'%' => {
                 tokens.push(Token::Percent);
                 i += 1;
             }
-            '^' => {
+            b'^' => {
                 tokens.push(Token::Power);
                 i += 1;
             }
-            '(' => {
+            b'(' => {
                 tokens.push(Token::LParen);
                 i += 1;
             }
-            ')' => {
+            b')' => {
                 tokens.push(Token::RParen);
                 i += 1;
             }
-            ',' => {
+            b',' => {
                 tokens.push(Token::Comma);
                 i += 1;
             }
-            c if c.is_ascii_digit() || c == '.' => {
+            c if c.is_ascii_digit() || c == b'.' => {
                 let start = i;
-                while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
+                while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
                     i += 1;
                 }
                 // Scientific notation: 1e10, 1.5e-3, 2E+6
-                if i < chars.len() && (chars[i] == 'e' || chars[i] == 'E') {
+                if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
                     i += 1;
-                    if i < chars.len() && (chars[i] == '+' || chars[i] == '-') {
+                    if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
                         i += 1;
                     }
-                    while i < chars.len() && chars[i].is_ascii_digit() {
+                    while i < bytes.len() && bytes[i].is_ascii_digit() {
                         i += 1;
                     }
                 }
-                let num_str: String = chars[start..i].iter().collect();
+                let num_str = &input[start..i];
                 let num = num_str
                     .parse::<f64>()
                     .map_err(|_| EvalError::ParseError(format!("Invalid number: {num_str}")))?;
                 tokens.push(Token::Number(num));
             }
-            c if c.is_ascii_alphabetic() || c == '_' => {
+            c if c.is_ascii_alphabetic() || c == b'_' => {
                 let start = i;
-                while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                while i < bytes.len()
+                    && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
+                {
                     i += 1;
                 }
-                let ident: String = chars[start..i].iter().collect();
-                tokens.push(Token::Ident(ident));
+                tokens.push(Token::Ident(input[start..i].to_string()));
             }
-            c => return Err(EvalError::ParseError(format!("Unexpected character: {c}"))),
+            _ => {
+                return Err(EvalError::ParseError(format!(
+                    "Unexpected character: {}",
+                    input[i..].chars().next().unwrap()
+                )));
+            }
         }
     }
 
@@ -348,57 +354,63 @@ impl Evaluator {
     }
 
     fn call_function(&self, name: &str, args: &[f64]) -> Result<f64> {
-        let result = match (name, args.len()) {
+        let n = args.len();
+        let result = match name {
             // 1-arg functions
-            ("sqrt", 1) => args[0].sqrt(),
-            ("sin", 1) => args[0].sin(),
-            ("cos", 1) => args[0].cos(),
-            ("tan", 1) => args[0].tan(),
-            ("log" | "log10", 1) => args[0].log10(),
-            ("ln", 1) => args[0].ln(),
-            ("log2", 1) => args[0].log2(),
-            ("abs", 1) => args[0].abs(),
-            ("ceil", 1) => args[0].ceil(),
-            ("floor", 1) => args[0].floor(),
-            ("round", 1) => args[0].round(),
-            ("exp", 1) => args[0].exp(),
-            ("asin", 1) => args[0].asin(),
-            ("acos", 1) => args[0].acos(),
-            ("atan", 1) => args[0].atan(),
-            // Hyperbolic
-            ("sinh", 1) => args[0].sinh(),
-            ("cosh", 1) => args[0].cosh(),
-            ("tanh", 1) => args[0].tanh(),
-            ("asinh", 1) => args[0].asinh(),
-            ("acosh", 1) => args[0].acosh(),
-            ("atanh", 1) => args[0].atanh(),
-            // Rounding/sign
-            ("trunc", 1) => args[0].trunc(),
-            ("fract", 1) => args[0].fract(),
-            ("sign" | "sgn", 1) => args[0].signum(),
-            // Degree/radian conversion
-            ("deg", 1) => args[0].to_degrees(),
-            ("rad", 1) => args[0].to_radians(),
-            // 2-arg functions
-            ("min", 2) => args[0].min(args[1]),
-            ("max", 2) => args[0].max(args[1]),
-            ("pow", 2) => args[0].powf(args[1]),
-            ("atan2", 2) => args[0].atan2(args[1]),
-            // Unknown function or wrong arity
-            (
-                "sqrt" | "sin" | "cos" | "tan" | "log" | "log10" | "ln" | "log2" | "abs" | "ceil"
-                | "floor" | "round" | "exp" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh"
-                | "asinh" | "acosh" | "atanh" | "trunc" | "fract" | "sign" | "sgn" | "deg" | "rad",
-                n,
-            ) => {
-                return Err(EvalError::ParseError(format!(
-                    "Function {name} expects 1 argument, got {n}"
-                )));
+            "sqrt" | "sin" | "cos" | "tan" | "log" | "log10" | "ln" | "log2" | "abs" | "ceil"
+            | "floor" | "round" | "exp" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh"
+            | "asinh" | "acosh" | "atanh" | "trunc" | "fract" | "sign" | "sgn" | "deg"
+            | "rad" => {
+                if n != 1 {
+                    return Err(EvalError::ParseError(format!(
+                        "Function {name} expects 1 argument, got {n}"
+                    )));
+                }
+                let a = args[0];
+                match name {
+                    "sqrt" => a.sqrt(),
+                    "sin" => a.sin(),
+                    "cos" => a.cos(),
+                    "tan" => a.tan(),
+                    "log" | "log10" => a.log10(),
+                    "ln" => a.ln(),
+                    "log2" => a.log2(),
+                    "abs" => a.abs(),
+                    "ceil" => a.ceil(),
+                    "floor" => a.floor(),
+                    "round" => a.round(),
+                    "exp" => a.exp(),
+                    "asin" => a.asin(),
+                    "acos" => a.acos(),
+                    "atan" => a.atan(),
+                    "sinh" => a.sinh(),
+                    "cosh" => a.cosh(),
+                    "tanh" => a.tanh(),
+                    "asinh" => a.asinh(),
+                    "acosh" => a.acosh(),
+                    "atanh" => a.atanh(),
+                    "trunc" => a.trunc(),
+                    "fract" => a.fract(),
+                    "sign" | "sgn" => a.signum(),
+                    "deg" => a.to_degrees(),
+                    "rad" => a.to_radians(),
+                    _ => unreachable!(),
+                }
             }
-            ("min" | "max" | "pow" | "atan2", n) => {
-                return Err(EvalError::ParseError(format!(
-                    "Function {name} expects 2 arguments, got {n}"
-                )));
+            // 2-arg functions
+            "min" | "max" | "pow" | "atan2" => {
+                if n != 2 {
+                    return Err(EvalError::ParseError(format!(
+                        "Function {name} expects 2 arguments, got {n}"
+                    )));
+                }
+                match name {
+                    "min" => args[0].min(args[1]),
+                    "max" => args[0].max(args[1]),
+                    "pow" => args[0].powf(args[1]),
+                    "atan2" => args[0].atan2(args[1]),
+                    _ => unreachable!(),
+                }
             }
             _ => return Err(EvalError::UnknownFunction(name.to_string())),
         };

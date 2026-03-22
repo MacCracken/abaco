@@ -1,5 +1,6 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AiError {
@@ -172,7 +173,7 @@ impl Default for NlParser {
 /// History of calculations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalculationHistory {
-    entries: Vec<HistoryEntry>,
+    entries: VecDeque<HistoryEntry>,
     max_entries: usize,
 }
 
@@ -186,23 +187,23 @@ pub struct HistoryEntry {
 impl CalculationHistory {
     pub fn new(max_entries: usize) -> Self {
         Self {
-            entries: Vec::new(),
+            entries: VecDeque::new(),
             max_entries,
         }
     }
 
     pub fn push(&mut self, input: &str, result: &str) {
         if self.entries.len() >= self.max_entries {
-            self.entries.remove(0);
+            self.entries.pop_front();
         }
-        self.entries.push(HistoryEntry {
+        self.entries.push_back(HistoryEntry {
             input: input.to_string(),
             result: result.to_string(),
             timestamp: Utc::now().to_rfc3339(),
         });
     }
 
-    pub fn entries(&self) -> &[HistoryEntry] {
+    pub fn entries(&self) -> &VecDeque<HistoryEntry> {
         &self.entries
     }
 

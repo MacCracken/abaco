@@ -16,6 +16,10 @@ pub type Result<T> = std::result::Result<T, UnitError>;
 /// Registry of known units and conversion logic.
 pub struct UnitRegistry {
     units: HashMap<UnitCategory, Vec<Unit>>,
+    /// Exact symbol → (category, index) for O(1) lookup.
+    by_symbol: HashMap<String, (UnitCategory, usize)>,
+    /// Lowercase name/symbol → (category, index) for case-insensitive lookup.
+    by_lower: HashMap<String, (UnitCategory, usize)>,
 }
 
 impl Default for UnitRegistry {
@@ -28,14 +32,28 @@ impl UnitRegistry {
     /// Create a new registry populated with built-in units.
     pub fn new() -> Self {
         let mut reg = Self {
-            units: HashMap::new(),
+            units: HashMap::with_capacity(14),
+            by_symbol: HashMap::with_capacity(100),
+            by_lower: HashMap::with_capacity(200),
         };
         reg.populate_defaults();
         reg
     }
 
     fn add(&mut self, unit: Unit) {
-        self.units.entry(unit.category).or_default().push(unit);
+        let cat = unit.category;
+        let units = self.units.entry(cat).or_default();
+        let idx = units.len();
+        // Index by exact symbol
+        self.by_symbol.insert(unit.symbol.clone(), (cat, idx));
+        // Index by lowercase name and lowercase symbol
+        self.by_lower
+            .insert(unit.name.to_lowercase(), (cat, idx));
+        let lower_sym = unit.symbol.to_lowercase();
+        if lower_sym != unit.name.to_lowercase() {
+            self.by_lower.insert(lower_sym, (cat, idx));
+        }
+        units.push(unit);
     }
 
     fn populate_defaults(&mut self) {
@@ -469,32 +487,19 @@ impl UnitRegistry {
     /// Find a unit by name or symbol.
     /// Tries exact symbol match first, then case-insensitive name/symbol, then plurals.
     pub fn find_unit(&self, name_or_symbol: &str) -> Option<&Unit> {
-        // Exact symbol match first (important for case-sensitive symbols like mW vs MW)
-        for units in self.units.values() {
-            for unit in units {
-                if unit.symbol == name_or_symbol {
-                    return Some(unit);
-                }
-            }
+        // O(1) exact symbol match (important for case-sensitive symbols like mW vs MW)
+        if let Some(&(cat, idx)) = self.by_symbol.get(name_or_symbol) {
+            return Some(&self.units[&cat][idx]);
         }
-        // Case-insensitive name or symbol
+        // O(1) case-insensitive name or symbol
         let query = name_or_symbol.to_lowercase();
-        for units in self.units.values() {
-            for unit in units {
-                if unit.name.to_lowercase() == query || unit.symbol.to_lowercase() == query {
-                    return Some(unit);
-                }
-            }
+        if let Some(&(cat, idx)) = self.by_lower.get(query.as_str()) {
+            return Some(&self.units[&cat][idx]);
         }
-        // Also try plural forms (strip trailing 's')
-        if query.ends_with('s') {
-            let singular = &query[..query.len() - 1];
-            for units in self.units.values() {
-                for unit in units {
-                    if unit.name.to_lowercase() == singular {
-                        return Some(unit);
-                    }
-                }
+        // Plural forms: strip trailing 's'
+        if let Some(singular) = query.strip_suffix('s') {
+            if let Some(&(cat, idx)) = self.by_lower.get(singular) {
+                return Some(&self.units[&cat][idx]);
             }
         }
         None
