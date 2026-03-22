@@ -29,32 +29,42 @@ echo "$BENCH_OUTPUT"
 echo ""
 
 # Parse criterion output and append to CSV.
-# Criterion lines look like:
-#   eval_simple/addition    time:   [133.91 ns 134.16 ns 134.44 ns]
+# Criterion formats benchmark results in two ways:
+#   1) Single line:  eval_simple/addition    time:   [133.91 ns 134.16 ns 134.44 ns]
+#   2) Wrapped:      eval_complex/mixed_ops_funcs\n                        time:   [...]
 # We extract the middle value (point estimate) and normalize to nanoseconds.
 LINES_ADDED=0
+PREV_LINE=""
 while IFS= read -r line; do
-    # Extract benchmark name: everything before "time:"
-    BENCH_NAME=$(echo "$line" | sed -E 's/[[:space:]]*time:.*//' | xargs)
+    if [[ "$line" == *"time:"*"["* ]]; then
+        # Extract benchmark name: everything before "time:" on this line
+        BENCH_NAME=$(echo "$line" | sed -E 's/[[:space:]]*time:.*//' | xargs)
 
-    # Extract the bracket contents
-    VALS=$(echo "$line" | sed -E 's/.*\[(.+)\]/\1/')
-    # Middle value (point estimate) is tokens 3 and 4 (value + unit)
-    MEDIAN=$(echo "$VALS" | awk '{print $3}')
-    UNIT=$(echo "$VALS" | awk '{print $4}')
+        # If name is empty, it was on the previous line (wrapped format)
+        if [ -z "$BENCH_NAME" ]; then
+            BENCH_NAME=$(echo "$PREV_LINE" | xargs)
+        fi
 
-    # Normalize to nanoseconds
-    case "$UNIT" in
-        ps)  NS=$(echo "$MEDIAN" | awk '{printf "%.4f", $1 / 1000}') ;;
-        ns)  NS="$MEDIAN" ;;
-        µs|us)  NS=$(echo "$MEDIAN" | awk '{printf "%.4f", $1 * 1000}') ;;
-        ms)  NS=$(echo "$MEDIAN" | awk '{printf "%.4f", $1 * 1000000}') ;;
-        s)   NS=$(echo "$MEDIAN" | awk '{printf "%.4f", $1 * 1000000000}') ;;
-        *)   NS="$MEDIAN" ;;
-    esac
+        # Extract the bracket contents
+        VALS=$(echo "$line" | sed -E 's/.*\[(.+)\]/\1/')
+        # Middle value (point estimate) is tokens 3 and 4 (value + unit)
+        MEDIAN=$(echo "$VALS" | awk '{print $3}')
+        UNIT=$(echo "$VALS" | awk '{print $4}')
 
-    echo "${TIMESTAMP},${COMMIT},${BRANCH},${BENCH_NAME},${NS}" >> "$HISTORY_FILE"
-    LINES_ADDED=$((LINES_ADDED + 1))
-done < <(echo "$BENCH_OUTPUT" | grep 'time:.*\[')
+        # Normalize to nanoseconds
+        case "$UNIT" in
+            ps)  NS=$(echo "$MEDIAN" | awk '{printf "%.4f", $1 / 1000}') ;;
+            ns)  NS="$MEDIAN" ;;
+            µs|us)  NS=$(echo "$MEDIAN" | awk '{printf "%.4f", $1 * 1000}') ;;
+            ms)  NS=$(echo "$MEDIAN" | awk '{printf "%.4f", $1 * 1000000}') ;;
+            s)   NS=$(echo "$MEDIAN" | awk '{printf "%.4f", $1 * 1000000000}') ;;
+            *)   NS="$MEDIAN" ;;
+        esac
+
+        echo "${TIMESTAMP},${COMMIT},${BRANCH},${BENCH_NAME},${NS}" >> "$HISTORY_FILE"
+        LINES_ADDED=$((LINES_ADDED + 1))
+    fi
+    PREV_LINE="$line"
+done <<< "$BENCH_OUTPUT"
 
 echo "Appended ${LINES_ADDED} benchmark entries to ${HISTORY_FILE}"
