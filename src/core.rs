@@ -229,7 +229,10 @@ mod tests {
 
     #[test]
     fn test_value_display_float() {
-        assert_eq!(Value::Float(std::f64::consts::PI).to_string(), "3.141592653589793");
+        assert_eq!(
+            Value::Float(std::f64::consts::PI).to_string(),
+            "3.141592653589793"
+        );
     }
 
     #[test]
@@ -330,14 +333,38 @@ mod tests {
     #[test]
     fn test_unit_category_from_str_aliases() {
         use std::str::FromStr;
-        assert_eq!(UnitCategory::from_str("weight").unwrap(), UnitCategory::Mass);
-        assert_eq!(UnitCategory::from_str("temp").unwrap(), UnitCategory::Temperature);
-        assert_eq!(UnitCategory::from_str("velocity").unwrap(), UnitCategory::Speed);
-        assert_eq!(UnitCategory::from_str("wattage").unwrap(), UnitCategory::Power);
-        assert_eq!(UnitCategory::from_str("freq").unwrap(), UnitCategory::Frequency);
-        assert_eq!(UnitCategory::from_str("data").unwrap(), UnitCategory::DataSize);
-        assert_eq!(UnitCategory::from_str("data size").unwrap(), UnitCategory::DataSize);
-        assert_eq!(UnitCategory::from_str("data_size").unwrap(), UnitCategory::DataSize);
+        assert_eq!(
+            UnitCategory::from_str("weight").unwrap(),
+            UnitCategory::Mass
+        );
+        assert_eq!(
+            UnitCategory::from_str("temp").unwrap(),
+            UnitCategory::Temperature
+        );
+        assert_eq!(
+            UnitCategory::from_str("velocity").unwrap(),
+            UnitCategory::Speed
+        );
+        assert_eq!(
+            UnitCategory::from_str("wattage").unwrap(),
+            UnitCategory::Power
+        );
+        assert_eq!(
+            UnitCategory::from_str("freq").unwrap(),
+            UnitCategory::Frequency
+        );
+        assert_eq!(
+            UnitCategory::from_str("data").unwrap(),
+            UnitCategory::DataSize
+        );
+        assert_eq!(
+            UnitCategory::from_str("data size").unwrap(),
+            UnitCategory::DataSize
+        );
+        assert_eq!(
+            UnitCategory::from_str("data_size").unwrap(),
+            UnitCategory::DataSize
+        );
     }
 
     #[test]
@@ -359,6 +386,9 @@ mod tests {
 
     #[test]
     fn test_value_float_as_f64() {
-        assert_eq!(Value::Float(std::f64::consts::PI).as_f64(), Some(std::f64::consts::PI));
+        assert_eq!(
+            Value::Float(std::f64::consts::PI).as_f64(),
+            Some(std::f64::consts::PI)
+        );
     }
 }

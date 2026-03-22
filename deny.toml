@@ -20,6 +20,7 @@ allow = [
     "Unicode-DFS-2016",
     "AGPL-3.0-only",
     "Zlib",
+    "CDLA-Permissive-2.0",
 ]
 
 [bans]

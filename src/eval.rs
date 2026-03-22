@@ -107,9 +107,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>> {
             }
             c if c.is_ascii_alphabetic() || c == b'_' => {
                 let start = i;
-                while i < bytes.len()
-                    && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
-                {
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                     i += 1;
                 }
                 tokens.push(Token::Ident(input[start..i].to_string()));
@@ -359,8 +357,7 @@ impl Evaluator {
             // 1-arg functions
             "sqrt" | "sin" | "cos" | "tan" | "log" | "log10" | "ln" | "log2" | "abs" | "ceil"
             | "floor" | "round" | "exp" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh"
-            | "asinh" | "acosh" | "atanh" | "trunc" | "fract" | "sign" | "sgn" | "deg"
-            | "rad" => {
+            | "asinh" | "acosh" | "atanh" | "trunc" | "fract" | "sign" | "sgn" | "deg" | "rad" => {
                 if n != 1 {
                     return Err(EvalError::ParseError(format!(
                         "Function {name} expects 1 argument, got {n}"

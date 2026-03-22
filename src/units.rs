@@ -1061,13 +1061,17 @@ mod tests {
 
     #[test]
     fn test_very_large_byte_conversion_si() {
-        let r = reg().convert(1_000_000_000_000_000.0, "byte", "PB").unwrap();
+        let r = reg()
+            .convert(1_000_000_000_000_000.0, "byte", "PB")
+            .unwrap();
         assert!((r.to_value - 1.0).abs() < 0.001);
     }
 
     #[test]
     fn test_very_large_byte_conversion_iec() {
-        let r = reg().convert(1_125_899_906_842_624.0, "byte", "PiB").unwrap();
+        let r = reg()
+            .convert(1_125_899_906_842_624.0, "byte", "PiB")
+            .unwrap();
         assert!((r.to_value - 1.0).abs() < 0.001);
     }
 
