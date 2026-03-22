@@ -1,47 +1,67 @@
 # Roadmap
 
-## V1 — Core Calculator, Units & GUI (done)
+> **Abaco** is the shared math library crate. GUI/CLI/MCP moved to [abacus](https://github.com/MacCracken/abacus).
+> Higher math (linear algebra, calculus, geometry, numerical methods) lives in [ganit](https://github.com/MacCracken/ganit).
 
-- Expression evaluator with recursive descent parser
-- 95+ built-in units across 14 categories (length, mass, temperature, time, data, speed, area, volume, energy, pressure, angle, frequency, force, power)
+## Scope
+
+Abaco owns **expression evaluation** and **unit conversion** — the primitives that every math-consuming app needs. It does NOT own:
+
+- **Linear algebra, matrices, quaternions** → ganit-core (wraps glam)
+- **Geometry, spatial queries, intersections** → ganit-geo
+- **Calculus, integration, Bezier curves** → ganit-calc
+- **Root finding, solvers, FFT** → ganit-num
+- **Physics simulation** → impetus (wraps rapier)
+- **GUI, CLI, MCP tools** → abacus (consumes abaco)
+
+## V1 — Core Expression Engine & Units (done)
+
+- Recursive descent expression evaluator
+- 95+ built-in units across 14 categories
+- 28+ math functions (trig, hyperbolic, log, rounding, etc.)
 - Temperature conversion with offset support
-- Natural language parsing for math and conversions (GUI + CLI)
-- CLI with eval, convert, list, REPL, and `--gui` flag
-- Calculation history (in-memory, capped)
-- Multi-arg functions: min, max, log2, pow, atan2
-- Hyperbolic trig: sinh, cosh, tanh, asinh, acosh, atanh
-- Degree/radian helpers: deg(), rad()
-- Utility functions: sign, trunc, fract
-- Scientific notation support (1e3, 1.5e-3, 2E+6)
-- Percentage shorthand in evaluator (e.g. `15%` as `0.15`)
-- Variable assignment in REPL and GUI (`x = 5`, then use `x`)
-- `list` subcommand to browse available units by category
-- MCP tool server (`abaco_eval`, `abaco_convert`, `abaco_currency`, `abaco_history`, `abaco_units`)
-- egui desktop GUI with calculator, unit converter, history, and function plotter
-- AGNOS dark theme
+- Scientific notation, percentage shorthand
+- Variable assignment and recall
+- Natural language math parsing (feature-gated `ai`)
 - 90+ tests, 0 warnings
 
-## Post-V1 — Live Currency & Persistence
+## V1.1 — Performance (done, 2026-03-22)
+
+- Bytes-based tokenizer: 43-62% faster expression evaluation
+- HashMap unit index: 94-98% faster lookups (by-name, case-insensitive, plural)
+- One-time registry creation cost (24us) for amortized lookup wins
+- 27 criterion benchmarks
+
+## V2 — Extended Units & Currency
 
 - Live currency exchange rates via hoosh (port 8088)
 - Rate caching and offline fallback
-- Conversion history persistence (JSON file)
-- History search and filtering
-- Session persistence (variables, plot state)
-- Settings/preferences panel
 - Binary vs SI data size distinction (KiB/MiB vs kB/MB)
-
-## Future — Advanced Math & NL
-
-- Symbolic algebra (simplify, expand, factor)
-- Equation solving (linear, quadratic)
-- Matrix operations
-- Statistical functions (mean, median, stddev)
-- Factorial, gcd, lcm
-- Advanced NL via hoosh LLM ("solve x^2 + 3x - 4 = 0")
-- Function graphing with interactive zoom
-- LaTeX output
 - Fuel economy units (mpg, L/100km, km/L)
 - Density, luminosity, viscosity units
-- Implicit multiplication (e.g. `2(3 + 4)`)
-- Live-as-you-type evaluation
+- Unit aliases and abbreviation normalization
+
+## V3 — Expression Engine Enhancements
+
+- Implicit multiplication (`2(3 + 4)`, `2pi`)
+- Factorial, gcd, lcm functions
+- Statistical functions (mean, median, stddev) for list expressions
+- Conversion history persistence (JSON)
+- LaTeX output for expressions
+- Live-as-you-type evaluation support (partial parse, error recovery)
+
+## Boundary with Ganit
+
+When a feature involves **evaluating user-typed math expressions or converting units**, it belongs in abaco. When it involves **programmatic math operations on typed vectors/matrices/curves**, it belongs in ganit.
+
+| Feature | abaco | ganit |
+|---------|-------|-------|
+| `eval("sin(pi/4)")` | Yes | — |
+| `convert(100, "km", "miles")` | Yes | — |
+| `Vec3::cross(a, b)` | — | ganit-core |
+| `ray_sphere_intersection()` | — | ganit-geo |
+| `integral_simpson(f, 0, 1, 100)` | — | ganit-calc |
+| `newton_raphson(f, df, x0)` | — | ganit-num |
+| `eval("solve x^2 + 3x - 4")` | Parse expression | ganit-num solves it |
+
+Abaco may depend on ganit in the future for advanced expression evaluation (e.g. symbolic simplification), but ganit should never depend on abaco.

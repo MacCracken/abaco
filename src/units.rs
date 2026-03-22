@@ -33,8 +33,8 @@ impl UnitRegistry {
     pub fn new() -> Self {
         let mut reg = Self {
             units: HashMap::with_capacity(14),
-            by_symbol: HashMap::with_capacity(100),
-            by_lower: HashMap::with_capacity(200),
+            by_symbol: HashMap::with_capacity(106),
+            by_lower: HashMap::with_capacity(212),
         };
         reg.populate_defaults();
         reg
@@ -143,38 +143,75 @@ impl UnitRegistry {
         self.add(Unit::new("year", "yr", UnitCategory::Time, 31557600.0, 0.0));
 
         // Data size (base: byte)
+        // SI decimal (powers of 1000)
         self.add(Unit::new("byte", "B", UnitCategory::DataSize, 1.0, 0.0));
         self.add(Unit::new(
             "kilobyte",
-            "KB",
+            "kB",
             UnitCategory::DataSize,
-            1024.0,
+            1_000.0,
             0.0,
         ));
         self.add(Unit::new(
             "megabyte",
             "MB",
             UnitCategory::DataSize,
-            1_048_576.0,
+            1_000_000.0,
             0.0,
         ));
         self.add(Unit::new(
             "gigabyte",
             "GB",
             UnitCategory::DataSize,
-            1_073_741_824.0,
+            1_000_000_000.0,
             0.0,
         ));
         self.add(Unit::new(
             "terabyte",
             "TB",
             UnitCategory::DataSize,
-            1_099_511_627_776.0,
+            1_000_000_000_000.0,
             0.0,
         ));
         self.add(Unit::new(
             "petabyte",
             "PB",
+            UnitCategory::DataSize,
+            1_000_000_000_000_000.0,
+            0.0,
+        ));
+        // IEC binary (powers of 1024)
+        self.add(Unit::new(
+            "kibibyte",
+            "KiB",
+            UnitCategory::DataSize,
+            1_024.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "mebibyte",
+            "MiB",
+            UnitCategory::DataSize,
+            1_048_576.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "gibibyte",
+            "GiB",
+            UnitCategory::DataSize,
+            1_073_741_824.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "tebibyte",
+            "TiB",
+            UnitCategory::DataSize,
+            1_099_511_627_776.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "pebibyte",
+            "PiB",
             UnitCategory::DataSize,
             1_125_899_906_842_624.0,
             0.0,
@@ -606,7 +643,13 @@ mod tests {
 
     #[test]
     fn test_bytes_to_gb() {
-        let r = reg().convert(1_073_741_824.0, "byte", "GB").unwrap();
+        let r = reg().convert(1_000_000_000.0, "byte", "GB").unwrap();
+        assert!((r.to_value - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_bytes_to_gib() {
+        let r = reg().convert(1_073_741_824.0, "byte", "GiB").unwrap();
         assert!((r.to_value - 1.0).abs() < 0.001);
     }
 
@@ -798,15 +841,41 @@ mod tests {
 
     // --- Data size additional ---
     #[test]
-    fn test_tb_to_gb() {
+    fn test_tb_to_gb_si() {
         let r = reg().convert(1.0, "TB", "GB").unwrap();
+        assert!((r.to_value - 1000.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_mb_to_kb_si() {
+        let r = reg().convert(1.0, "MB", "kB").unwrap();
+        assert!((r.to_value - 1000.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_tib_to_gib() {
+        let r = reg().convert(1.0, "TiB", "GiB").unwrap();
         assert!((r.to_value - 1024.0).abs() < 0.1);
     }
 
     #[test]
-    fn test_mb_to_kb() {
-        let r = reg().convert(1.0, "MB", "KB").unwrap();
+    fn test_mib_to_kib() {
+        let r = reg().convert(1.0, "MiB", "KiB").unwrap();
         assert!((r.to_value - 1024.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_gb_to_gib_cross() {
+        // 1 GB (1e9 bytes) in GiB (1024^3 bytes)
+        let r = reg().convert(1.0, "GB", "GiB").unwrap();
+        assert!((r.to_value - 0.931323).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_pib_to_pb() {
+        // 1 PiB in PB
+        let r = reg().convert(1.0, "PiB", "PB").unwrap();
+        assert!((r.to_value - 1.125899906842624).abs() < 0.001);
     }
 
     // --- Speed additional ---
@@ -991,8 +1060,14 @@ mod tests {
     }
 
     #[test]
-    fn test_very_large_byte_conversion() {
-        let r = reg().convert(1_125_899_906_842_624.0, "byte", "PB").unwrap();
+    fn test_very_large_byte_conversion_si() {
+        let r = reg().convert(1_000_000_000_000_000.0, "byte", "PB").unwrap();
+        assert!((r.to_value - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_very_large_byte_conversion_iec() {
+        let r = reg().convert(1_125_899_906_842_624.0, "byte", "PiB").unwrap();
         assert!((r.to_value - 1.0).abs() < 0.001);
     }
 

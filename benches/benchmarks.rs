@@ -107,7 +107,7 @@ fn bench_unit_conversion(c: &mut Criterion) {
         b.iter(|| reg.convert(black_box(100.0), "celsius", "fahrenheit"))
     });
     group.bench_function("bytes_to_gb", |b| {
-        b.iter(|| reg.convert(black_box(1_073_741_824.0), "byte", "GB"))
+        b.iter(|| reg.convert(black_box(1_000_000_000.0), "byte", "GB"))
     });
     group.bench_function("same_unit_identity", |b| {
         b.iter(|| reg.convert(black_box(42.0), "km", "km"))
