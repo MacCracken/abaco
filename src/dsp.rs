@@ -17,7 +17,7 @@
 //! let amp = dsp::db_to_amplitude(-6.0);      // ≈ 0.501
 //!
 //! // MIDI ↔ frequency
-//! let freq = dsp::midi_to_freq(69);          // 440.0 Hz (A4)
+//! let freq = dsp::midi_to_freq(69.0);         // 440.0 Hz (A4)
 //! let note = dsp::freq_to_midi(440.0);       // 69.0
 //!
 //! // Envelope time constant
@@ -271,7 +271,10 @@ mod tests {
         for note in [0.0, 36.0, 60.0, 69.0, 84.0, 127.0] {
             let freq = midi_to_freq(note);
             let back = freq_to_midi(freq);
-            assert!((back - note).abs() < 1e-10, "roundtrip failed for note {note}");
+            assert!(
+                (back - note).abs() < 1e-10,
+                "roundtrip failed for note {note}"
+            );
         }
     }
 

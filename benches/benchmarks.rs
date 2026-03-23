@@ -222,9 +222,7 @@ fn bench_dsp_sanitize(c: &mut Criterion) {
 
 /// Batch benchmark: process 4096 samples through common DSP functions.
 fn bench_dsp_batch(c: &mut Criterion) {
-    let samples: Vec<f32> = (0..4096)
-        .map(|i| (i as f32 / 4096.0) * 2.0 - 1.0)
-        .collect();
+    let samples: Vec<f32> = (0..4096).map(|i| (i as f32 / 4096.0) * 2.0 - 1.0).collect();
     let mut group = c.benchmark_group("dsp_batch_4096");
 
     group.bench_function("amplitude_to_db", |b| {
