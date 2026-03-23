@@ -1,6 +1,6 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
-use abaco::{Evaluator, UnitRegistry};
+use abaco::{Evaluator, UnitRegistry, dsp};
 
 fn bench_eval_simple(c: &mut Criterion) {
     let eval = Evaluator::new();
@@ -127,6 +127,140 @@ fn bench_registry_creation(c: &mut Criterion) {
     c.bench_function("registry_creation", |b| b.iter(UnitRegistry::new));
 }
 
+fn bench_dsp_db(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dsp_db");
+
+    group.bench_function("amplitude_to_db", |b| {
+        b.iter(|| dsp::amplitude_to_db(black_box(0.5)))
+    });
+    group.bench_function("db_to_amplitude", |b| {
+        b.iter(|| dsp::db_to_amplitude(black_box(-6.0)))
+    });
+    group.bench_function("amplitude_to_db_f64", |b| {
+        b.iter(|| dsp::amplitude_to_db_f64(black_box(0.5)))
+    });
+    group.bench_function("db_to_amplitude_f64", |b| {
+        b.iter(|| dsp::db_to_amplitude_f64(black_box(-6.0)))
+    });
+    group.bench_function("db_gain_factor", |b| {
+        b.iter(|| dsp::db_gain_factor(black_box(12.0)))
+    });
+
+    group.finish();
+}
+
+fn bench_dsp_midi(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dsp_midi");
+
+    group.bench_function("midi_to_freq", |b| {
+        b.iter(|| dsp::midi_to_freq(black_box(69.0)))
+    });
+    group.bench_function("freq_to_midi", |b| {
+        b.iter(|| dsp::freq_to_midi(black_box(440.0)))
+    });
+
+    group.finish();
+}
+
+fn bench_dsp_envelope(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dsp_envelope");
+
+    group.bench_function("time_constant_10ms", |b| {
+        b.iter(|| dsp::time_constant(black_box(10.0), black_box(44100)))
+    });
+    group.bench_function("time_constant_100ms", |b| {
+        b.iter(|| dsp::time_constant(black_box(100.0), black_box(44100)))
+    });
+
+    group.finish();
+}
+
+fn bench_dsp_waveform(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dsp_waveform");
+
+    group.bench_function("poly_blep_mid", |b| {
+        b.iter(|| dsp::poly_blep(black_box(0.5), black_box(0.01)))
+    });
+    group.bench_function("poly_blep_near_edge", |b| {
+        b.iter(|| dsp::poly_blep(black_box(0.005), black_box(0.01)))
+    });
+    group.bench_function("angular_frequency", |b| {
+        b.iter(|| dsp::angular_frequency(black_box(1000.0), black_box(44100.0)))
+    });
+
+    group.finish();
+}
+
+fn bench_dsp_pan(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dsp_pan");
+
+    group.bench_function("constant_power_pan_center", |b| {
+        b.iter(|| dsp::constant_power_pan(black_box(0.0)))
+    });
+    group.bench_function("constant_power_pan_left", |b| {
+        b.iter(|| dsp::constant_power_pan(black_box(-1.0)))
+    });
+    group.bench_function("equal_power_crossfade_mid", |b| {
+        b.iter(|| dsp::equal_power_crossfade(black_box(0.5)))
+    });
+
+    group.finish();
+}
+
+fn bench_dsp_sanitize(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dsp_sanitize");
+
+    group.bench_function("sanitize_finite", |b| {
+        b.iter(|| dsp::sanitize_sample(black_box(0.5)))
+    });
+    group.bench_function("sanitize_nan", |b| {
+        b.iter(|| dsp::sanitize_sample(black_box(f32::NAN)))
+    });
+
+    group.finish();
+}
+
+/// Batch benchmark: process 4096 samples through common DSP functions.
+fn bench_dsp_batch(c: &mut Criterion) {
+    let samples: Vec<f32> = (0..4096)
+        .map(|i| (i as f32 / 4096.0) * 2.0 - 1.0)
+        .collect();
+    let mut group = c.benchmark_group("dsp_batch_4096");
+
+    group.bench_function("amplitude_to_db", |b| {
+        b.iter(|| {
+            let s = black_box(&samples);
+            s.iter()
+                .map(|&v| dsp::amplitude_to_db(v.abs().max(1e-10)))
+                .sum::<f32>()
+        })
+    });
+    group.bench_function("db_to_amplitude", |b| {
+        b.iter(|| {
+            let s = black_box(&samples);
+            s.iter()
+                .map(|&v| dsp::db_to_amplitude(v * 60.0))
+                .sum::<f32>()
+        })
+    });
+    group.bench_function("sanitize_sample", |b| {
+        b.iter(|| {
+            let s = black_box(&samples);
+            s.iter().map(|&v| dsp::sanitize_sample(v)).sum::<f32>()
+        })
+    });
+    group.bench_function("poly_blep", |b| {
+        b.iter(|| {
+            let s = black_box(&samples);
+            s.iter()
+                .map(|&v| dsp::poly_blep((v.abs()) as f64, 0.01) as f32)
+                .sum::<f32>()
+        })
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_eval_simple,
@@ -137,5 +271,12 @@ criterion_group!(
     bench_unit_conversion,
     bench_unit_lookup,
     bench_registry_creation,
+    bench_dsp_db,
+    bench_dsp_midi,
+    bench_dsp_envelope,
+    bench_dsp_waveform,
+    bench_dsp_pan,
+    bench_dsp_sanitize,
+    bench_dsp_batch,
 );
 criterion_main!(benches);

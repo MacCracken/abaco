@@ -30,6 +30,7 @@
 //! - `full` — enables all optional features
 
 pub mod core;
+pub mod dsp;
 pub mod eval;
 pub mod units;
 
