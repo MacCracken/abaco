@@ -5,6 +5,32 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.4] - 2026-03-22
+
+### Added
+
+- `dsp` module — pure numeric DSP math primitives for audio engines
+  - Decibel conversions: `amplitude_to_db`, `db_to_amplitude` (f32 and f64 variants), `db_gain_factor`
+  - MIDI: `midi_to_freq`, `freq_to_midi`, constants `A4_FREQUENCY`, `A4_MIDI_NOTE`, `SEMITONES_PER_OCTAVE`
+  - Envelope: `time_constant` (one-pole smoothing coefficient from ms + sample rate)
+  - Waveform: `poly_blep` (anti-aliasing correction), `angular_frequency` (biquad filter design)
+  - Panning: `constant_power_pan` (sin/cos law), `equal_power_crossfade`
+  - Utility: `sanitize_sample` (NaN/Inf → 0.0)
+- 24 tests for dsp module
+- 21 DSP criterion benchmarks (scalar + batch-4096)
+- ROADMAP.md
+
+### Performance
+
+- dB conversions use `ln`/`exp` with precomputed constants instead of `log10`/`powf` — 42-62% faster
+- MIDI-to-frequency uses `exp2` instead of `powf(2.0, x)`
+- Pan/crossfade use single `sin_cos()` call instead of separate `sin()` + `cos()`
+
+### Changed
+
+- Benchmark script outputs both CSV history and 3-point tracking Markdown table
+- 50 criterion benchmarks total (was 29), 242 tests
+
 ## [0.22.3] - 2026-03-22
 
 ### Performance
@@ -58,5 +84,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `units` — Unit registry with 95+ built-in units across 14 categories, conversion engine
 - `ai` — Natural language math parsing, calculation history (feature-gated)
 
+[0.22.4]: https://github.com/MacCracken/abaco/compare/0.22.3...0.22.4
 [0.22.3]: https://github.com/MacCracken/abaco/compare/0.1.0...0.22.3
 [0.1.0]: https://github.com/MacCracken/abaco/releases/tag/0.1.0
