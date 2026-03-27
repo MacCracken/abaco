@@ -80,6 +80,10 @@ pub enum UnitCategory {
     Frequency,
     Force,
     Power,
+    FuelEconomy,
+    Density,
+    Luminosity,
+    Viscosity,
 }
 
 impl UnitCategory {
@@ -101,6 +105,10 @@ impl UnitCategory {
             UnitCategory::Frequency,
             UnitCategory::Force,
             UnitCategory::Power,
+            UnitCategory::FuelEconomy,
+            UnitCategory::Density,
+            UnitCategory::Luminosity,
+            UnitCategory::Viscosity,
         ]
     }
 }
@@ -124,6 +132,12 @@ impl std::str::FromStr for UnitCategory {
             "frequency" | "freq" => Ok(UnitCategory::Frequency),
             "force" => Ok(UnitCategory::Force),
             "power" | "wattage" => Ok(UnitCategory::Power),
+            "fueleconomy" | "fuel_economy" | "fuel economy" | "fuel" | "mpg" => {
+                Ok(UnitCategory::FuelEconomy)
+            }
+            "density" => Ok(UnitCategory::Density),
+            "luminosity" | "light" | "illuminance" => Ok(UnitCategory::Luminosity),
+            "viscosity" => Ok(UnitCategory::Viscosity),
             _ => Err(format!("unknown unit category: '{s}'")),
         }
     }
@@ -146,6 +160,10 @@ impl fmt::Display for UnitCategory {
             UnitCategory::Frequency => write!(f, "Frequency"),
             UnitCategory::Force => write!(f, "Force"),
             UnitCategory::Power => write!(f, "Power"),
+            UnitCategory::FuelEconomy => write!(f, "Fuel Economy"),
+            UnitCategory::Density => write!(f, "Density"),
+            UnitCategory::Luminosity => write!(f, "Luminosity"),
+            UnitCategory::Viscosity => write!(f, "Viscosity"),
         }
     }
 }
@@ -160,6 +178,8 @@ pub struct Unit {
     pub to_base_factor: f64,
     /// Add this offset after multiplication (used for temperature).
     pub to_base_offset: f64,
+    /// If true, conversion is reciprocal: `base = factor / value` (used for fuel economy).
+    pub to_base_inverse: bool,
 }
 
 impl Unit {
@@ -177,6 +197,25 @@ impl Unit {
             category,
             to_base_factor,
             to_base_offset,
+            to_base_inverse: false,
+        }
+    }
+
+    /// Create a unit with reciprocal conversion (e.g., L/100km where base = factor / value).
+    #[must_use]
+    pub fn new_inverse(
+        name: &str,
+        symbol: &str,
+        category: UnitCategory,
+        to_base_factor: f64,
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            symbol: symbol.to_string(),
+            category,
+            to_base_factor,
+            to_base_offset: 0.0,
+            to_base_inverse: true,
         }
     }
 }
@@ -388,7 +427,7 @@ mod tests {
 
     #[test]
     fn test_unit_category_all_categories_count() {
-        assert_eq!(UnitCategory::all_categories().len(), 14);
+        assert_eq!(UnitCategory::all_categories().len(), 18);
     }
 
     #[test]

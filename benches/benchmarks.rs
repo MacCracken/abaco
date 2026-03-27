@@ -119,6 +119,32 @@ fn bench_unit_lookup(c: &mut Criterion) {
     group.bench_function("miss", |b| {
         b.iter(|| reg.find_unit(black_box("nonexistent")))
     });
+    group.bench_function("alias_kph", |b| {
+        b.iter(|| reg.find_unit(black_box("kph")))
+    });
+    group.bench_function("alias_degree_symbol", |b| {
+        b.iter(|| reg.find_unit(black_box("°C")))
+    });
+
+    group.finish();
+}
+
+fn bench_unit_conversion_extended(c: &mut Criterion) {
+    let reg = UnitRegistry::new();
+    let mut group = c.benchmark_group("unit_conversion_ext");
+
+    group.bench_function("mpg_to_l100km", |b| {
+        b.iter(|| reg.convert(black_box(30.0), "mpg", "L/100km"))
+    });
+    group.bench_function("density_g_cm3_to_kg_m3", |b| {
+        b.iter(|| reg.convert(black_box(1.0), "g/cm3", "kg/m3"))
+    });
+    group.bench_function("viscosity_cp_to_pas", |b| {
+        b.iter(|| reg.convert(black_box(1.0), "cP", "Pa·s"))
+    });
+    group.bench_function("lux_to_fc", |b| {
+        b.iter(|| reg.convert(black_box(100.0), "lx", "fc"))
+    });
 
     group.finish();
 }
@@ -267,6 +293,7 @@ criterion_group!(
     bench_eval_scientific,
     bench_tokenizer,
     bench_unit_conversion,
+    bench_unit_conversion_extended,
     bench_unit_lookup,
     bench_registry_creation,
     bench_dsp_db,

@@ -1,12 +1,14 @@
 //! Natural language math parsing — "what is 15% of 230", "convert 5 km to miles".
 //!
 //! Feature-gated behind `ai`. Provides [`NlParser`] for parsing natural language
-//! into structured [`ParsedQuery`] types, and [`CalculationHistory`] for tracking
-//! past calculations.
+//! into structured [`ParsedQuery`] types, [`CalculationHistory`] for tracking
+//! past calculations, and [`CurrencyConverter`] for live exchange rates.
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Mutex;
+use tracing::{debug, instrument, warn};
 
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
@@ -15,6 +17,10 @@ pub enum AiError {
     ParseError(String),
     #[error("Unsupported query type")]
     UnsupportedQuery,
+    #[error("Currency error: {0}")]
+    CurrencyError(String),
+    #[error("HTTP error: {0}")]
+    HttpError(String),
 }
 
 pub type Result<T> = std::result::Result<T, AiError>;
@@ -240,6 +246,214 @@ impl Default for CalculationHistory {
     }
 }
 
+// ── Currency conversion ─────────────────────────────────────────────────────
+
+/// Cached exchange rates with a timestamp.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RateCache {
+    /// Base currency code (rates are relative to this).
+    base: String,
+    /// Currency code → rate (1 base = rate target).
+    rates: HashMap<String, f64>,
+    /// When these rates were fetched (RFC 3339).
+    fetched_at: String,
+}
+
+/// Live currency converter with rate caching.
+///
+/// Fetches exchange rates from a hoosh service endpoint and caches them
+/// in memory. Cache TTL is configurable (default: 1 hour).
+pub struct CurrencyConverter {
+    /// Base URL of the rate service (e.g., `http://localhost:8088`).
+    base_url: String,
+    /// Cache TTL in seconds.
+    cache_ttl_secs: i64,
+    /// Cached rates (behind a mutex for interior mutability).
+    cache: Mutex<Option<RateCache>>,
+    /// HTTP client.
+    client: reqwest::Client,
+}
+
+/// Result of a currency conversion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CurrencyResult {
+    pub from_value: f64,
+    pub from_currency: String,
+    pub to_value: f64,
+    pub to_currency: String,
+    pub rate: f64,
+}
+
+impl std::fmt::Display for CurrencyResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} {} = {} {} (rate: {})",
+            self.from_value, self.from_currency, self.to_value, self.to_currency, self.rate
+        )
+    }
+}
+
+/// Response shape expected from the hoosh rate service.
+#[derive(Debug, Deserialize)]
+struct RateResponse {
+    base: String,
+    rates: HashMap<String, f64>,
+}
+
+impl CurrencyConverter {
+    /// Create a new converter pointing at the given hoosh base URL.
+    #[must_use]
+    pub fn new(base_url: &str) -> Self {
+        Self {
+            base_url: base_url.trim_end_matches('/').to_string(),
+            cache_ttl_secs: 3600,
+            cache: Mutex::new(None),
+            client: reqwest::Client::new(),
+        }
+    }
+
+    /// Create a converter with a custom cache TTL (in seconds).
+    #[must_use]
+    pub fn with_ttl(mut self, ttl_secs: i64) -> Self {
+        self.cache_ttl_secs = ttl_secs;
+        self
+    }
+
+    /// Check if the cached rates are still valid.
+    fn cache_valid(&self) -> bool {
+        let guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(ref cache) = *guard
+            && let Ok(fetched) = chrono::DateTime::parse_from_rfc3339(&cache.fetched_at)
+        {
+            let age = Utc::now().signed_duration_since(fetched);
+            return age.num_seconds() < self.cache_ttl_secs;
+        }
+        false
+    }
+
+    /// Fetch fresh rates from the hoosh service.
+    #[instrument(skip(self))]
+    async fn fetch_rates(&self) -> Result<RateCache> {
+        let url = format!("{}/rates", self.base_url);
+        debug!(url, "fetching exchange rates");
+
+        let resp = self
+            .client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+            .map_err(|e| AiError::HttpError(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            warn!(%status, "rate service returned error");
+            return Err(AiError::HttpError(format!("HTTP {status}")));
+        }
+
+        let body: RateResponse = resp
+            .json()
+            .await
+            .map_err(|e| AiError::CurrencyError(format!("invalid rate response: {e}")))?;
+
+        let cache = RateCache {
+            base: body.base,
+            rates: body.rates,
+            fetched_at: Utc::now().to_rfc3339(),
+        };
+
+        // Update the cache
+        let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some(cache.clone());
+
+        debug!(base = cache.base, count = cache.rates.len(), "rates cached");
+        Ok(cache)
+    }
+
+    /// Get rates, using cache if valid or fetching fresh ones.
+    async fn get_rates(&self) -> Result<RateCache> {
+        if self.cache_valid() {
+            let guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(ref cache) = *guard {
+                return Ok(cache.clone());
+            }
+        }
+        // Try to fetch fresh rates
+        match self.fetch_rates().await {
+            Ok(cache) => Ok(cache),
+            Err(e) => {
+                // Offline fallback: use stale cache if available
+                let guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref cache) = *guard {
+                    warn!("using stale cached rates (fetch failed: {e})");
+                    return Ok(cache.clone());
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Convert between currencies.
+    #[instrument(skip(self), fields(from, to))]
+    pub async fn convert(&self, value: f64, from: &str, to: &str) -> Result<CurrencyResult> {
+        let from = from.to_uppercase();
+        let to = to.to_uppercase();
+
+        let cache = self.get_rates().await?;
+
+        // Get rates relative to the base currency
+        let from_rate = if from == cache.base {
+            1.0
+        } else {
+            *cache
+                .rates
+                .get(&from)
+                .ok_or_else(|| AiError::CurrencyError(format!("unknown currency: {from}")))?
+        };
+
+        let to_rate = if to == cache.base {
+            1.0
+        } else {
+            *cache
+                .rates
+                .get(&to)
+                .ok_or_else(|| AiError::CurrencyError(format!("unknown currency: {to}")))?
+        };
+
+        // Convert: from → base → to
+        let rate = to_rate / from_rate;
+        let result = value * rate;
+
+        debug!(value, %from, %to, rate, result, "currency conversion");
+
+        Ok(CurrencyResult {
+            from_value: value,
+            from_currency: from,
+            to_value: result,
+            to_currency: to,
+            rate,
+        })
+    }
+
+    /// Manually set cached rates (useful for testing or offline mode).
+    pub fn set_rates(&self, base: &str, rates: HashMap<String, f64>) {
+        let cache = RateCache {
+            base: base.to_uppercase(),
+            rates,
+            fetched_at: Utc::now().to_rfc3339(),
+        };
+        let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some(cache);
+    }
+}
+
+impl Default for CurrencyConverter {
+    fn default() -> Self {
+        Self::new("http://localhost:8088")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,5 +650,96 @@ mod tests {
         assert_eq!(h.entries()[0].input, "a");
         assert_eq!(h.entries()[0].result, "b");
         assert_eq!(h.entries()[1].input, "c");
+    }
+
+    // --- Currency converter ---
+
+    fn test_converter() -> CurrencyConverter {
+        let c = CurrencyConverter::new("http://localhost:8088");
+        let mut rates = HashMap::new();
+        rates.insert("EUR".to_string(), 0.92);
+        rates.insert("GBP".to_string(), 0.79);
+        rates.insert("JPY".to_string(), 149.50);
+        rates.insert("CAD".to_string(), 1.36);
+        c.set_rates("USD", rates);
+        c
+    }
+
+    #[tokio::test]
+    async fn test_currency_usd_to_eur() {
+        let c = test_converter();
+        let r = c.convert(100.0, "USD", "EUR").await.unwrap();
+        assert!((r.to_value - 92.0).abs() < 0.01);
+        assert!((r.rate - 0.92).abs() < 0.001);
+    }
+
+    #[tokio::test]
+    async fn test_currency_eur_to_usd() {
+        let c = test_converter();
+        let r = c.convert(100.0, "EUR", "USD").await.unwrap();
+        // 100 EUR = 100 / 0.92 USD ≈ 108.70
+        assert!((r.to_value - 108.70).abs() < 0.1);
+    }
+
+    #[tokio::test]
+    async fn test_currency_cross_rate() {
+        let c = test_converter();
+        // EUR → JPY: rate = 149.50 / 0.92 ≈ 162.50
+        let r = c.convert(1.0, "EUR", "JPY").await.unwrap();
+        assert!((r.to_value - 162.50).abs() < 0.5);
+    }
+
+    #[tokio::test]
+    async fn test_currency_same() {
+        let c = test_converter();
+        let r = c.convert(100.0, "USD", "USD").await.unwrap();
+        assert!((r.to_value - 100.0).abs() < 0.001);
+    }
+
+    #[tokio::test]
+    async fn test_currency_unknown_errors() {
+        let c = test_converter();
+        let r = c.convert(100.0, "USD", "XYZ").await;
+        assert!(r.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_currency_case_insensitive() {
+        let c = test_converter();
+        let r = c.convert(100.0, "usd", "eur").await.unwrap();
+        assert!((r.to_value - 92.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_currency_display() {
+        let r = CurrencyResult {
+            from_value: 100.0,
+            from_currency: "USD".to_string(),
+            to_value: 92.0,
+            to_currency: "EUR".to_string(),
+            rate: 0.92,
+        };
+        let s = r.to_string();
+        assert!(s.contains("100"));
+        assert!(s.contains("USD"));
+        assert!(s.contains("EUR"));
+    }
+
+    #[test]
+    fn test_currency_converter_default() {
+        let c = CurrencyConverter::default();
+        assert!(!c.cache_valid());
+    }
+
+    #[test]
+    fn test_currency_cache_valid_after_set() {
+        let c = test_converter();
+        assert!(c.cache_valid());
+    }
+
+    #[test]
+    fn test_currency_with_ttl() {
+        let c = CurrencyConverter::new("http://localhost:8088").with_ttl(60);
+        assert_eq!(c.cache_ttl_secs, 60);
     }
 }

@@ -43,4 +43,7 @@ pub use crate::eval::{EvalError, Evaluator, Token, tokenize};
 pub use crate::units::{UnitError, UnitRegistry};
 
 #[cfg(feature = "ai")]
-pub use crate::ai::{AiError, CalculationHistory, HistoryEntry, NlParser, ParsedQuery};
+pub use crate::ai::{
+    AiError, CalculationHistory, CurrencyConverter, CurrencyResult, HistoryEntry, NlParser,
+    ParsedQuery,
+};

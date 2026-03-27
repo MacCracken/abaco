@@ -42,11 +42,12 @@ impl UnitRegistry {
     #[must_use]
     pub fn new() -> Self {
         let mut reg = Self {
-            units: HashMap::with_capacity(14),
-            by_symbol: HashMap::with_capacity(106),
-            by_lower: HashMap::with_capacity(212),
+            units: HashMap::with_capacity(18),
+            by_symbol: HashMap::with_capacity(130),
+            by_lower: HashMap::with_capacity(300),
         };
         reg.populate_defaults();
+        reg.populate_aliases();
         reg
     }
 
@@ -64,6 +65,21 @@ impl UnitRegistry {
         }
         self.by_lower.insert(lower_name, (cat, idx));
         units.push(unit);
+    }
+
+    /// Register an alias that resolves to an existing unit's (category, index).
+    fn alias(&mut self, alias: &str, target_symbol: &str) {
+        if let Some(&loc) = self.by_symbol.get(target_symbol) {
+            self.by_lower.insert(alias.to_lowercase(), loc);
+        }
+    }
+
+    /// Register an exact-case alias (for symbol-level aliases like "°C").
+    fn alias_exact(&mut self, alias: &str, target_symbol: &str) {
+        if let Some(&loc) = self.by_symbol.get(target_symbol) {
+            self.by_symbol.insert(alias.to_string(), loc);
+            self.by_lower.insert(alias.to_lowercase(), loc);
+        }
     }
 
     fn populate_defaults(&mut self) {
@@ -529,6 +545,209 @@ impl UnitRegistry {
             0.001,
             0.0,
         ));
+
+        // Fuel economy (base: km/L)
+        self.add(Unit::new(
+            "kilometers_per_liter",
+            "km/L",
+            UnitCategory::FuelEconomy,
+            1.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "miles_per_gallon",
+            "mpg",
+            UnitCategory::FuelEconomy,
+            0.425144,
+            0.0,
+        ));
+        // L/100km is inverse: km/L = 100 / (L/100km)
+        self.add(Unit::new_inverse(
+            "liters_per_100km",
+            "L/100km",
+            UnitCategory::FuelEconomy,
+            100.0,
+        ));
+
+        // Density (base: kg/m³)
+        self.add(Unit::new(
+            "kilogram_per_cubic_meter",
+            "kg/m3",
+            UnitCategory::Density,
+            1.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "gram_per_cubic_centimeter",
+            "g/cm3",
+            UnitCategory::Density,
+            1000.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "gram_per_milliliter",
+            "g/mL",
+            UnitCategory::Density,
+            1000.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "kilogram_per_liter",
+            "kg/L",
+            UnitCategory::Density,
+            1000.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "pound_per_cubic_foot",
+            "lb/ft3",
+            UnitCategory::Density,
+            16.0185,
+            0.0,
+        ));
+
+        // Luminosity / Illuminance (base: lux)
+        self.add(Unit::new("lux", "lx", UnitCategory::Luminosity, 1.0, 0.0));
+        self.add(Unit::new(
+            "foot_candle",
+            "fc",
+            UnitCategory::Luminosity,
+            10.7639,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "lumen_per_square_meter",
+            "lm/m2",
+            UnitCategory::Luminosity,
+            1.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "phot",
+            "ph",
+            UnitCategory::Luminosity,
+            10_000.0,
+            0.0,
+        ));
+
+        // Viscosity — dynamic (base: Pa·s = pascal-second)
+        self.add(Unit::new(
+            "pascal_second",
+            "Pa·s",
+            UnitCategory::Viscosity,
+            1.0,
+            0.0,
+        ));
+        self.add(Unit::new(
+            "millipascal_second",
+            "mPa·s",
+            UnitCategory::Viscosity,
+            0.001,
+            0.0,
+        ));
+        self.add(Unit::new("poise", "P", UnitCategory::Viscosity, 0.1, 0.0));
+        self.add(Unit::new(
+            "centipoise",
+            "cP",
+            UnitCategory::Viscosity,
+            0.001,
+            0.0,
+        ));
+    }
+
+    fn populate_aliases(&mut self) {
+        // Temperature aliases
+        self.alias_exact("°C", "C");
+        self.alias_exact("°F", "F");
+        self.alias("degc", "C");
+        self.alias("degf", "F");
+        self.alias("centigrade", "C");
+
+        // Length aliases
+        self.alias("metres", "m");
+        self.alias("kilometres", "km");
+        self.alias("centimetres", "cm");
+        self.alias("millimetres", "mm");
+        self.alias("feet", "ft");
+        self.alias("inches", "in");
+
+        // Mass aliases
+        self.alias("kilogramme", "kg");
+        self.alias("gramme", "g");
+        self.alias("lbs", "lb");
+        self.alias("pounds", "lb");
+        self.alias("ounces", "oz");
+        self.alias("tonnes", "t");
+
+        // Speed aliases
+        self.alias("kph", "km/h");
+        self.alias("kmh", "km/h");
+        self.alias("kmph", "km/h");
+        self.alias("meters per second", "m/s");
+        self.alias("meters/second", "m/s");
+        self.alias("kilometres per hour", "km/h");
+        self.alias("kilometers per hour", "km/h");
+        self.alias("miles per hour", "mph");
+        self.alias("knots", "kn");
+
+        // Time aliases
+        self.alias("seconds", "s");
+        self.alias("sec", "s");
+        self.alias("minutes", "min");
+        self.alias("hours", "hr");
+        self.alias("hrs", "hr");
+        self.alias("days", "d");
+        self.alias("weeks", "wk");
+        self.alias("years", "yr");
+        self.alias("yrs", "yr");
+
+        // Volume aliases
+        self.alias("litre", "L");
+        self.alias("litres", "L");
+        self.alias("millilitre", "mL");
+        self.alias("millilitres", "mL");
+        self.alias("gallons", "gal");
+        self.alias("quarts", "qt");
+        self.alias("pints", "pt");
+        self.alias("cups", "cup");
+        self.alias("tablespoons", "tbsp");
+        self.alias("teaspoons", "tsp");
+
+        // Energy aliases
+        self.alias("joules", "J");
+        self.alias("kilojoules", "kJ");
+        self.alias("calories", "cal");
+        self.alias("kilocalories", "kcal");
+
+        // Pressure aliases
+        self.alias("pascals", "Pa");
+        self.alias("atmospheres", "atm");
+        self.alias("bars", "bar");
+
+        // Angle aliases
+        self.alias("radians", "rad");
+        self.alias("degrees", "deg");
+
+        // Frequency aliases
+        self.alias("hertz", "Hz");
+
+        // Fuel economy aliases
+        self.alias("miles per gallon", "mpg");
+        self.alias("km per liter", "km/L");
+        self.alias("km per litre", "km/L");
+
+        // Area aliases
+        self.alias("hectares", "ha");
+        self.alias("acres", "ac");
+        self.alias("sq m", "m2");
+        self.alias("sq km", "km2");
+        self.alias("sq ft", "ft2");
+        self.alias("square meter", "m2");
+        self.alias("square meters", "m2");
+        self.alias("square metre", "m2");
+        self.alias("square kilometres", "km2");
+        self.alias("square kilometers", "km2");
+        self.alias("square feet", "ft2");
     }
 
     /// Find a unit by name or symbol.
@@ -603,8 +822,26 @@ impl UnitRegistry {
         }
 
         // Convert to base unit, then from base to target
-        let base_value = (value + from_unit.to_base_offset) * from_unit.to_base_factor;
-        let result = base_value / to_unit.to_base_factor - to_unit.to_base_offset;
+        let base_value = if from_unit.to_base_inverse {
+            if value == 0.0 {
+                return Err(UnitError::ConversionError(
+                    "Cannot convert zero in reciprocal unit".into(),
+                ));
+            }
+            from_unit.to_base_factor / value
+        } else {
+            (value + from_unit.to_base_offset) * from_unit.to_base_factor
+        };
+        let result = if to_unit.to_base_inverse {
+            if base_value == 0.0 {
+                return Err(UnitError::ConversionError(
+                    "Conversion produced zero base value for reciprocal unit".into(),
+                ));
+            }
+            to_unit.to_base_factor / base_value
+        } else {
+            base_value / to_unit.to_base_factor - to_unit.to_base_offset
+        };
 
         debug!(
             value,
@@ -1229,9 +1466,180 @@ mod tests {
             (UnitCategory::Frequency, "Frequency"),
             (UnitCategory::Force, "Force"),
             (UnitCategory::Power, "Power"),
+            (UnitCategory::FuelEconomy, "Fuel Economy"),
+            (UnitCategory::Density, "Density"),
+            (UnitCategory::Luminosity, "Luminosity"),
+            (UnitCategory::Viscosity, "Viscosity"),
         ];
         for (cat, name) in expected {
             assert_eq!(cat.to_string(), name);
         }
+    }
+
+    // --- Fuel economy ---
+
+    #[test]
+    fn test_mpg_to_km_per_liter() {
+        let r = reg().convert(30.0, "mpg", "km/L").unwrap();
+        assert!((r.to_value - 12.754).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_km_per_liter_to_mpg() {
+        let r = reg().convert(10.0, "km/L", "mpg").unwrap();
+        assert!((r.to_value - 23.52).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_mpg_to_l_per_100km() {
+        // 30 mpg = 12.754 km/L = 100/12.754 = 7.84 L/100km
+        let r = reg().convert(30.0, "mpg", "L/100km").unwrap();
+        assert!((r.to_value - 7.84).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_l_per_100km_to_mpg() {
+        // 8 L/100km = 100/8 = 12.5 km/L = 12.5/0.425144 = 29.40 mpg
+        let r = reg().convert(8.0, "L/100km", "mpg").unwrap();
+        assert!((r.to_value - 29.40).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_l_per_100km_to_km_per_liter() {
+        let r = reg().convert(10.0, "L/100km", "km/L").unwrap();
+        assert!((r.to_value - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_km_per_liter_to_l_per_100km() {
+        let r = reg().convert(10.0, "km/L", "L/100km").unwrap();
+        assert!((r.to_value - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_fuel_economy_zero_errors() {
+        // Zero in reciprocal unit should error
+        let result = reg().convert(0.0, "L/100km", "mpg");
+        assert!(result.is_err());
+    }
+
+    // --- Density ---
+
+    #[test]
+    fn test_g_per_cm3_to_kg_per_m3() {
+        let r = reg().convert(1.0, "g/cm3", "kg/m3").unwrap();
+        assert!((r.to_value - 1000.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_kg_per_m3_to_lb_per_ft3() {
+        // 1000 kg/m³ (water) ≈ 62.43 lb/ft³
+        let r = reg().convert(1000.0, "kg/m3", "lb/ft3").unwrap();
+        assert!((r.to_value - 62.43).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_kg_per_liter_to_g_per_ml() {
+        // 1 kg/L = 1 g/mL (same thing)
+        let r = reg().convert(1.0, "kg/L", "g/mL").unwrap();
+        assert!((r.to_value - 1.0).abs() < 0.001);
+    }
+
+    // --- Luminosity ---
+
+    #[test]
+    fn test_foot_candle_to_lux() {
+        let r = reg().convert(1.0, "fc", "lx").unwrap();
+        assert!((r.to_value - 10.7639).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_lux_to_foot_candle() {
+        let r = reg().convert(100.0, "lx", "fc").unwrap();
+        assert!((r.to_value - 9.29).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_phot_to_lux() {
+        let r = reg().convert(1.0, "ph", "lx").unwrap();
+        assert!((r.to_value - 10_000.0).abs() < 0.1);
+    }
+
+    // --- Viscosity ---
+
+    #[test]
+    fn test_centipoise_to_pascal_second() {
+        // 1 cP = 0.001 Pa·s (water at 20°C ≈ 1 cP)
+        let r = reg().convert(1.0, "cP", "Pa·s").unwrap();
+        assert!((r.to_value - 0.001).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_poise_to_centipoise() {
+        let r = reg().convert(1.0, "P", "cP").unwrap();
+        assert!((r.to_value - 100.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_millipascal_second_to_centipoise() {
+        // 1 mPa·s = 1 cP (equivalent)
+        let r = reg().convert(1.0, "mPa·s", "cP").unwrap();
+        assert!((r.to_value - 1.0).abs() < 0.001);
+    }
+
+    // --- Aliases ---
+
+    #[test]
+    fn test_alias_degree_symbol() {
+        let r = reg();
+        assert_eq!(r.find_unit("°C").unwrap().symbol, "C");
+        assert_eq!(r.find_unit("°F").unwrap().symbol, "F");
+    }
+
+    #[test]
+    fn test_alias_degc_degf() {
+        let r = reg();
+        assert_eq!(r.find_unit("degC").unwrap().symbol, "C");
+        assert_eq!(r.find_unit("degF").unwrap().symbol, "F");
+    }
+
+    #[test]
+    fn test_alias_kph() {
+        let r = reg();
+        assert_eq!(r.find_unit("kph").unwrap().symbol, "km/h");
+        assert_eq!(r.find_unit("kmh").unwrap().symbol, "km/h");
+    }
+
+    #[test]
+    fn test_alias_british_spelling() {
+        let r = reg();
+        assert_eq!(r.find_unit("metres").unwrap().symbol, "m");
+        assert_eq!(r.find_unit("kilometres").unwrap().symbol, "km");
+        assert_eq!(r.find_unit("litre").unwrap().symbol, "L");
+        assert_eq!(r.find_unit("litres").unwrap().symbol, "L");
+    }
+
+    #[test]
+    fn test_alias_common_abbreviations() {
+        let r = reg();
+        assert_eq!(r.find_unit("sec").unwrap().symbol, "s");
+        assert_eq!(r.find_unit("hrs").unwrap().symbol, "hr");
+        assert_eq!(r.find_unit("lbs").unwrap().symbol, "lb");
+        assert_eq!(r.find_unit("yrs").unwrap().symbol, "yr");
+    }
+
+    #[test]
+    fn test_alias_area_phrases() {
+        let r = reg();
+        assert_eq!(r.find_unit("sq m").unwrap().symbol, "m2");
+        assert_eq!(r.find_unit("sq km").unwrap().symbol, "km2");
+        assert_eq!(r.find_unit("square feet").unwrap().symbol, "ft2");
+    }
+
+    #[test]
+    fn test_convert_with_alias() {
+        // Using aliases in conversion
+        let r = reg().convert(100.0, "°C", "°F").unwrap();
+        assert!((r.to_value - 212.0).abs() < 0.1);
     }
 }

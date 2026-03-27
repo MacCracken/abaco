@@ -5,6 +5,48 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.0] - 2026-03-27
+
+### Added
+
+- **4 new unit categories** (18 total, was 14):
+  - **Fuel Economy**: km/L, mpg, L/100km with reciprocal conversion support
+  - **Density**: kg/m³, g/cm³, g/mL, kg/L, lb/ft³
+  - **Luminosity** (Illuminance): lux, foot-candle, lm/m², phot
+  - **Viscosity** (Dynamic): Pa·s, mPa·s, poise, centipoise
+- **Reciprocal unit conversion** — `Unit::new_inverse()` for units where `base = factor / value` (e.g., L/100km)
+- **Unit aliases and abbreviation normalization** — 80+ aliases:
+  - Temperature: °C, °F, degC, degF, centigrade
+  - British spellings: metres, kilometres, litres, gramme
+  - Common abbreviations: kph, kmh, sec, hrs, lbs, yrs
+  - Area phrases: "sq m", "sq km", "square feet"
+  - Speed phrases: "meters per second", "kilometers per hour"
+- **Live currency exchange rates** via hoosh service (feature-gated: `ai`)
+  - `CurrencyConverter` with configurable base URL and cache TTL
+  - In-memory rate caching with TTL (default: 1 hour)
+  - Offline fallback: uses stale cache when service is unreachable
+  - `set_rates()` for manual/test rate injection
+  - Cross-rate conversion (EUR→JPY goes through base currency)
+- 30 new tests (283 total, was 253), 6 new benchmarks (56 total)
+
+### Changed
+
+- `Unit` struct gains `to_base_inverse: bool` field for reciprocal conversions
+- `UnitCategory` enum: 4 new variants (FuelEconomy, Density, Luminosity, Viscosity)
+- `AiError` enum: 2 new variants (CurrencyError, HttpError)
+- Registry HashMap capacities increased for 120+ units + aliases
+- `serde_json` and `uuid` dependencies removed (unused)
+- `chrono` moved behind `ai` feature gate (was always-on)
+- Default dependency count: 3 (serde, thiserror, tracing)
+
+### Hardened (P-1 audit, pre-0.23)
+
+- `#[non_exhaustive]` on all 7 public enums
+- `#[must_use]` on all pure functions
+- `#[inline]` on hot-path functions (tokenize, eval, find_unit, convert)
+- Recursion depth limit (256) in expression evaluator — prevents stack overflow
+- All dependencies updated to latest compatible versions
+
 ## [0.22.4] - 2026-03-22
 
 ### Added
