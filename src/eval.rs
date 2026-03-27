@@ -6,6 +6,7 @@
 //! and user-defined variables.
 
 use crate::core::Value;
+use crate::ntheory;
 use std::collections::HashMap;
 use tracing::instrument;
 
@@ -470,7 +471,8 @@ impl Evaluator {
             "sqrt" | "sin" | "cos" | "tan" | "log" | "log10" | "ln" | "log2" | "abs" | "ceil"
             | "floor" | "round" | "exp" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh"
             | "asinh" | "acosh" | "atanh" | "trunc" | "fract" | "sign" | "sgn" | "deg" | "rad"
-            | "factorial" => {
+            | "factorial" | "isprime" | "nextprime" | "prevprime" | "totient" | "fibonacci"
+            | "fib" => {
                 if n != 1 {
                     return Err(EvalError::ParseError(format!(
                         "Function {name} expects 1 argument, got {n}"
@@ -513,11 +515,54 @@ impl Evaluator {
                         let n = a as u64;
                         (1..=n).fold(1.0_f64, |acc, x| acc * x as f64)
                     }
+                    "isprime" => {
+                        if a < 0.0 || a.fract() != 0.0 {
+                            0.0
+                        } else if ntheory::is_prime(a as u64) {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                    "nextprime" => {
+                        if a < 0.0 {
+                            return Err(EvalError::MathError(
+                                "nextprime requires non-negative integer".into(),
+                            ));
+                        }
+                        ntheory::next_prime(a as u64) as f64
+                    }
+                    "prevprime" => {
+                        if a < 0.0 || a.fract() != 0.0 {
+                            return Err(EvalError::MathError(
+                                "prevprime requires positive integer".into(),
+                            ));
+                        }
+                        ntheory::prev_prime(a as u64)
+                            .map(|p| p as f64)
+                            .ok_or_else(|| EvalError::MathError("no prime less than 2".into()))?
+                    }
+                    "totient" => {
+                        if a < 0.0 || a.fract() != 0.0 {
+                            return Err(EvalError::MathError(
+                                "totient requires non-negative integer".into(),
+                            ));
+                        }
+                        ntheory::totient(a as u64) as f64
+                    }
+                    "fibonacci" | "fib" => {
+                        if a < 0.0 || a.fract() != 0.0 || a > 93.0 {
+                            return Err(EvalError::MathError(
+                                "fibonacci requires integer 0..=93".into(),
+                            ));
+                        }
+                        ntheory::fibonacci(a as u64) as f64
+                    }
                     _ => unreachable!(),
                 }
             }
             // 2-arg functions
-            "min" | "max" | "pow" | "atan2" | "gcd" | "lcm" => {
+            "min" | "max" | "pow" | "atan2" | "gcd" | "lcm" | "binomial" | "choose" => {
                 if n != 2 {
                     return Err(EvalError::ParseError(format!(
                         "Function {name} expects 2 arguments, got {n}"
@@ -549,6 +594,18 @@ impl Evaluator {
                             a = t;
                         }
                         prod / a as f64
+                    }
+                    "binomial" | "choose" => {
+                        if args[0] < 0.0
+                            || args[1] < 0.0
+                            || args[0].fract() != 0.0
+                            || args[1].fract() != 0.0
+                        {
+                            return Err(EvalError::MathError(
+                                "binomial requires non-negative integers".into(),
+                            ));
+                        }
+                        ntheory::binomial(args[0] as u64, args[1] as u64) as f64
                     }
                     _ => unreachable!(),
                 }
@@ -1388,5 +1445,55 @@ mod tests {
             ev.eval_partial("sqrt(16) + sin(").unwrap(),
             Value::Integer(4)
         );
+    }
+
+    // --- Number theory in evaluator ---
+
+    #[test]
+    fn test_eval_isprime() {
+        assert_eq!(eval("isprime(97)"), Value::Integer(1));
+        assert_eq!(eval("isprime(100)"), Value::Integer(0));
+        assert_eq!(eval("isprime(2)"), Value::Integer(1));
+    }
+
+    #[test]
+    fn test_eval_nextprime() {
+        assert_eq!(eval("nextprime(100)"), Value::Integer(101));
+        assert_eq!(eval("nextprime(0)"), Value::Integer(2));
+    }
+
+    #[test]
+    fn test_eval_prevprime() {
+        assert_eq!(eval_f64("prevprime(100)"), 97.0);
+    }
+
+    #[test]
+    fn test_eval_prevprime_errors() {
+        assert!(Evaluator::new().eval("prevprime(2)").is_err());
+    }
+
+    #[test]
+    fn test_eval_totient() {
+        assert_eq!(eval("totient(12)"), Value::Integer(4));
+        assert_eq!(eval("totient(97)"), Value::Integer(96));
+    }
+
+    #[test]
+    fn test_eval_fibonacci() {
+        assert_eq!(eval("fibonacci(10)"), Value::Integer(55));
+        assert_eq!(eval("fib(0)"), Value::Integer(0));
+        assert_eq!(eval("fib(1)"), Value::Integer(1));
+    }
+
+    #[test]
+    fn test_eval_binomial() {
+        assert_eq!(eval("binomial(10, 3)"), Value::Integer(120));
+        assert_eq!(eval("choose(5, 2)"), Value::Integer(10));
+    }
+
+    #[test]
+    fn test_ntheory_in_expression() {
+        // nextprime(100) + fib(10) = 101 + 55 = 156
+        assert_eq!(eval("nextprime(100) + fib(10)"), Value::Integer(156));
     }
 }

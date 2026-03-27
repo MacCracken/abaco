@@ -5,6 +5,27 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-03-27
+
+### Added
+
+- **`ntheory` module** — number theory primitives, zero dependencies:
+  - `is_prime(n)` — deterministic Miller-Rabin, correct for all u64 (Sorenson & Webster 2015 witnesses)
+  - `next_prime(n)`, `prev_prime(n)` — nearest prime search
+  - `factor(n)` — prime factorization via trial division, returns sorted `Vec<u64>`
+  - `totient(n)` — Euler's totient function
+  - `fibonacci(n)` — fast doubling algorithm, exact for n <= 93
+  - `binomial(n, k)` — overflow-safe multiplicative formula
+- **Evaluator functions** from ntheory: `isprime`, `nextprime`, `prevprime`, `totient`, `fibonacci`/`fib`, `binomial`/`choose`
+- 8 ntheory criterion benchmarks (is_prime, factor, totient, fibonacci, binomial)
+- 28 new tests (348 total + 10 doctests)
+- 8 doc-tested examples in ntheory module
+
+### Changed
+
+- Evaluator now supports 43+ functions (was 35+)
+- Roadmap updated with hisab integration plan (solver bridge, symbolic algebra, verified evaluation)
+
 ## [1.0.0] - 2026-03-27
 
 **Abaco's first stable release.** Public API is now frozen — no breaking changes without a major version bump.

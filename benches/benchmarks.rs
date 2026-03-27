@@ -1,6 +1,6 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
-use abaco::{Evaluator, UnitRegistry, dsp};
+use abaco::{Evaluator, UnitRegistry, dsp, ntheory};
 
 fn bench_eval_simple(c: &mut Criterion) {
     let eval = Evaluator::new();
@@ -301,5 +301,37 @@ criterion_group!(
     bench_dsp_pan,
     bench_dsp_sanitize,
     bench_dsp_batch,
+    bench_ntheory,
 );
 criterion_main!(benches);
+
+fn bench_ntheory(c: &mut Criterion) {
+    let mut group = c.benchmark_group("ntheory");
+
+    group.bench_function("is_prime_small", |b| {
+        b.iter(|| ntheory::is_prime(black_box(104729)))
+    });
+    group.bench_function("is_prime_large", |b| {
+        b.iter(|| ntheory::is_prime(black_box(999_999_999_989)))
+    });
+    group.bench_function("next_prime", |b| {
+        b.iter(|| ntheory::next_prime(black_box(1_000_000)))
+    });
+    group.bench_function("factor_small", |b| {
+        b.iter(|| ntheory::factor(black_box(360)))
+    });
+    group.bench_function("factor_large", |b| {
+        b.iter(|| ntheory::factor(black_box(1_234_567_890)))
+    });
+    group.bench_function("totient", |b| {
+        b.iter(|| ntheory::totient(black_box(1_000_000)))
+    });
+    group.bench_function("fibonacci", |b| {
+        b.iter(|| ntheory::fibonacci(black_box(93)))
+    });
+    group.bench_function("binomial", |b| {
+        b.iter(|| ntheory::binomial(black_box(60), black_box(30)))
+    });
+
+    group.finish();
+}

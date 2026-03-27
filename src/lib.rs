@@ -39,6 +39,7 @@
 pub mod core;
 pub mod dsp;
 pub mod eval;
+pub mod ntheory;
 pub mod units;
 
 #[cfg(feature = "ai")]
