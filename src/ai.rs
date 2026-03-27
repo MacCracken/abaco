@@ -1,3 +1,9 @@
+//! Natural language math parsing — "what is 15% of 230", "convert 5 km to miles".
+//!
+//! Feature-gated behind `ai`. Provides [`NlParser`] for parsing natural language
+//! into structured [`ParsedQuery`] types, and [`CalculationHistory`] for tracking
+//! past calculations.
+
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;

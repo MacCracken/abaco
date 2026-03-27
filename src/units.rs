@@ -1,5 +1,13 @@
+//! Unit conversion engine — 100+ built-in units across 14 categories.
+//!
+//! The [`UnitRegistry`] holds all known units and provides O(1) lookup by symbol
+//! or name, with case-insensitive and plural matching. Conversion uses a base-unit
+//! normalization approach: every unit defines a factor and offset to convert to its
+//! category's base unit, and conversions go through that common representation.
+
 use crate::core::{ConversionResult, Unit, UnitCategory};
 use std::collections::HashMap;
+use tracing::{debug, instrument, warn};
 
 #[derive(Debug, thiserror::Error)]
 pub enum UnitError {
@@ -551,13 +559,16 @@ impl UnitRegistry {
     }
 
     /// Convert a value between two units.
+    #[instrument(skip(self), fields(from, to))]
     pub fn convert(&self, value: f64, from: &str, to: &str) -> Result<ConversionResult> {
-        let from_unit = self
-            .find_unit(from)
-            .ok_or_else(|| UnitError::UnknownUnit(from.to_string()))?;
-        let to_unit = self
-            .find_unit(to)
-            .ok_or_else(|| UnitError::UnknownUnit(to.to_string()))?;
+        let from_unit = self.find_unit(from).ok_or_else(|| {
+            warn!(unit = from, "convert: unknown source unit");
+            UnitError::UnknownUnit(from.to_string())
+        })?;
+        let to_unit = self.find_unit(to).ok_or_else(|| {
+            warn!(unit = to, "convert: unknown target unit");
+            UnitError::UnknownUnit(to.to_string())
+        })?;
 
         if from_unit.category != to_unit.category {
             return Err(UnitError::IncompatibleUnits(
@@ -587,6 +598,14 @@ impl UnitRegistry {
         // Convert to base unit, then from base to target
         let base_value = (value + from_unit.to_base_offset) * from_unit.to_base_factor;
         let result = base_value / to_unit.to_base_factor - to_unit.to_base_offset;
+
+        debug!(
+            value,
+            from = from_unit.symbol,
+            to = to_unit.symbol,
+            result,
+            "convert: ok"
+        );
 
         Ok(ConversionResult {
             from_value: value,

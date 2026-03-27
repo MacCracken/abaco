@@ -397,4 +397,52 @@ mod tests {
             assert!((energy - 1.0).abs() < 0.01, "energy={energy} at t={t}");
         }
     }
+
+    // ── coverage gap tests ───────────────────────────────────────────────
+
+    #[test]
+    fn amplitude_to_db_f64_zero() {
+        assert!(amplitude_to_db_f64(0.0).is_infinite());
+        assert!(amplitude_to_db_f64(-1.0).is_infinite());
+    }
+
+    #[test]
+    fn db_to_amplitude_f64_roundtrip() {
+        let amp = db_to_amplitude_f64(-6.02);
+        assert!((amp - 0.5).abs() < 0.01);
+        let db = amplitude_to_db_f64(amp);
+        assert!((db - (-6.02)).abs() < 0.01);
+    }
+
+    #[test]
+    fn pan_clamps_out_of_range() {
+        // Values outside [-1, 1] should be clamped
+        let (l, r) = constant_power_pan(-2.0);
+        let (l2, r2) = constant_power_pan(-1.0);
+        assert!((l - l2).abs() < 0.01);
+        assert!((r - r2).abs() < 0.01);
+
+        let (l, r) = constant_power_pan(5.0);
+        let (l2, r2) = constant_power_pan(1.0);
+        assert!((l - l2).abs() < 0.01);
+        assert!((r - r2).abs() < 0.01);
+    }
+
+    #[test]
+    fn crossfade_clamps_out_of_range() {
+        let (a, b) = equal_power_crossfade(-1.0);
+        let (a2, b2) = equal_power_crossfade(0.0);
+        assert!((a - a2).abs() < 0.01);
+        assert!((b - b2).abs() < 0.01);
+
+        let (a, b) = equal_power_crossfade(2.0);
+        let (a2, b2) = equal_power_crossfade(1.0);
+        assert!((a - a2).abs() < 0.01);
+        assert!((b - b2).abs() < 0.01);
+    }
+
+    #[test]
+    fn freq_to_midi_negative() {
+        assert!(freq_to_midi(-100.0).is_infinite());
+    }
 }

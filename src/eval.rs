@@ -1,5 +1,13 @@
+//! Expression evaluator — arithmetic, 28+ math functions, variables, scientific notation.
+//!
+//! The evaluator parses and evaluates mathematical expressions using a recursive
+//! descent parser. It supports standard arithmetic (`+`, `-`, `*`, `/`, `%`, `^`),
+//! parentheses, named functions (`sin`, `sqrt`, `log2`, etc.), constants (`pi`, `e`),
+//! and user-defined variables.
+
 use crate::core::Value;
 use std::collections::HashMap;
+use tracing::instrument;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EvalError {
@@ -113,10 +121,8 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>> {
                 tokens.push(Token::Ident(input[start..i].to_string()));
             }
             _ => {
-                return Err(EvalError::ParseError(format!(
-                    "Unexpected character: {}",
-                    input[i..].chars().next().unwrap()
-                )));
+                let ch = input[i..].chars().next().unwrap_or('?');
+                return Err(EvalError::ParseError(format!("Unexpected character: {ch}")));
             }
         }
     }
@@ -151,6 +157,7 @@ impl Evaluator {
     }
 
     /// Evaluate an expression string and return a Value.
+    #[instrument(skip(self), fields(expr))]
     pub fn eval(&self, expr: &str) -> Result<Value> {
         let tokens = tokenize(expr)?;
         if tokens.is_empty() {

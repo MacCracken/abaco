@@ -17,6 +17,7 @@
 | `core` | Value types (Integer, Float, Fraction, Complex, Text), Unit, UnitCategory (14 categories), Currency |
 | `eval` | Tokenizer, recursive descent parser, 28+ math functions, variables, scientific notation, percentage shorthand |
 | `units` | Unit registry with 100+ built-in units, HashMap-indexed O(1) lookups, SI + IEC data sizes |
+| `dsp` | Audio DSP math primitives — dB conversion, MIDI↔frequency, envelope time constants, PolyBLEP, panning, crossfade |
 | `ai` | Natural language math parsing, calculation history (feature-gated) |
 
 ## Quick Start

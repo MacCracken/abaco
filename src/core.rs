@@ -1,3 +1,10 @@
+//! Core types — numeric values, units, categories, and conversion results.
+//!
+//! These are the foundational data types shared across all abaco modules:
+//! [`Value`] (polymorphic numeric result), [`Unit`] and [`UnitCategory`]
+//! (physical measurement), [`ConversionResult`] (conversion output),
+//! and [`Currency`] (monetary unit).
+
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
