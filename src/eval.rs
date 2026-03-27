@@ -9,6 +9,7 @@ use crate::core::Value;
 use std::collections::HashMap;
 use tracing::instrument;
 
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum EvalError {
     #[error("Division by zero")]
@@ -28,6 +29,7 @@ pub enum EvalError {
 pub type Result<T> = std::result::Result<T, EvalError>;
 
 /// Lexer token.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Number(f64),
@@ -44,6 +46,8 @@ pub enum Token {
 }
 
 /// Tokenize an expression string.
+#[inline]
+#[must_use = "tokenizing has no side effects"]
 pub fn tokenize(input: &str) -> Result<Vec<Token>> {
     let mut tokens = Vec::new();
     let bytes = input.as_bytes();
@@ -130,6 +134,10 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>> {
     Ok(tokens)
 }
 
+/// Maximum recursion depth for expression parsing.
+/// Prevents stack overflow from deeply nested expressions like `(((((...)))))`
+const MAX_PARSE_DEPTH: usize = 256;
+
 /// Expression evaluator with variable support.
 pub struct Evaluator {
     variables: HashMap<String, f64>,
@@ -142,6 +150,7 @@ impl Default for Evaluator {
 }
 
 impl Evaluator {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             variables: HashMap::new(),
@@ -152,11 +161,14 @@ impl Evaluator {
         self.variables.insert(name.to_string(), value);
     }
 
+    #[must_use]
     pub fn get_variable(&self, name: &str) -> Option<f64> {
         self.variables.get(name).copied()
     }
 
     /// Evaluate an expression string and return a Value.
+    #[inline]
+    #[must_use = "evaluating has no side effects"]
     #[instrument(skip(self), fields(expr))]
     pub fn eval(&self, expr: &str) -> Result<Value> {
         let tokens = tokenize(expr)?;
@@ -164,7 +176,7 @@ impl Evaluator {
             return Err(EvalError::InvalidExpression);
         }
         let mut pos = 0;
-        let result = self.parse_expr(&tokens, &mut pos)?;
+        let result = self.parse_expr(&tokens, &mut pos, 0)?;
         if pos < tokens.len() {
             return Err(EvalError::ParseError(format!(
                 "Unexpected token at position {pos}"
@@ -178,18 +190,26 @@ impl Evaluator {
         }
     }
 
+    fn check_depth(depth: usize) -> Result<()> {
+        if depth >= MAX_PARSE_DEPTH {
+            return Err(EvalError::ParseError("Expression too deeply nested".into()));
+        }
+        Ok(())
+    }
+
     // parse_expr: handles + and -
-    fn parse_expr(&self, tokens: &[Token], pos: &mut usize) -> Result<f64> {
-        let mut left = self.parse_term(tokens, pos)?;
+    fn parse_expr(&self, tokens: &[Token], pos: &mut usize, depth: usize) -> Result<f64> {
+        Self::check_depth(depth)?;
+        let mut left = self.parse_term(tokens, pos, depth)?;
         while *pos < tokens.len() {
             match &tokens[*pos] {
                 Token::Plus => {
                     *pos += 1;
-                    left += self.parse_term(tokens, pos)?;
+                    left += self.parse_term(tokens, pos, depth)?;
                 }
                 Token::Minus => {
                     *pos += 1;
-                    left -= self.parse_term(tokens, pos)?;
+                    left -= self.parse_term(tokens, pos, depth)?;
                 }
                 _ => break,
             }
@@ -198,17 +218,17 @@ impl Evaluator {
     }
 
     // parse_term: handles * / %
-    fn parse_term(&self, tokens: &[Token], pos: &mut usize) -> Result<f64> {
-        let mut left = self.parse_power(tokens, pos)?;
+    fn parse_term(&self, tokens: &[Token], pos: &mut usize, depth: usize) -> Result<f64> {
+        let mut left = self.parse_power(tokens, pos, depth)?;
         while *pos < tokens.len() {
             match &tokens[*pos] {
                 Token::Star => {
                     *pos += 1;
-                    left *= self.parse_power(tokens, pos)?;
+                    left *= self.parse_power(tokens, pos, depth)?;
                 }
                 Token::Slash => {
                     *pos += 1;
-                    let right = self.parse_power(tokens, pos)?;
+                    let right = self.parse_power(tokens, pos, depth)?;
                     if right == 0.0 {
                         return Err(EvalError::DivisionByZero);
                     }
@@ -236,7 +256,7 @@ impl Evaluator {
                     if is_postfix {
                         left /= 100.0;
                     } else {
-                        let right = self.parse_power(tokens, pos)?;
+                        let right = self.parse_power(tokens, pos, depth)?;
                         if right == 0.0 {
                             return Err(EvalError::DivisionByZero);
                         }
@@ -250,11 +270,11 @@ impl Evaluator {
     }
 
     // parse_power: handles ^
-    fn parse_power(&self, tokens: &[Token], pos: &mut usize) -> Result<f64> {
-        let base = self.parse_unary(tokens, pos)?;
+    fn parse_power(&self, tokens: &[Token], pos: &mut usize, depth: usize) -> Result<f64> {
+        let base = self.parse_unary(tokens, pos, depth)?;
         if *pos < tokens.len() && tokens[*pos] == Token::Power {
             *pos += 1;
-            let exp = self.parse_power(tokens, pos)?; // right-associative
+            let exp = self.parse_power(tokens, pos, depth)?; // right-associative
             Ok(base.powf(exp))
         } else {
             Ok(base)
@@ -262,19 +282,19 @@ impl Evaluator {
     }
 
     // parse_unary: handles unary + and -
-    fn parse_unary(&self, tokens: &[Token], pos: &mut usize) -> Result<f64> {
+    fn parse_unary(&self, tokens: &[Token], pos: &mut usize, depth: usize) -> Result<f64> {
         if *pos < tokens.len() {
             match &tokens[*pos] {
                 Token::Minus => {
                     *pos += 1;
-                    let val = self.parse_unary(tokens, pos)?;
+                    let val = self.parse_unary(tokens, pos, depth)?;
                     Ok(-val)
                 }
                 Token::Plus => {
                     *pos += 1;
-                    self.parse_unary(tokens, pos)
+                    self.parse_unary(tokens, pos, depth)
                 }
-                _ => self.parse_primary(tokens, pos),
+                _ => self.parse_primary(tokens, pos, depth),
             }
         } else {
             Err(EvalError::InvalidExpression)
@@ -282,7 +302,7 @@ impl Evaluator {
     }
 
     // parse_primary: numbers, identifiers (constants, functions, variables), parentheses
-    fn parse_primary(&self, tokens: &[Token], pos: &mut usize) -> Result<f64> {
+    fn parse_primary(&self, tokens: &[Token], pos: &mut usize, depth: usize) -> Result<f64> {
         if *pos >= tokens.len() {
             return Err(EvalError::InvalidExpression);
         }
@@ -295,7 +315,7 @@ impl Evaluator {
             }
             Token::LParen => {
                 *pos += 1;
-                let val = self.parse_expr(tokens, pos)?;
+                let val = self.parse_expr(tokens, pos, depth + 1)?;
                 if *pos >= tokens.len() || tokens[*pos] != Token::RParen {
                     return Err(EvalError::ParseError("Missing closing parenthesis".into()));
                 }
@@ -311,10 +331,10 @@ impl Evaluator {
                     *pos += 1;
                     let mut args = Vec::new();
                     if *pos < tokens.len() && tokens[*pos] != Token::RParen {
-                        args.push(self.parse_expr(tokens, pos)?);
+                        args.push(self.parse_expr(tokens, pos, depth + 1)?);
                         while *pos < tokens.len() && tokens[*pos] == Token::Comma {
                             *pos += 1;
-                            args.push(self.parse_expr(tokens, pos)?);
+                            args.push(self.parse_expr(tokens, pos, depth + 1)?);
                         }
                     }
                     if *pos >= tokens.len() || tokens[*pos] != Token::RParen {
@@ -991,5 +1011,37 @@ mod tests {
     #[test]
     fn test_double_dot_number_errors() {
         assert!(Evaluator::new().eval("1.2.3").is_err());
+    }
+
+    #[test]
+    fn test_deep_nesting_rejected() {
+        // Build an expression with 300 nested parens — exceeds MAX_PARSE_DEPTH (256)
+        let open: String = "(".repeat(300);
+        let close: String = ")".repeat(300);
+        let expr = format!("{open}1{close}");
+        let result = Evaluator::new().eval(&expr);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("deeply nested"), "got: {err}");
+    }
+
+    #[test]
+    fn test_moderate_nesting_accepted() {
+        // 100 levels of nesting should work fine
+        let open: String = "(".repeat(100);
+        let close: String = ")".repeat(100);
+        let expr = format!("{open}42{close}");
+        assert_eq!(eval(&expr), Value::Integer(42));
+    }
+
+    #[test]
+    fn test_deeply_nested_functions_rejected() {
+        // Nested function calls: sqrt(sqrt(sqrt(...)))
+        let mut expr = "1".to_string();
+        for _ in 0..300 {
+            expr = format!("sqrt({expr})");
+        }
+        let result = Evaluator::new().eval(&expr);
+        assert!(result.is_err());
     }
 }

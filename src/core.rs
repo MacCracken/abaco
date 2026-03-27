@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Core numeric value type for Abaco.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     Integer(i64),
@@ -44,6 +45,7 @@ impl fmt::Display for Value {
 
 impl Value {
     /// Convert to f64 for arithmetic.
+    #[must_use]
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             Value::Integer(n) => Some(*n as f64),
@@ -61,6 +63,7 @@ impl Value {
 }
 
 /// Category of physical unit.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum UnitCategory {
     Length,
@@ -81,6 +84,7 @@ pub enum UnitCategory {
 
 impl UnitCategory {
     /// Returns a slice of all `UnitCategory` variants.
+    #[must_use]
     pub fn all_categories() -> &'static [UnitCategory] {
         &[
             UnitCategory::Length,
@@ -159,6 +163,7 @@ pub struct Unit {
 }
 
 impl Unit {
+    #[must_use]
     pub fn new(
         name: &str,
         symbol: &str,
@@ -210,6 +215,7 @@ pub struct Currency {
 }
 
 impl Currency {
+    #[must_use]
     pub fn new(code: &str, name: &str, symbol: &str) -> Self {
         Self {
             code: code.to_string(),

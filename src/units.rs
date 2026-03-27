@@ -9,6 +9,7 @@ use crate::core::{ConversionResult, Unit, UnitCategory};
 use std::collections::HashMap;
 use tracing::{debug, instrument, warn};
 
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum UnitError {
     #[error("Unknown unit: {0}")]
@@ -38,6 +39,7 @@ impl Default for UnitRegistry {
 
 impl UnitRegistry {
     /// Create a new registry populated with built-in units.
+    #[must_use]
     pub fn new() -> Self {
         let mut reg = Self {
             units: HashMap::with_capacity(14),
@@ -531,6 +533,8 @@ impl UnitRegistry {
 
     /// Find a unit by name or symbol.
     /// Tries exact symbol match first, then case-insensitive name/symbol, then plurals.
+    #[inline]
+    #[must_use]
     pub fn find_unit(&self, name_or_symbol: &str) -> Option<&Unit> {
         // O(1) exact symbol match (important for case-sensitive symbols like mW vs MW)
         if let Some(&(cat, idx)) = self.by_symbol.get(name_or_symbol) {
@@ -551,6 +555,7 @@ impl UnitRegistry {
     }
 
     /// List all units in a category.
+    #[must_use]
     pub fn list_units(&self, category: UnitCategory) -> Vec<&Unit> {
         self.units
             .get(&category)
@@ -559,6 +564,8 @@ impl UnitRegistry {
     }
 
     /// Convert a value between two units.
+    #[inline]
+    #[must_use = "converting has no side effects"]
     #[instrument(skip(self), fields(from, to))]
     pub fn convert(&self, value: f64, from: &str, to: &str) -> Result<ConversionResult> {
         let from_unit = self.find_unit(from).ok_or_else(|| {

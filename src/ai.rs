@@ -8,6 +8,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum AiError {
     #[error("Could not parse natural language input: {0}")]
@@ -19,6 +20,7 @@ pub enum AiError {
 pub type Result<T> = std::result::Result<T, AiError>;
 
 /// What the user intended from natural language.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ParsedQuery {
     /// A math expression to evaluate (e.g., "what is 15% of 230").
@@ -41,11 +43,13 @@ pub enum ParsedQuery {
 pub struct NlParser;
 
 impl NlParser {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
 
     /// Parse a natural language input into a structured query.
+    #[must_use = "parsing has no side effects"]
     pub fn parse_natural(&self, input: &str) -> Result<ParsedQuery> {
         let input = input.trim().to_lowercase();
 
@@ -191,6 +195,7 @@ pub struct HistoryEntry {
 }
 
 impl CalculationHistory {
+    #[must_use]
     pub fn new(max_entries: usize) -> Self {
         Self {
             entries: VecDeque::new(),
@@ -209,14 +214,17 @@ impl CalculationHistory {
         });
     }
 
+    #[must_use]
     pub fn entries(&self) -> &VecDeque<HistoryEntry> {
         &self.entries
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
