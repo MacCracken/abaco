@@ -110,13 +110,17 @@ pub fn is_prime(n: u64) -> bool {
 /// assert_eq!(next_prime(2), 3);
 /// ```
 #[must_use]
+#[inline]
 pub fn next_prime(n: u64) -> u64 {
     if n < 2 {
         return 2;
     }
     let mut candidate = if n.is_multiple_of(2) { n + 1 } else { n + 2 };
     while !is_prime(candidate) {
-        candidate += 2;
+        candidate = match candidate.checked_add(2) {
+            Some(c) => c,
+            None => return candidate, // overflow — no prime found in u64 range
+        };
     }
     candidate
 }
@@ -132,6 +136,7 @@ pub fn next_prime(n: u64) -> u64 {
 /// assert_eq!(prev_prime(2), None);
 /// ```
 #[must_use]
+#[inline]
 pub fn prev_prime(n: u64) -> Option<u64> {
     if n <= 2 {
         return None;
@@ -141,7 +146,7 @@ pub fn prev_prime(n: u64) -> Option<u64> {
     }
     let mut candidate = if n.is_multiple_of(2) { n - 1 } else { n - 2 };
     while candidate >= 2 && !is_prime(candidate) {
-        candidate -= 2;
+        candidate = candidate.checked_sub(2)?;
     }
     if candidate >= 2 {
         Some(candidate)
@@ -165,6 +170,7 @@ pub fn prev_prime(n: u64) -> Option<u64> {
 /// assert_eq!(factor(1), Vec::<u64>::new());
 /// ```
 #[must_use]
+#[inline]
 pub fn factor(mut n: u64) -> Vec<u64> {
     if n < 2 {
         return Vec::new();
@@ -205,6 +211,7 @@ pub fn factor(mut n: u64) -> Vec<u64> {
 /// assert_eq!(totient(97), 96); // prime
 /// ```
 #[must_use]
+#[inline]
 pub fn totient(mut n: u64) -> u64 {
     if n == 0 {
         return 0;
@@ -243,6 +250,7 @@ pub fn totient(mut n: u64) -> u64 {
 /// assert_eq!(fibonacci(50), 12586269025);
 /// ```
 #[must_use]
+#[inline]
 pub fn fibonacci(n: u64) -> u64 {
     if n == 0 {
         return 0;
@@ -281,6 +289,7 @@ pub fn fibonacci(n: u64) -> u64 {
 /// assert_eq!(binomial(20, 10), 184756);
 /// ```
 #[must_use]
+#[inline]
 pub fn binomial(n: u64, k: u64) -> u64 {
     if k > n {
         return 0;

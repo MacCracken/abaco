@@ -525,7 +525,7 @@ impl Evaluator {
                         }
                     }
                     "nextprime" => {
-                        if a < 0.0 {
+                        if a < 0.0 || a.fract() != 0.0 {
                             return Err(EvalError::MathError(
                                 "nextprime requires non-negative integer".into(),
                             ));
