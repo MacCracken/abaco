@@ -5,6 +5,27 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-03-27
+
+**Abaco's first stable release.** Public API is now frozen — no breaking changes without a major version bump.
+
+### Added
+
+- **Implicit multiplication** — `2(3+4)`, `2pi`, `(2)(3)`, `(3)4` all work naturally
+- **Factorial** — `factorial(n)` function and `n!` postfix operator (0..170)
+- **GCD / LCM** — `gcd(a, b)` and `lcm(a, b)` functions
+- **Statistical functions** — `mean(...)`, `avg(...)`, `median(...)`, `stddev(...)`, `stdev(...)` with variable arity
+- **LaTeX output** — `Value::to_latex()` renders fractions as `\frac{n}{d}`, complex as `a + bi`, large floats in scientific notation
+- **Conversion history persistence** — `CalculationHistory::to_json()`, `from_json()`, `save_to_file()`, `load_from_file()`
+- **Partial parse / live evaluation** — `Evaluator::eval_partial()` for live-as-you-type feedback with error recovery
+- **`Token::Bang`** variant for `!` postfix factorial
+- 37 new tests (320 total + 2 doctests)
+
+### Changed
+
+- `lib.rs` crate docs updated to reflect full 1.0 feature set
+- Expression evaluator now supports 35+ functions (was 28+)
+
 ## [0.23.0] - 2026-03-27
 
 ### Added

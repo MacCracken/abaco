@@ -60,6 +60,35 @@ impl Value {
             _ => None,
         }
     }
+
+    /// Render this value as a LaTeX string.
+    #[must_use]
+    pub fn to_latex(&self) -> String {
+        match self {
+            Value::Integer(n) => format!("{n}"),
+            Value::Float(n) => {
+                if n.fract() == 0.0 && n.abs() < 1e15 {
+                    format!("{n:.1}")
+                } else if n.abs() >= 1e6 || (n.abs() < 1e-3 && *n != 0.0) {
+                    // Scientific notation in LaTeX
+                    let exp = n.abs().log10().floor() as i32;
+                    let mantissa = n / 10.0_f64.powi(exp);
+                    format!("{mantissa:.4} \\times 10^{{{exp}}}")
+                } else {
+                    format!("{n}")
+                }
+            }
+            Value::Fraction(num, den) => format!("\\frac{{{num}}}{{{den}}}"),
+            Value::Complex(re, im) => {
+                if *im >= 0.0 {
+                    format!("{re} + {im}i")
+                } else {
+                    format!("{re} - {}i", im.abs())
+                }
+            }
+            Value::Text(s) => format!("\\text{{{s}}}"),
+        }
+    }
 }
 
 /// Category of physical unit.
@@ -442,5 +471,42 @@ mod tests {
             Value::Float(std::f64::consts::PI).as_f64(),
             Some(std::f64::consts::PI)
         );
+    }
+
+    // --- LaTeX output ---
+
+    #[test]
+    fn test_latex_integer() {
+        assert_eq!(Value::Integer(42).to_latex(), "42");
+    }
+
+    #[test]
+    fn test_latex_fraction() {
+        assert_eq!(Value::Fraction(1, 3).to_latex(), "\\frac{1}{3}");
+    }
+
+    #[test]
+    fn test_latex_complex() {
+        assert_eq!(Value::Complex(3.0, 4.0).to_latex(), "3 + 4i");
+        assert_eq!(Value::Complex(3.0, -4.0).to_latex(), "3 - 4i");
+    }
+
+    #[test]
+    fn test_latex_text() {
+        assert_eq!(Value::Text("hello".into()).to_latex(), "\\text{hello}");
+    }
+
+    #[test]
+    fn test_latex_float_whole() {
+        assert_eq!(Value::Float(7.0).to_latex(), "7.0");
+    }
+
+    #[test]
+    fn test_latex_float_scientific() {
+        // 1.5e10 is a whole number < 1e15, so it uses ".0" format
+        assert_eq!(Value::Float(1.5e10).to_latex(), "15000000000.0");
+        // Very large floats use scientific notation
+        let s = Value::Float(6.022e23).to_latex();
+        assert!(s.contains("\\times 10^"), "got: {s}");
     }
 }

@@ -4,12 +4,13 @@ version = 4
 
 [[package]]
 name = "abaco"
-version = "0.23.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "criterion",
  "reqwest",
  "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",

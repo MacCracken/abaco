@@ -1,6 +1,6 @@
 [package]
 name = "abaco"
-version = "0.23.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.89"
 license = "AGPL-3.0-only"
@@ -15,7 +15,7 @@ exclude = [".claude/", "target/", "docs/", "scripts/", "bench-history.csv"]
 
 [features]
 default = []
-ai = ["dep:chrono", "dep:reqwest", "dep:tokio"]
+ai = ["dep:chrono", "dep:serde_json", "dep:reqwest", "dep:tokio"]
 full = ["ai"]
 
 [dependencies]
@@ -25,6 +25,7 @@ tracing = "0.1"
 
 # AI deps (optional)
 chrono = { version = "0.4", features = ["serde"], optional = true }
+serde_json = { version = "1", optional = true }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"], optional = true }
 

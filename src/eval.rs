@@ -43,6 +43,7 @@ pub enum Token {
     RParen,
     Ident(String),
     Comma,
+    Bang,
 }
 
 /// Tokenize an expression string.
@@ -96,6 +97,10 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>> {
                 tokens.push(Token::Comma);
                 i += 1;
             }
+            b'!' => {
+                tokens.push(Token::Bang);
+                i += 1;
+            }
             c if c.is_ascii_digit() || c == b'.' => {
                 let start = i;
                 while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
@@ -131,7 +136,36 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>> {
         }
     }
 
+    insert_implicit_multiplication(&mut tokens);
     Ok(tokens)
+}
+
+/// Insert implicit `*` tokens where multiplication is implied.
+///
+/// Handles patterns like `2(3+4)`, `2pi`, `(2)(3)`, `(2)pi`.
+fn insert_implicit_multiplication(tokens: &mut Vec<Token>) {
+    let mut i = 0;
+    while i + 1 < tokens.len() {
+        let insert = match (&tokens[i], &tokens[i + 1]) {
+            // 2(... or 2pi — but NOT ident( which is a function call
+            (Token::Number(_), Token::LParen | Token::Ident(_)) => true,
+            // )(... or )2 or )pi
+            (Token::RParen, Token::LParen | Token::Number(_) | Token::Ident(_)) => true,
+            // 15% ( — postfix percent followed by group
+            (Token::Percent, Token::LParen | Token::Ident(_)) => {
+                // Only if previous token pattern suggests postfix %
+                // (this is a best-effort heuristic)
+                i >= 1 && matches!(tokens[i - 1], Token::Number(_) | Token::RParen)
+            }
+            _ => false,
+        };
+        if insert {
+            tokens.insert(i + 1, Token::Star);
+            i += 2; // skip past the inserted star
+        } else {
+            i += 1;
+        }
+    }
 }
 
 /// Maximum recursion depth for expression parsing.
@@ -182,11 +216,51 @@ impl Evaluator {
                 "Unexpected token at position {pos}"
             )));
         }
-        // Return as integer if the result is a whole number within safe i64 range
+        Ok(Self::to_value(result))
+    }
+
+    /// Evaluate a partial/incomplete expression for live-as-you-type feedback.
+    ///
+    /// Returns `Ok(value)` with the best-effort result if parsing succeeds up
+    /// to the end of input or a recoverable point. Trailing operators are
+    /// ignored (e.g., `"2 + 3 *"` evaluates as `"2 + 3"`).
+    ///
+    /// Returns `Err` only if the expression is fundamentally unparseable.
+    #[must_use = "evaluating has no side effects"]
+    pub fn eval_partial(&self, expr: &str) -> Result<Value> {
+        let tokens = tokenize(expr)?;
+        if tokens.is_empty() {
+            return Err(EvalError::InvalidExpression);
+        }
+
+        // Try the full expression first
+        let mut pos = 0;
+        if let Ok(result) = self.parse_expr(&tokens, &mut pos, 0) {
+            return Ok(Self::to_value(result));
+        }
+
+        // Progressively strip trailing tokens until it parses
+        for drop in 1..tokens.len() {
+            let truncated = &tokens[..tokens.len() - drop];
+            if truncated.is_empty() {
+                break;
+            }
+            let mut pos = 0;
+            if let Ok(result) = self.parse_expr(truncated, &mut pos, 0)
+                && pos == truncated.len()
+            {
+                return Ok(Self::to_value(result));
+            }
+        }
+
+        Err(EvalError::InvalidExpression)
+    }
+
+    fn to_value(result: f64) -> Value {
         if result.fract() == 0.0 && result.abs() < 9_007_199_254_740_992.0 {
-            Ok(Value::Integer(result as i64))
+            Value::Integer(result as i64)
         } else {
-            Ok(Value::Float(result))
+            Value::Float(result)
         }
     }
 
@@ -271,7 +345,18 @@ impl Evaluator {
 
     // parse_power: handles ^
     fn parse_power(&self, tokens: &[Token], pos: &mut usize, depth: usize) -> Result<f64> {
-        let base = self.parse_unary(tokens, pos, depth)?;
+        let mut base = self.parse_unary(tokens, pos, depth)?;
+        // Postfix factorial: 5! = 120
+        while *pos < tokens.len() && tokens[*pos] == Token::Bang {
+            *pos += 1;
+            if base < 0.0 || base.fract() != 0.0 || base > 170.0 {
+                return Err(EvalError::MathError(
+                    "factorial requires integer 0..=170".into(),
+                ));
+            }
+            let n = base as u64;
+            base = (1..=n).fold(1.0_f64, |acc, x| acc * x as f64);
+        }
         if *pos < tokens.len() && tokens[*pos] == Token::Power {
             *pos += 1;
             let exp = self.parse_power(tokens, pos, depth)?; // right-associative
@@ -384,7 +469,8 @@ impl Evaluator {
             // 1-arg functions
             "sqrt" | "sin" | "cos" | "tan" | "log" | "log10" | "ln" | "log2" | "abs" | "ceil"
             | "floor" | "round" | "exp" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh"
-            | "asinh" | "acosh" | "atanh" | "trunc" | "fract" | "sign" | "sgn" | "deg" | "rad" => {
+            | "asinh" | "acosh" | "atanh" | "trunc" | "fract" | "sign" | "sgn" | "deg" | "rad"
+            | "factorial" => {
                 if n != 1 {
                     return Err(EvalError::ParseError(format!(
                         "Function {name} expects 1 argument, got {n}"
@@ -418,11 +504,20 @@ impl Evaluator {
                     "sign" | "sgn" => a.signum(),
                     "deg" => a.to_degrees(),
                     "rad" => a.to_radians(),
+                    "factorial" => {
+                        if a < 0.0 || a.fract() != 0.0 || a > 170.0 {
+                            return Err(EvalError::MathError(
+                                "factorial requires integer 0..=170".into(),
+                            ));
+                        }
+                        let n = a as u64;
+                        (1..=n).fold(1.0_f64, |acc, x| acc * x as f64)
+                    }
                     _ => unreachable!(),
                 }
             }
             // 2-arg functions
-            "min" | "max" | "pow" | "atan2" => {
+            "min" | "max" | "pow" | "atan2" | "gcd" | "lcm" => {
                 if n != 2 {
                     return Err(EvalError::ParseError(format!(
                         "Function {name} expects 2 arguments, got {n}"
@@ -433,6 +528,56 @@ impl Evaluator {
                     "max" => args[0].max(args[1]),
                     "pow" => args[0].powf(args[1]),
                     "atan2" => args[0].atan2(args[1]),
+                    "gcd" => {
+                        let (mut a, mut b) = (args[0].abs() as u64, args[1].abs() as u64);
+                        while b != 0 {
+                            let t = b;
+                            b = a % b;
+                            a = t;
+                        }
+                        a as f64
+                    }
+                    "lcm" => {
+                        let (mut a, mut b) = (args[0].abs() as u64, args[1].abs() as u64);
+                        if a == 0 || b == 0 {
+                            return Ok(0.0);
+                        }
+                        let prod = a as f64 * b as f64;
+                        while b != 0 {
+                            let t = b;
+                            b = a % b;
+                            a = t;
+                        }
+                        prod / a as f64
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            // Variable-arity functions (1+ args)
+            "mean" | "avg" | "median" | "stddev" | "stdev" => {
+                if n == 0 {
+                    return Err(EvalError::ParseError(format!(
+                        "Function {name} requires at least 1 argument"
+                    )));
+                }
+                match name {
+                    "mean" | "avg" => args.iter().sum::<f64>() / n as f64,
+                    "median" => {
+                        let mut sorted = args.to_vec();
+                        sorted
+                            .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                        if n % 2 == 1 {
+                            sorted[n / 2]
+                        } else {
+                            (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+                        }
+                    }
+                    "stddev" | "stdev" => {
+                        let mean = args.iter().sum::<f64>() / n as f64;
+                        let variance =
+                            args.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64;
+                        variance.sqrt()
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -1043,5 +1188,205 @@ mod tests {
         }
         let result = Evaluator::new().eval(&expr);
         assert!(result.is_err());
+    }
+
+    // --- Implicit multiplication ---
+
+    #[test]
+    fn test_implicit_mul_number_paren() {
+        // 2(3 + 4) = 2 * 7 = 14
+        assert_eq!(eval("2(3 + 4)"), Value::Integer(14));
+    }
+
+    #[test]
+    fn test_implicit_mul_number_ident() {
+        // 2pi ≈ 6.283
+        let result = eval_f64("2pi");
+        assert!((result - std::f64::consts::TAU).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_implicit_mul_paren_paren() {
+        // (2 + 3)(4 + 1) = 5 * 5 = 25
+        assert_eq!(eval("(2 + 3)(4 + 1)"), Value::Integer(25));
+    }
+
+    #[test]
+    fn test_implicit_mul_paren_number() {
+        // (3)4 = 12
+        assert_eq!(eval("(3)4"), Value::Integer(12));
+    }
+
+    #[test]
+    fn test_implicit_mul_paren_ident() {
+        // (2)pi ≈ 6.283
+        let result = eval_f64("(2)pi");
+        assert!((result - std::f64::consts::TAU).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_implicit_mul_does_not_break_functions() {
+        // sin(pi) should still be a function call, not sin * (pi)
+        assert!((eval_f64("sin(pi)")).abs() < 1e-10);
+        assert_eq!(eval_f64("sqrt(16)"), 4.0);
+        assert_eq!(eval_f64("min(3, 5)"), 3.0);
+    }
+
+    #[test]
+    fn test_implicit_mul_complex() {
+        // 3(2 + 1)(4) = 3 * 3 * 4 = 36
+        assert_eq!(eval("3(2 + 1)(4)"), Value::Integer(36));
+    }
+
+    #[test]
+    fn test_implicit_mul_with_power() {
+        // 2pi^2 = 2 * pi^2 ≈ 19.739
+        let result = eval_f64("2pi^2");
+        let expected = 2.0 * std::f64::consts::PI * std::f64::consts::PI;
+        assert!((result - expected).abs() < 1e-10);
+    }
+
+    // --- Factorial, gcd, lcm ---
+
+    #[test]
+    fn test_factorial_function() {
+        assert_eq!(eval_f64("factorial(0)"), 1.0);
+        assert_eq!(eval_f64("factorial(1)"), 1.0);
+        assert_eq!(eval_f64("factorial(5)"), 120.0);
+        assert_eq!(eval_f64("factorial(10)"), 3628800.0);
+    }
+
+    #[test]
+    fn test_factorial_postfix() {
+        assert_eq!(eval("5!"), Value::Integer(120));
+        assert_eq!(eval("0!"), Value::Integer(1));
+        assert_eq!(eval("10!"), Value::Integer(3628800));
+    }
+
+    #[test]
+    fn test_factorial_in_expression() {
+        // 5! + 1 = 121
+        assert_eq!(eval("5! + 1"), Value::Integer(121));
+        // 3! * 2 = 12
+        assert_eq!(eval("3! * 2"), Value::Integer(12));
+    }
+
+    #[test]
+    fn test_factorial_with_power() {
+        // 3!^2 = 6^2 = 36
+        assert_eq!(eval("3!^2"), Value::Integer(36));
+    }
+
+    #[test]
+    fn test_factorial_negative_errors() {
+        assert!(Evaluator::new().eval("factorial(-1)").is_err());
+        assert!(Evaluator::new().eval("(-1)!").is_err());
+    }
+
+    #[test]
+    fn test_factorial_non_integer_errors() {
+        assert!(Evaluator::new().eval("factorial(3.5)").is_err());
+    }
+
+    #[test]
+    fn test_gcd() {
+        assert_eq!(eval_f64("gcd(12, 8)"), 4.0);
+        assert_eq!(eval_f64("gcd(100, 75)"), 25.0);
+        assert_eq!(eval_f64("gcd(7, 13)"), 1.0);
+        assert_eq!(eval_f64("gcd(0, 5)"), 5.0);
+    }
+
+    #[test]
+    fn test_lcm() {
+        assert_eq!(eval_f64("lcm(4, 6)"), 12.0);
+        assert_eq!(eval_f64("lcm(12, 8)"), 24.0);
+        assert_eq!(eval_f64("lcm(7, 13)"), 91.0);
+        assert_eq!(eval_f64("lcm(0, 5)"), 0.0);
+    }
+
+    // --- Statistical functions ---
+
+    #[test]
+    fn test_mean() {
+        assert_eq!(eval_f64("mean(1, 2, 3)"), 2.0);
+        assert_eq!(eval_f64("mean(10)"), 10.0);
+        assert_eq!(eval_f64("avg(2, 4, 6, 8)"), 5.0);
+    }
+
+    #[test]
+    fn test_median_odd() {
+        assert_eq!(eval_f64("median(3, 1, 2)"), 2.0);
+        assert_eq!(eval_f64("median(5)"), 5.0);
+        assert_eq!(eval_f64("median(1, 2, 3, 4, 5)"), 3.0);
+    }
+
+    #[test]
+    fn test_median_even() {
+        assert_eq!(eval_f64("median(1, 2, 3, 4)"), 2.5);
+        assert_eq!(eval_f64("median(1, 3)"), 2.0);
+    }
+
+    #[test]
+    fn test_stddev() {
+        // stddev of [2, 4, 4, 4, 5, 5, 7, 9] = 2.0
+        assert!((eval_f64("stddev(2, 4, 4, 4, 5, 5, 7, 9)") - 2.0).abs() < 0.01);
+        // stddev of constant = 0
+        assert_eq!(eval_f64("stdev(5, 5, 5)"), 0.0);
+    }
+
+    #[test]
+    fn test_stats_empty_errors() {
+        assert!(Evaluator::new().eval("mean()").is_err());
+        assert!(Evaluator::new().eval("median()").is_err());
+    }
+
+    // --- Partial parse ---
+
+    #[test]
+    fn test_partial_complete_expression() {
+        let ev = Evaluator::new();
+        assert_eq!(ev.eval_partial("2 + 3").unwrap(), Value::Integer(5));
+    }
+
+    #[test]
+    fn test_partial_trailing_operator() {
+        let ev = Evaluator::new();
+        // "2 + 3 +" should evaluate as "2 + 3" = 5
+        assert_eq!(ev.eval_partial("2 + 3 +").unwrap(), Value::Integer(5));
+    }
+
+    #[test]
+    fn test_partial_trailing_star() {
+        let ev = Evaluator::new();
+        assert_eq!(ev.eval_partial("10 * 5 *").unwrap(), Value::Integer(50));
+    }
+
+    #[test]
+    fn test_partial_open_paren() {
+        let ev = Evaluator::new();
+        // "2 + (3" — strip "(3", then "2 +" → strip "+", "2" = 2
+        assert_eq!(ev.eval_partial("2 + (3").unwrap(), Value::Integer(2));
+    }
+
+    #[test]
+    fn test_partial_just_number() {
+        let ev = Evaluator::new();
+        assert_eq!(ev.eval_partial("42").unwrap(), Value::Integer(42));
+    }
+
+    #[test]
+    fn test_partial_empty_errors() {
+        let ev = Evaluator::new();
+        assert!(ev.eval_partial("").is_err());
+    }
+
+    #[test]
+    fn test_partial_function_incomplete() {
+        let ev = Evaluator::new();
+        // "sqrt(16) + sin(" — strip to "sqrt(16)" = 4
+        assert_eq!(
+            ev.eval_partial("sqrt(16) + sin(").unwrap(),
+            Value::Integer(4)
+        );
     }
 }

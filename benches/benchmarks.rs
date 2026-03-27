@@ -119,9 +119,7 @@ fn bench_unit_lookup(c: &mut Criterion) {
     group.bench_function("miss", |b| {
         b.iter(|| reg.find_unit(black_box("nonexistent")))
     });
-    group.bench_function("alias_kph", |b| {
-        b.iter(|| reg.find_unit(black_box("kph")))
-    });
+    group.bench_function("alias_kph", |b| b.iter(|| reg.find_unit(black_box("kph"))));
     group.bench_function("alias_degree_symbol", |b| {
         b.iter(|| reg.find_unit(black_box("°C")))
     });

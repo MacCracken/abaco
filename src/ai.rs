@@ -238,6 +238,28 @@ impl CalculationHistory {
     pub fn clear(&mut self) {
         self.entries.clear();
     }
+
+    /// Serialize history to a JSON string.
+    pub fn to_json(&self) -> std::result::Result<String, String> {
+        serde_json::to_string_pretty(self).map_err(|e| e.to_string())
+    }
+
+    /// Deserialize history from a JSON string.
+    pub fn from_json(json: &str) -> std::result::Result<Self, String> {
+        serde_json::from_str(json).map_err(|e| e.to_string())
+    }
+
+    /// Save history to a JSON file.
+    pub fn save_to_file(&self, path: &std::path::Path) -> std::result::Result<(), String> {
+        let json = self.to_json()?;
+        std::fs::write(path, json).map_err(|e| e.to_string())
+    }
+
+    /// Load history from a JSON file.
+    pub fn load_from_file(path: &std::path::Path) -> std::result::Result<Self, String> {
+        let json = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        Self::from_json(&json)
+    }
 }
 
 impl Default for CalculationHistory {
@@ -741,5 +763,40 @@ mod tests {
     fn test_currency_with_ttl() {
         let c = CurrencyConverter::new("http://localhost:8088").with_ttl(60);
         assert_eq!(c.cache_ttl_secs, 60);
+    }
+
+    // --- History persistence ---
+
+    #[test]
+    fn test_history_json_roundtrip() {
+        let mut h = CalculationHistory::new(100);
+        h.push("2 + 3", "5");
+        h.push("sqrt(16)", "4");
+        let json = h.to_json().unwrap();
+        let h2 = CalculationHistory::from_json(&json).unwrap();
+        assert_eq!(h2.len(), 2);
+        assert_eq!(h2.entries()[0].input, "2 + 3");
+        assert_eq!(h2.entries()[1].result, "4");
+    }
+
+    #[test]
+    fn test_history_file_roundtrip() {
+        let mut h = CalculationHistory::new(100);
+        h.push("1 + 1", "2");
+        let dir = std::env::temp_dir();
+        let path = dir.join("abaco_test_history.json");
+        h.save_to_file(&path).unwrap();
+        let h2 = CalculationHistory::load_from_file(&path).unwrap();
+        assert_eq!(h2.len(), 1);
+        assert_eq!(h2.entries()[0].input, "1 + 1");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_history_empty_json() {
+        let h = CalculationHistory::new(50);
+        let json = h.to_json().unwrap();
+        let h2 = CalculationHistory::from_json(&json).unwrap();
+        assert!(h2.is_empty());
     }
 }
