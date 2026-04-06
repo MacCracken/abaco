@@ -1,4 +1,4 @@
-//! Unit conversion engine — 100+ built-in units across 14 categories.
+//! Unit conversion engine — 120+ built-in units across 18 categories.
 //!
 //! The [`UnitRegistry`] holds all known units and provides O(1) lookup by symbol
 //! or name, with case-insensitive and plural matching. Conversion uses a base-unit

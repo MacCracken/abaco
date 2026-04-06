@@ -238,7 +238,7 @@ pub fn totient(mut n: u64) -> u64 {
 /// Fibonacci number `F(n)` using fast doubling.
 ///
 /// Returns exact results for `n <= 93` (max that fits in u64).
-/// Returns `u64::MAX` for overflow.
+/// Returns `u64::MAX` for `n > 93` (overflow).
 ///
 /// # Examples
 ///
@@ -255,23 +255,27 @@ pub fn fibonacci(n: u64) -> u64 {
     if n == 0 {
         return 0;
     }
+    // F(93) is the largest Fibonacci number that fits in u64
+    if n > 93 {
+        return u64::MAX;
+    }
     // Fast doubling: F(2k) = F(k)[2F(k+1) - F(k)], F(2k+1) = F(k)^2 + F(k+1)^2
-    let mut a: u64 = 0; // F(0)
-    let mut b: u64 = 1; // F(1)
+    let mut a: u128 = 0; // F(0)
+    let mut b: u128 = 1; // F(1)
     let bits = 64 - n.leading_zeros();
     for i in (0..bits).rev() {
         // Double: (a, b) → (F(2k), F(2k+1))
-        let c = a.saturating_mul(b.saturating_mul(2).saturating_sub(a));
-        let d = a.saturating_mul(a).saturating_add(b.saturating_mul(b));
+        let c = a * (2 * b - a);
+        let d = a * a + b * b;
         a = c;
         b = d;
         if (n >> i) & 1 == 1 {
-            let next = a.saturating_add(b);
+            let next = a + b;
             a = b;
             b = next;
         }
     }
-    a
+    a as u64
 }
 
 /// Binomial coefficient `C(n, k)` = `n! / (k! * (n-k)!)`.
@@ -475,6 +479,28 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn fibonacci_overflow_returns_max() {
+        assert_eq!(fibonacci(94), u64::MAX);
+        assert_eq!(fibonacci(100), u64::MAX);
+        assert_eq!(fibonacci(1000), u64::MAX);
+    }
+
+    #[test]
+    fn factor_large_semiprime() {
+        // Product of two primes
+        let p = 104729u64;
+        let q = 104743u64;
+        let n = p * q;
+        let factors = factor(n);
+        assert_eq!(factors, vec![p, q]);
+    }
+
+    #[test]
+    fn totient_zero() {
+        assert_eq!(totient(0), 0);
     }
 
     #[test]

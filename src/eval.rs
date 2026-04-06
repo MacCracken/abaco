@@ -1,4 +1,4 @@
-//! Expression evaluator — arithmetic, 28+ math functions, variables, scientific notation.
+//! Expression evaluator — arithmetic, 43+ math functions, variables, scientific notation.
 //!
 //! The evaluator parses and evaluates mathematical expressions using a recursive
 //! descent parser. It supports standard arithmetic (`+`, `-`, `*`, `/`, `%`, `^`),
@@ -144,28 +144,37 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>> {
 /// Insert implicit `*` tokens where multiplication is implied.
 ///
 /// Handles patterns like `2(3+4)`, `2pi`, `(2)(3)`, `(2)pi`.
+/// Uses a single-pass rebuild to avoid O(n²) shifting from `Vec::insert`.
 fn insert_implicit_multiplication(tokens: &mut Vec<Token>) {
-    let mut i = 0;
-    while i + 1 < tokens.len() {
-        let insert = match (&tokens[i], &tokens[i + 1]) {
-            // 2(... or 2pi — but NOT ident( which is a function call
-            (Token::Number(_), Token::LParen | Token::Ident(_)) => true,
-            // )(... or )2 or )pi
-            (Token::RParen, Token::LParen | Token::Number(_) | Token::Ident(_)) => true,
-            // 15% ( — postfix percent followed by group
-            (Token::Percent, Token::LParen | Token::Ident(_)) => {
-                // Only if previous token pattern suggests postfix %
-                // (this is a best-effort heuristic)
-                i >= 1 && matches!(tokens[i - 1], Token::Number(_) | Token::RParen)
-            }
-            _ => false,
-        };
-        if insert {
-            tokens.insert(i + 1, Token::Star);
-            i += 2; // skip past the inserted star
-        } else {
-            i += 1;
+    // Fast path: most expressions have no implicit multiplication
+    let needs_insert = (0..tokens.len().saturating_sub(1)).any(|i| needs_implicit_star(tokens, i));
+    if !needs_insert {
+        return;
+    }
+
+    let mut result = Vec::with_capacity(tokens.len() + tokens.len() / 4);
+    for i in 0..tokens.len() {
+        result.push(tokens[i].clone());
+        if i + 1 < tokens.len() && needs_implicit_star(tokens, i) {
+            result.push(Token::Star);
         }
+    }
+    *tokens = result;
+}
+
+/// Check if an implicit `*` should be inserted after `tokens[i]`.
+fn needs_implicit_star(tokens: &[Token], i: usize) -> bool {
+    match (&tokens[i], &tokens[i + 1]) {
+        // 2(... or 2pi — but NOT ident( which is a function call
+        (Token::Number(_), Token::LParen | Token::Ident(_)) => true,
+        // )(... or )2 or )pi
+        (Token::RParen, Token::LParen | Token::Number(_) | Token::Ident(_)) => true,
+        // 15% ( — postfix percent followed by group
+        (Token::Percent, Token::LParen | Token::Ident(_)) => {
+            // Only if previous token pattern suggests postfix %
+            i >= 1 && matches!(tokens[i - 1], Token::Number(_) | Token::RParen)
+        }
+        _ => false,
     }
 }
 
@@ -1495,5 +1504,59 @@ mod tests {
     fn test_ntheory_in_expression() {
         // nextprime(100) + fib(10) = 101 + 55 = 156
         assert_eq!(eval("nextprime(100) + fib(10)"), Value::Integer(156));
+    }
+
+    // --- Audit hardening tests ---
+
+    #[test]
+    fn test_sign_zero_behavior() {
+        // Rust's signum(+0.0) = 1.0 (not 0.0 like IEEE 754)
+        assert_eq!(eval_f64("sign(0)"), 1.0);
+    }
+
+    #[test]
+    fn test_fibonacci_overflow_in_eval() {
+        // fib(94) should error (out of range 0..=93)
+        assert!(Evaluator::new().eval("fib(94)").is_err());
+    }
+
+    #[test]
+    fn test_many_implicit_multiplications() {
+        // Stress test implicit multiplication rebuild
+        // (1)(2)(3)(4)(5) = 120
+        assert_eq!(eval("(1)(2)(3)(4)(5)"), Value::Integer(120));
+    }
+
+    #[test]
+    fn test_chained_factorial_power() {
+        // (3!)! = 720
+        assert_eq!(eval("(3!)!"), Value::Integer(720));
+    }
+
+    #[test]
+    fn test_binomial_in_expression() {
+        // choose(10,3) * 2 = 240
+        assert_eq!(eval("choose(10, 3) * 2"), Value::Integer(240));
+    }
+
+    #[test]
+    fn test_nested_function_calls() {
+        // sqrt(abs(-16)) = 4
+        assert_eq!(eval("sqrt(abs(-16))"), Value::Integer(4));
+    }
+
+    #[test]
+    fn test_partial_trailing_percent() {
+        let ev = Evaluator::new();
+        // "50%" should evaluate as 0.5
+        assert!(
+            (match ev.eval_partial("50%").unwrap() {
+                Value::Float(n) => n,
+                Value::Integer(n) => n as f64,
+                _ => panic!("unexpected"),
+            } - 0.5)
+                .abs()
+                < 1e-10
+        );
     }
 }
