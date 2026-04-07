@@ -9,9 +9,13 @@ include "lib/str.cyr"
 include "lib/syscalls.cyr"
 include "lib/tagged.cyr"
 
+include "lib/hashmap.cyr"
+
 include "src/core.cyr"
 include "src/ntheory.cyr"
 include "src/dsp.cyr"
+include "src/eval.cyr"
+include "src/units.cyr"
 
 fn main() {
     alloc_init();

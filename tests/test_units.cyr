@@ -1,0 +1,45 @@
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/syscalls.cyr"
+include "lib/tagged.cyr"
+include "lib/hashmap.cyr"
+include "lib/assert.cyr"
+
+include "src/core.cyr"
+include "src/units.cyr"
+
+fn main() {
+    alloc_init();
+    println("=== abaco units tests ===");
+    var r = UnitRegistry_new();
+    var result = UnitRegistry_convert(r, f64_from(1000), "m", "km");
+    assert_eq(f64_to(result), 1, "1000m->km");
+    result = UnitRegistry_convert(r, f64_from(1), "km", "m");
+    assert_eq(f64_to(result), 1000, "1km->m");
+    result = UnitRegistry_convert(r, f64_from(0), "C", "F");
+    assert_eq(f64_to(result), 32, "0C->F");
+    result = UnitRegistry_convert(r, f64_from(100), "C", "F");
+    assert_eq(f64_to(result), 212, "100C->F");
+    result = UnitRegistry_convert(r, f64_from(32), "F", "C");
+    assert_eq(f64_to(result), 0, "32F->C");
+    result = UnitRegistry_convert(r, f64_from(60), "s", "min");
+    assert_eq(f64_to(result), 1, "60s->min");
+    result = UnitRegistry_convert(r, f64_from(1000), "B", "kB");
+    assert_eq(f64_to(result), 1, "1000B->kB");
+    result = UnitRegistry_convert(r, f64_from(42), "km", "km");
+    assert_eq(f64_to(result), 42, "same unit");
+    assert(UnitRegistry_find(r, "km") != 0, "find km");
+    assert(UnitRegistry_find(r, "kph") != 0, "find kph");
+    assert(UnitRegistry_find(r, "meters") != 0, "find meters");
+    assert(UnitRegistry_find(r, "nonexistent") == 0, "find miss");
+    UnitRegistry_convert(r, f64_from(1), "km", "kg");
+    assert_eq(reg_err(r), UERR_INCOMPAT, "incompat");
+    UnitRegistry_convert(r, f64_from(1), "xyz", "km");
+    assert_eq(reg_err(r), UERR_UNKNOWN, "unknown");
+    assert_summary();
+    return 0;
+}
+var rr = main();
+syscall(SYS_EXIT, rr);

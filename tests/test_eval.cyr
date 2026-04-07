@@ -1,0 +1,172 @@
+# abaco eval tests
+
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/syscalls.cyr"
+include "lib/tagged.cyr"
+include "lib/hashmap.cyr"
+include "lib/assert.cyr"
+
+include "src/core.cyr"
+include "src/ntheory.cyr"
+include "src/dsp.cyr"
+include "src/eval.cyr"
+
+# Helper: evaluate expression, return f64 bits
+fn ev(expr) {
+    var e = Evaluator_new();
+    var r = Evaluator_eval(e, expr);
+    assert_eq(eval_err(e), ERR_NONE, expr);
+    return r;
+}
+
+# Helper: evaluate and check integer result
+fn ev_int(expr, expected, name) {
+    var r = ev(expr);
+    assert_eq(f64_to(r), expected, name);
+    return 0;
+}
+
+# Helper: evaluate and check f64 result within tolerance
+fn ev_near(expr, expected, tol, name) {
+    var r = ev(expr);
+    var diff = f64_abs(f64_sub(r, expected));
+    var tol_f = f64_div(f64_from(tol), f64_from(1000));
+    assert(f64_lt(diff, tol_f) == 1, name);
+    return 0;
+}
+
+fn test_basic_arithmetic() {
+    ev_int("2 + 3", 5, "2+3");
+    ev_int("10 - 4", 6, "10-4");
+    ev_int("6 * 7", 42, "6*7");
+    ev_int("2 + 3 * 4", 14, "order of ops");
+    ev_int("(2 + 3) * 4", 20, "parens");
+    ev_int("10 / 2", 5, "10/2");
+    ev_int("-5", 0 - 5, "unary neg");
+    ev_int("--5", 5, "double neg");
+    ev_int("+5", 5, "unary plus");
+    return 0;
+}
+
+fn test_power() {
+    ev_int("2^10", 1024, "2^10");
+    ev_int("3^3", 27, "3^3");
+    ev_int("2**3", 8, "2**3");
+    return 0;
+}
+
+fn test_factorial() {
+    ev_int("5!", 120, "5!");
+    ev_int("0!", 1, "0!");
+    ev_int("1!", 1, "1!");
+    return 0;
+}
+
+fn test_constants() {
+    # pi ~ 3.14159
+    ev_near("pi", CONST_PI, 1, "pi");
+    ev_near("e", CONST_E, 1, "e");
+    ev_near("tau", CONST_TAU, 1, "tau");
+    return 0;
+}
+
+fn test_functions() {
+    ev_int("sqrt(25)", 5, "sqrt(25)");
+    ev_int("abs(-42)", 42, "abs(-42)");
+    ev_int("floor(3)", 3, "floor(3)");
+    ev_int("ceil(3)", 3, "ceil(3)");
+    ev_int("min(3, 7)", 3, "min(3,7)");
+    ev_int("max(3, 7)", 7, "max(3,7)");
+    ev_int("pow(2, 10)", 1024, "pow(2,10)");
+    return 0;
+}
+
+fn test_ntheory_functions() {
+    ev_int("isprime(17)", 1, "isprime(17)");
+    ev_int("isprime(15)", 0, "isprime(15)");
+    ev_int("nextprime(100)", 101, "nextprime(100)");
+    ev_int("totient(12)", 4, "totient(12)");
+    ev_int("fibonacci(10)", 55, "fib(10)");
+    ev_int("fib(10)", 55, "fib alias");
+    ev_int("gcd(12, 8)", 4, "gcd(12,8)");
+    ev_int("lcm(4, 6)", 12, "lcm(4,6)");
+    ev_int("binomial(10, 3)", 120, "C(10,3)");
+    ev_int("choose(5, 2)", 10, "choose(5,2)");
+    return 0;
+}
+
+fn test_trig() {
+    ev_near("sin(0)", f64_from(0), 1, "sin(0)");
+    ev_near("cos(0)", f64_from(1), 1, "cos(0)");
+    ev_near("exp(0)", f64_from(1), 1, "exp(0)");
+    ev_near("ln(1)", f64_from(0), 1, "ln(1)");
+    ev_near("log2(1024)", f64_from(10), 1, "log2(1024)");
+    return 0;
+}
+
+fn test_statistics() {
+    ev_int("mean(2, 4, 6)", 4, "mean");
+    ev_int("avg(10, 20)", 15, "avg");
+    ev_int("median(1, 2, 3)", 2, "median odd");
+    return 0;
+}
+
+fn test_implicit_mul() {
+    ev_int("2(3)", 6, "2(3)");
+    ev_int("(2)(3)", 6, "(2)(3)");
+    return 0;
+}
+
+fn test_variables() {
+    var e = Evaluator_new();
+    Evaluator_set_variable(e, "x", f64_from(42));
+    var r = Evaluator_eval(e, "x");
+    assert_eq(eval_err(e), ERR_NONE, "var no err");
+    assert_eq(f64_to(r), 42, "var x=42");
+    Evaluator_set_variable(e, "y", f64_from(10));
+    r = Evaluator_eval(e, "x + y");
+    assert_eq(f64_to(r), 52, "x+y=52");
+    return 0;
+}
+
+fn test_percent() {
+    # Postfix: 15% = 0.15 -> 200 * 15% = 30
+    ev_int("200 * 15%", 30, "200*15%");
+    return 0;
+}
+
+fn test_errors() {
+    var e = Evaluator_new();
+    Evaluator_eval(e, "1 / 0");
+    assert_eq(eval_err(e), ERR_DIV_ZERO, "div by zero");
+    e = Evaluator_new();
+    Evaluator_eval(e, "");
+    assert_eq(eval_err(e), ERR_INVALID, "empty expr");
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    println("=== abaco eval tests ===");
+    test_basic_arithmetic();
+    test_power();
+    test_factorial();
+    test_constants();
+    test_functions();
+    test_ntheory_functions();
+    test_trig();
+    test_statistics();
+    test_implicit_mul();
+    test_variables();
+    test_percent();
+    test_errors();
+    assert_summary();
+    return 0;
+}
+
+var r = main();
+syscall(SYS_EXIT, r);

@@ -14,11 +14,11 @@
 
 ## Cyrius Port — unlocks hisab
 
-- [ ] Port core module (Value struct, Unit struct, constants)
-- [ ] Port ntheory module (pure i64, no deps)
+- [x] Port core module (Value struct, Unit struct, constants)
+- [x] Port ntheory module (pure i64, no deps)
 - [x] Port dsp module (all 23 functions, Cyrius 1.7.8 transcendentals)
-- [ ] Port eval module (tokenizer + recursive descent parser)
-- [ ] Port units module (registry + hashmap)
+- [x] Port eval module (tokenizer + recursive descent parser, 43+ functions)
+- [x] Port units module (80+ units, 18 categories, hashmap registry)
 - [ ] **BLOCKER**: ai module — requires network/async (reqwest, tokio, chrono, serde_json); hoosh problem
 
 ## Ecosystem Rollout

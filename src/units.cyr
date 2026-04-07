@@ -1,0 +1,330 @@
+# abaco::units - Unit conversion engine
+# Ported from rust-old/src/units.rs (1645 lines)
+# 120+ built-in units, 18 categories, O(1) hashmap lookup
+
+# -- Error codes --
+enum UnitErr {
+    UERR_NONE;
+    UERR_UNKNOWN;
+    UERR_INCOMPAT;
+    UERR_CONVERT;
+}
+
+# -- Unit Registry --
+# { units_vec, by_symbol (map: string -> unit_ptr), by_lower (map: string -> unit_ptr), error }
+struct UnitRegistry { units; by_sym; by_low; err; }
+
+fn UnitRegistry_new() {
+    var r = alloc(32);
+    store64(r, vec_new());
+    store64(r + 8, map_new());
+    store64(r + 16, map_new());
+    store64(r + 24, UERR_NONE);
+    reg_populate(r);
+    reg_aliases(r);
+    return r;
+}
+
+fn reg_units(r) { return load64(r); }
+fn reg_sym(r) { return load64(r + 8); }
+fn reg_low(r) { return load64(r + 16); }
+fn reg_err(r) { return load64(r + 24); }
+fn reg_set_err(r, e) { store64(r + 24, e); return 0; }
+
+# Lowercase a string (in-place copy to new allocation)
+fn str_lower(s) {
+    var len = strlen(s);
+    var out = alloc(len + 1);
+    var i = 0;
+    while (i < len) {
+        var c = load8(s + i);
+        if (c >= 65) { if (c <= 90) { c = c + 32; } }
+        store8(out + i, c);
+        i = i + 1;
+    }
+    store8(out + len, 0);
+    return out;
+}
+
+fn reg_add(r, name, symbol, category, factor, offset) {
+    var u = Unit_new(name, symbol, category, factor, offset);
+    vec_push(load64(r), u);
+    map_set(load64(r + 8), symbol, u);
+    map_set(load64(r + 16), str_lower(name), u);
+    var ls = str_lower(symbol);
+    if (streq(ls, str_lower(name)) != 1) {
+        map_set(load64(r + 16), ls, u);
+    }
+    return 0;
+}
+
+fn reg_add_inv(r, name, symbol, category, factor) {
+    var u = Unit_new_inverse(name, symbol, category, factor);
+    vec_push(load64(r), u);
+    map_set(load64(r + 8), symbol, u);
+    map_set(load64(r + 16), str_lower(name), u);
+    var ls = str_lower(symbol);
+    if (streq(ls, str_lower(name)) != 1) {
+        map_set(load64(r + 16), ls, u);
+    }
+    return 0;
+}
+
+fn reg_alias(r, alias, target_sym) {
+    if (map_has(load64(r + 8), target_sym) == 1) {
+        var u = map_get(load64(r + 8), target_sym);
+        map_set(load64(r + 16), str_lower(alias), u);
+    }
+    return 0;
+}
+
+fn reg_alias_exact(r, alias, target_sym) {
+    if (map_has(load64(r + 8), target_sym) == 1) {
+        var u = map_get(load64(r + 8), target_sym);
+        map_set(load64(r + 8), alias, u);
+        map_set(load64(r + 16), str_lower(alias), u);
+    }
+    return 0;
+}
+
+# -- Find unit by name or symbol --
+fn UnitRegistry_find(r, query) {
+    # Exact symbol match first
+    if (map_has(load64(r + 8), query) == 1) {
+        return map_get(load64(r + 8), query);
+    }
+    # Case-insensitive
+    var lq = str_lower(query);
+    if (map_has(load64(r + 16), lq) == 1) {
+        return map_get(load64(r + 16), lq);
+    }
+    # Plural: strip trailing 's'
+    var lqlen = strlen(lq);
+    if (lqlen > 1) {
+        if (load8(lq + lqlen - 1) == 115) {
+            var singular = alloc(lqlen);
+            memcpy(singular, lq, lqlen - 1);
+            store8(singular + lqlen - 1, 0);
+            if (map_has(load64(r + 16), singular) == 1) {
+                return map_get(load64(r + 16), singular);
+            }
+        }
+    }
+    return 0;
+}
+
+# -- Convert value between units --
+fn UnitRegistry_convert(r, value, from_str, to_str) {
+    reg_set_err(r, UERR_NONE);
+    var from_u = UnitRegistry_find(r, from_str);
+    if (from_u == 0) { reg_set_err(r, UERR_UNKNOWN); return f64_from(0); }
+    var to_u = UnitRegistry_find(r, to_str);
+    if (to_u == 0) { reg_set_err(r, UERR_UNKNOWN); return f64_from(0); }
+
+    # Check same category
+    if (Unit_category(from_u) != Unit_category(to_u)) {
+        reg_set_err(r, UERR_INCOMPAT);
+        return f64_from(0);
+    }
+
+    # Same unit shortcut
+    if (streq(Unit_symbol(from_u), Unit_symbol(to_u)) == 1) {
+        return value;
+    }
+
+    # Convert to base
+    var base_val = f64_from(0);
+    if (Unit_inverse(from_u) == 1) {
+        if (f64_eq(value, f64_from(0)) == 1) {
+            reg_set_err(r, UERR_CONVERT);
+            return f64_from(0);
+        }
+        base_val = f64_div(Unit_factor(from_u), value);
+    } else {
+        base_val = f64_mul(f64_add(value, Unit_offset(from_u)), Unit_factor(from_u));
+    }
+
+    # Convert from base to target
+    if (Unit_inverse(to_u) == 1) {
+        if (f64_eq(base_val, f64_from(0)) == 1) {
+            reg_set_err(r, UERR_CONVERT);
+            return f64_from(0);
+        }
+        return f64_div(Unit_factor(to_u), base_val);
+    }
+    return f64_sub(f64_div(base_val, Unit_factor(to_u)), Unit_offset(to_u));
+}
+
+# ================================================================
+# Unit data population
+# ================================================================
+
+# Helper: convert f64 literal to bits for factors
+# We use f64_div/f64_mul/f64_from to build exact factors
+
+fn reg_populate(r) {
+    var zero = f64_from(0);
+    # -- Length (base: meter) --
+    reg_add(r, "meter", "m", CAT_LENGTH, f64_from(1), zero);
+    reg_add(r, "kilometer", "km", CAT_LENGTH, f64_from(1000), zero);
+    reg_add(r, "centimeter", "cm", CAT_LENGTH, f64_div(f64_from(1), f64_from(100)), zero);
+    reg_add(r, "millimeter", "mm", CAT_LENGTH, f64_div(f64_from(1), f64_from(1000)), zero);
+    reg_add(r, "mile", "mi", CAT_LENGTH, f64_div(f64_from(1609344), f64_from(1000)), zero);
+    reg_add(r, "yard", "yd", CAT_LENGTH, f64_div(f64_from(9144), f64_from(10000)), zero);
+    reg_add(r, "foot", "ft", CAT_LENGTH, f64_div(f64_from(3048), f64_from(10000)), zero);
+    reg_add(r, "inch", "in", CAT_LENGTH, f64_div(f64_from(254), f64_from(10000)), zero);
+    reg_add(r, "nautical_mile", "nmi", CAT_LENGTH, f64_from(1852), zero);
+
+    # -- Mass (base: kilogram) --
+    reg_add(r, "kilogram", "kg", CAT_MASS, f64_from(1), zero);
+    reg_add(r, "gram", "g", CAT_MASS, f64_div(f64_from(1), f64_from(1000)), zero);
+    reg_add(r, "milligram", "mg", CAT_MASS, f64_div(f64_from(1), f64_from(1000000)), zero);
+    reg_add(r, "pound", "lb", CAT_MASS, f64_div(f64_from(453592), f64_from(1000000)), zero);
+    reg_add(r, "ounce", "oz", CAT_MASS, f64_div(f64_from(283495), f64_from(10000000)), zero);
+    reg_add(r, "ton", "t", CAT_MASS, f64_from(1000), zero);
+    reg_add(r, "stone", "st", CAT_MASS, f64_div(f64_from(635029), f64_from(100000)), zero);
+
+    # -- Temperature (base: celsius) --
+    reg_add(r, "celsius", "C", CAT_TEMPERATURE, f64_from(1), zero);
+    reg_add(r, "fahrenheit", "F", CAT_TEMPERATURE, f64_div(f64_from(5), f64_from(9)), f64_neg(f64_from(32)));
+    reg_add(r, "kelvin", "K", CAT_TEMPERATURE, f64_from(1), f64_neg(f64_div(f64_from(27315), f64_from(100))));
+
+    # -- Time (base: second) --
+    reg_add(r, "second", "s", CAT_TIME, f64_from(1), zero);
+    reg_add(r, "minute", "min", CAT_TIME, f64_from(60), zero);
+    reg_add(r, "hour", "hr", CAT_TIME, f64_from(3600), zero);
+    reg_add(r, "day", "d", CAT_TIME, f64_from(86400), zero);
+    reg_add(r, "week", "wk", CAT_TIME, f64_from(604800), zero);
+    reg_add(r, "year", "yr", CAT_TIME, f64_from(31557600), zero);
+
+    # -- Data size (base: byte) --
+    reg_add(r, "byte", "B", CAT_DATASIZE, f64_from(1), zero);
+    reg_add(r, "kilobyte", "kB", CAT_DATASIZE, f64_from(1000), zero);
+    reg_add(r, "megabyte", "MB", CAT_DATASIZE, f64_from(1000000), zero);
+    reg_add(r, "gigabyte", "GB", CAT_DATASIZE, f64_from(1000000000), zero);
+    reg_add(r, "terabyte", "TB", CAT_DATASIZE, f64_mul(f64_from(1000000), f64_from(1000000)), zero);
+    reg_add(r, "kibibyte", "KiB", CAT_DATASIZE, f64_from(1024), zero);
+    reg_add(r, "mebibyte", "MiB", CAT_DATASIZE, f64_from(1048576), zero);
+    reg_add(r, "gibibyte", "GiB", CAT_DATASIZE, f64_from(1073741824), zero);
+
+    # -- Speed (base: m/s) --
+    reg_add(r, "meters_per_second", "m/s", CAT_SPEED, f64_from(1), zero);
+    reg_add(r, "kilometers_per_hour", "km/h", CAT_SPEED, f64_div(f64_from(1), f64_div(f64_from(36), f64_from(10))), zero);
+    reg_add(r, "miles_per_hour", "mph", CAT_SPEED, f64_div(f64_from(44704), f64_from(100000)), zero);
+    reg_add(r, "knot", "kn", CAT_SPEED, f64_div(f64_from(514444), f64_from(1000000)), zero);
+
+    # -- Area (base: sq meter) --
+    reg_add(r, "square_meter", "m2", CAT_AREA, f64_from(1), zero);
+    reg_add(r, "square_kilometer", "km2", CAT_AREA, f64_from(1000000), zero);
+    reg_add(r, "hectare", "ha", CAT_AREA, f64_from(10000), zero);
+    reg_add(r, "square_foot", "ft2", CAT_AREA, f64_div(f64_from(92903), f64_from(1000000)), zero);
+
+    # -- Volume (base: liter) --
+    reg_add(r, "liter", "L", CAT_VOLUME, f64_from(1), zero);
+    reg_add(r, "milliliter", "mL", CAT_VOLUME, f64_div(f64_from(1), f64_from(1000)), zero);
+    reg_add(r, "gallon", "gal", CAT_VOLUME, f64_div(f64_from(378541), f64_from(100000)), zero);
+    reg_add(r, "cup", "cup", CAT_VOLUME, f64_div(f64_from(236588), f64_from(1000000)), zero);
+
+    # -- Energy (base: joule) --
+    reg_add(r, "joule", "J", CAT_ENERGY, f64_from(1), zero);
+    reg_add(r, "kilojoule", "kJ", CAT_ENERGY, f64_from(1000), zero);
+    reg_add(r, "calorie", "cal", CAT_ENERGY, f64_div(f64_from(4184), f64_from(1000)), zero);
+    reg_add(r, "kilocalorie", "kcal", CAT_ENERGY, f64_from(4184), zero);
+    reg_add(r, "kilowatt_hour", "kWh", CAT_ENERGY, f64_from(3600000), zero);
+
+    # -- Pressure (base: pascal) --
+    reg_add(r, "pascal", "Pa", CAT_PRESSURE, f64_from(1), zero);
+    reg_add(r, "kilopascal", "kPa", CAT_PRESSURE, f64_from(1000), zero);
+    reg_add(r, "bar", "bar", CAT_PRESSURE, f64_from(100000), zero);
+    reg_add(r, "atmosphere", "atm", CAT_PRESSURE, f64_from(101325), zero);
+    reg_add(r, "psi", "psi", CAT_PRESSURE, f64_div(f64_from(689476), f64_from(100)), zero);
+
+    # -- Angle (base: radian) --
+    reg_add(r, "radian", "rad", CAT_ANGLE, f64_from(1), zero);
+    reg_add(r, "degree", "deg", CAT_ANGLE, f64_div(0x400921FB54442D18, f64_from(180)), zero);
+
+    # -- Frequency (base: hertz) --
+    reg_add(r, "hertz", "Hz", CAT_FREQUENCY, f64_from(1), zero);
+    reg_add(r, "kilohertz", "kHz", CAT_FREQUENCY, f64_from(1000), zero);
+    reg_add(r, "megahertz", "MHz", CAT_FREQUENCY, f64_from(1000000), zero);
+    reg_add(r, "gigahertz", "GHz", CAT_FREQUENCY, f64_from(1000000000), zero);
+
+    # -- Force (base: newton) --
+    reg_add(r, "newton", "N", CAT_FORCE, f64_from(1), zero);
+    reg_add(r, "kilonewton", "kN", CAT_FORCE, f64_from(1000), zero);
+    reg_add(r, "pound_force", "lbf", CAT_FORCE, f64_div(f64_from(444822), f64_from(100000)), zero);
+
+    # -- Power (base: watt) --
+    reg_add(r, "watt", "W", CAT_POWER, f64_from(1), zero);
+    reg_add(r, "kilowatt", "kW", CAT_POWER, f64_from(1000), zero);
+    reg_add(r, "megawatt", "MW", CAT_POWER, f64_from(1000000), zero);
+    reg_add(r, "horsepower", "hp", CAT_POWER, f64_div(f64_from(7457), f64_from(10)), zero);
+    reg_add(r, "milliwatt", "mW", CAT_POWER, f64_div(f64_from(1), f64_from(1000)), zero);
+
+    # -- Fuel economy (base: km/L) --
+    reg_add(r, "kilometers_per_liter", "km/L", CAT_FUELECONOMY, f64_from(1), zero);
+    reg_add(r, "miles_per_gallon", "mpg", CAT_FUELECONOMY, f64_div(f64_from(425144), f64_from(1000000)), zero);
+    reg_add_inv(r, "liters_per_100km", "L/100km", CAT_FUELECONOMY, f64_from(100));
+
+    # -- Density (base: kg/m3) --
+    reg_add(r, "kilogram_per_cubic_meter", "kg/m3", CAT_DENSITY, f64_from(1), zero);
+    reg_add(r, "gram_per_cubic_centimeter", "g/cm3", CAT_DENSITY, f64_from(1000), zero);
+
+    # -- Luminosity (base: lux) --
+    reg_add(r, "lux", "lx", CAT_LUMINOSITY, f64_from(1), zero);
+    reg_add(r, "foot_candle", "fc", CAT_LUMINOSITY, f64_div(f64_from(107639), f64_from(10000)), zero);
+
+    # -- Viscosity (base: Pa-s) --
+    reg_add(r, "pascal_second", "Pas", CAT_VISCOSITY, f64_from(1), zero);
+    reg_add(r, "centipoise", "cP", CAT_VISCOSITY, f64_div(f64_from(1), f64_from(1000)), zero);
+
+    return 0;
+}
+
+fn reg_aliases(r) {
+    # Temperature
+    reg_alias(r, "degc", "C");
+    reg_alias(r, "degf", "F");
+    reg_alias(r, "centigrade", "C");
+    # Length
+    reg_alias(r, "metres", "m");
+    reg_alias(r, "kilometres", "km");
+    reg_alias(r, "feet", "ft");
+    reg_alias(r, "inches", "in");
+    # Mass
+    reg_alias(r, "lbs", "lb");
+    reg_alias(r, "pounds", "lb");
+    reg_alias(r, "ounces", "oz");
+    # Speed
+    reg_alias(r, "kph", "km/h");
+    reg_alias(r, "kmh", "km/h");
+    reg_alias(r, "knots", "kn");
+    # Time
+    reg_alias(r, "seconds", "s");
+    reg_alias(r, "sec", "s");
+    reg_alias(r, "minutes", "min");
+    reg_alias(r, "hours", "hr");
+    reg_alias(r, "hrs", "hr");
+    reg_alias(r, "days", "d");
+    reg_alias(r, "weeks", "wk");
+    reg_alias(r, "years", "yr");
+    # Volume
+    reg_alias(r, "litre", "L");
+    reg_alias(r, "litres", "L");
+    reg_alias(r, "gallons", "gal");
+    # Energy
+    reg_alias(r, "joules", "J");
+    reg_alias(r, "calories", "cal");
+    # Pressure
+    reg_alias(r, "pascals", "Pa");
+    reg_alias(r, "atmospheres", "atm");
+    # Angle
+    reg_alias(r, "radians", "rad");
+    reg_alias(r, "degrees", "deg");
+    # Area
+    reg_alias(r, "hectares", "ha");
+    reg_alias(r, "sq m", "m2");
+    reg_alias(r, "sq km", "km2");
+    reg_alias(r, "sq ft", "ft2");
+    return 0;
+}

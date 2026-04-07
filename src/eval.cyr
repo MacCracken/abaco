@@ -1,0 +1,774 @@
+# abaco::eval - Expression evaluator
+# Ported from rust-old/src/eval.rs (1562 lines)
+# Recursive descent parser with 43+ math functions
+
+# -- Token types --
+enum TokType {
+    TOK_NUMBER;
+    TOK_PLUS;
+    TOK_MINUS;
+    TOK_STAR;
+    TOK_SLASH;
+    TOK_PERCENT;
+    TOK_POWER;
+    TOK_LPAREN;
+    TOK_RPAREN;
+    TOK_IDENT;
+    TOK_COMMA;
+    TOK_BANG;
+}
+
+# -- Error codes --
+enum EvalErr {
+    ERR_NONE;
+    ERR_DIV_ZERO;
+    ERR_UNKNOWN_FN;
+    ERR_UNKNOWN_VAR;
+    ERR_PARSE;
+    ERR_MATH;
+    ERR_INVALID;
+}
+
+# -- Token storage --
+# Tokens stored as array of { type, value_or_ptr }
+# For NUMBER: value is f64 bits
+# For IDENT: value is pointer to null-terminated string
+
+var MAX_TOKENS = 512;
+
+# Token array: each token is 16 bytes (type + value)
+fn tok_alloc() { return alloc(MAX_TOKENS * 16); }
+fn tok_type(toks, i) { return load64(toks + i * 16); }
+fn tok_val(toks, i) { return load64(toks + i * 16 + 8); }
+fn tok_set(toks, i, typ, val) {
+    store64(toks + i * 16, typ);
+    store64(toks + i * 16 + 8, val);
+    return 0;
+}
+
+# -- Evaluator state --
+# { variables_map, tokens, token_count, pos, error, depth }
+struct Evaluator { vars; toks; ntoks; pos; err; depth; }
+
+fn Evaluator_new() {
+    var e = alloc(48);
+    store64(e, map_new());
+    store64(e + 8, 0);
+    store64(e + 16, 0);
+    store64(e + 24, 0);
+    store64(e + 32, ERR_NONE);
+    store64(e + 40, 0);
+    return e;
+}
+
+fn eval_vars(e) { return load64(e); }
+fn eval_toks(e) { return load64(e + 8); }
+fn eval_ntoks(e) { return load64(e + 16); }
+fn eval_pos(e) { return load64(e + 24); }
+fn eval_err(e) { return load64(e + 32); }
+fn eval_depth(e) { return load64(e + 40); }
+
+fn eval_set_toks(e, t) { store64(e + 8, t); return 0; }
+fn eval_set_ntoks(e, n) { store64(e + 16, n); return 0; }
+fn eval_set_pos(e, p) { store64(e + 24, p); return 0; }
+fn eval_set_err(e, err) { store64(e + 32, err); return 0; }
+fn eval_set_depth(e, d) { store64(e + 40, d); return 0; }
+fn eval_advance(e) { store64(e + 24, load64(e + 24) + 1); return 0; }
+
+fn Evaluator_set_variable(e, name, val) {
+    map_set(load64(e), name, val);
+    return 0;
+}
+
+fn Evaluator_get_variable(e, name) {
+    return map_get(load64(e), name);
+}
+
+# ================================================================
+# Tokenizer
+# ================================================================
+
+fn is_digit(c) {
+    if (c >= 48) { if (c <= 57) { return 1; } }
+    return 0;
+}
+fn is_alpha(c) {
+    if (c >= 65) { if (c <= 90) { return 1; } }
+    if (c >= 97) { if (c <= 122) { return 1; } }
+    if (c == 95) { return 1; }
+    return 0;
+}
+fn is_alnum(c) {
+    if (is_digit(c) == 1) { return 1; }
+    return is_alpha(c);
+}
+fn is_space(c) {
+    if (c == 32) { return 1; }
+    if (c == 9) { return 1; }
+    if (c == 10) { return 1; }
+    if (c == 13) { return 1; }
+    return 0;
+}
+
+# Parse a number from input bytes, return f64 bits
+# Sets *out_end to the position after the number
+fn parse_number(input, start, len, out_end) {
+    var i = start;
+    var int_part = 0;
+    var frac_part = 0;
+    var frac_div = 1;
+    var has_dot = 0;
+
+    # Integer/fractional part
+    var pgo = 1;
+    while (pgo == 1) {
+        if (i >= len) { pgo = 0; }
+        else {
+            var c = load8(input + i);
+            if (is_digit(c) == 1) {
+                if (has_dot == 0) {
+                    int_part = int_part * 10 + (c - 48);
+                } else {
+                    frac_part = frac_part * 10 + (c - 48);
+                    frac_div = frac_div * 10;
+                }
+                i = i + 1;
+            }
+            elif (c == 46) {
+                has_dot = 1;
+                i = i + 1;
+            }
+            else { pgo = 0; }
+        }
+    }
+
+    var result = f64_add(f64_from(int_part), f64_div(f64_from(frac_part), f64_from(frac_div)));
+
+    # Scientific notation: e/E followed by optional +/- and digits
+    if (i < len) {
+        var c = load8(input + i);
+        var is_exp = 0;
+        if (c == 101) { is_exp = 1; }
+        if (c == 69) { is_exp = 1; }
+        if (is_exp == 1) {
+            i = i + 1;
+            var exp_sign = 1;
+            if (i < len) {
+                c = load8(input + i);
+                if (c == 43) { i = i + 1; }
+                elif (c == 45) { exp_sign = 0 - 1; i = i + 1; }
+            }
+            var exp_val = 0;
+            var ego = 1;
+            while (ego == 1) {
+                if (i >= len) { ego = 0; }
+                else {
+                    c = load8(input + i);
+                    if (is_digit(c) == 0) { ego = 0; }
+                    else { exp_val = exp_val * 10 + (c - 48); i = i + 1; }
+                }
+            }
+            # result *= 10^(exp_sign * exp_val)
+            var exp_f = f64_mul(f64_from(exp_sign), f64_from(exp_val));
+            # 10^x = exp2(x * log2(10)) = exp2(x * 3.321928...)
+            var log2_10 = 0x400A934F0979A371;
+            var pow10 = f64_exp2(f64_mul(exp_f, log2_10));
+            result = f64_mul(result, pow10);
+        }
+    }
+
+    store64(out_end, i);
+    return result;
+}
+
+# Tokenize input string into token array
+# Returns token count, tokens stored in toks array
+fn tokenize(input, toks) {
+    var len = strlen(input);
+    var i = 0;
+    var nt = 0;
+
+    while (i < len) {
+        var c = load8(input + i);
+        if (is_space(c) == 1) { i = i + 1; }
+        elif (c == 43) { tok_set(toks, nt, TOK_PLUS, 0); nt = nt + 1; i = i + 1; }
+        elif (c == 45) { tok_set(toks, nt, TOK_MINUS, 0); nt = nt + 1; i = i + 1; }
+        elif (c == 42) {
+            # * or **
+            var is_pow = 0;
+            if (i + 1 < len) { if (load8(input + i + 1) == 42) { is_pow = 1; } }
+            if (is_pow == 1) {
+                tok_set(toks, nt, TOK_POWER, 0); nt = nt + 1; i = i + 2;
+            } else {
+                tok_set(toks, nt, TOK_STAR, 0); nt = nt + 1; i = i + 1;
+            }
+        }
+        elif (c == 47) { tok_set(toks, nt, TOK_SLASH, 0); nt = nt + 1; i = i + 1; }
+        elif (c == 37) { tok_set(toks, nt, TOK_PERCENT, 0); nt = nt + 1; i = i + 1; }
+        elif (c == 94) { tok_set(toks, nt, TOK_POWER, 0); nt = nt + 1; i = i + 1; }
+        elif (c == 40) { tok_set(toks, nt, TOK_LPAREN, 0); nt = nt + 1; i = i + 1; }
+        elif (c == 41) { tok_set(toks, nt, TOK_RPAREN, 0); nt = nt + 1; i = i + 1; }
+        elif (c == 44) { tok_set(toks, nt, TOK_COMMA, 0); nt = nt + 1; i = i + 1; }
+        elif (c == 33) { tok_set(toks, nt, TOK_BANG, 0); nt = nt + 1; i = i + 1; }
+        elif (is_digit(c) == 1) {
+            var nend = alloc(8);
+            var num = parse_number(input, i, len, nend);
+            tok_set(toks, nt, TOK_NUMBER, num);
+            nt = nt + 1;
+            i = load64(nend);
+        }
+        elif (c == 46) {
+            var dend = alloc(8);
+            var dnum = parse_number(input, i, len, dend);
+            tok_set(toks, nt, TOK_NUMBER, dnum);
+            nt = nt + 1;
+            i = load64(dend);
+        }
+        elif (is_alpha(c) == 1) {
+            var start = i;
+            var igo = 1;
+            while (igo == 1) {
+                if (i >= len) { igo = 0; }
+                elif (is_alnum(load8(input + i)) == 0) { igo = 0; }
+                else { i = i + 1; }
+            }
+            var ident_len = i - start;
+            var ident = alloc(ident_len + 1);
+            memcpy(ident, input + start, ident_len);
+            store8(ident + ident_len, 0);
+            tok_set(toks, nt, TOK_IDENT, ident);
+            nt = nt + 1;
+        }
+        else {
+            i = i + 1;
+        }
+    }
+
+    # Insert implicit multiplication
+    nt = implicit_mul(toks, nt);
+    return nt;
+}
+
+# Check if implicit * needed after token i
+fn needs_star(toks, nt, i) {
+    if (i + 1 >= nt) { return 0; }
+    var t1 = tok_type(toks, i);
+    var t2 = tok_type(toks, i + 1);
+    # Number followed by LParen or Ident
+    if (t1 == TOK_NUMBER) {
+        if (t2 == TOK_LPAREN) { return 1; }
+        if (t2 == TOK_IDENT) { return 1; }
+    }
+    # RParen followed by LParen, Number, or Ident
+    if (t1 == TOK_RPAREN) {
+        if (t2 == TOK_LPAREN) { return 1; }
+        if (t2 == TOK_NUMBER) { return 1; }
+        if (t2 == TOK_IDENT) { return 1; }
+    }
+    return 0;
+}
+
+# Insert implicit * tokens in-place (shifts tokens right)
+fn implicit_mul(toks, nt) {
+    # Check if any insertion needed
+    var need = 0;
+    var i = 0;
+    while (i < nt - 1) {
+        if (needs_star(toks, nt, i) == 1) { need = need + 1; }
+        i = i + 1;
+    }
+    if (need == 0) { return nt; }
+
+    # Build new array
+    var newtoks = tok_alloc();
+    var ni = 0;
+    i = 0;
+    while (i < nt) {
+        tok_set(newtoks, ni, tok_type(toks, i), tok_val(toks, i));
+        ni = ni + 1;
+        if (i + 1 < nt) {
+            if (needs_star(toks, nt, i) == 1) {
+                tok_set(newtoks, ni, TOK_STAR, 0);
+                ni = ni + 1;
+            }
+        }
+        i = i + 1;
+    }
+    # Copy back
+    memcpy(toks, newtoks, ni * 16);
+    return ni;
+}
+
+# ================================================================
+# Parser - recursive descent
+# ================================================================
+
+var MAX_DEPTH = 256;
+
+# Helper: check if current token matches type
+fn eval_at(e, typ) {
+    if (eval_pos(e) >= eval_ntoks(e)) { return 0; }
+    if (tok_type(eval_toks(e), eval_pos(e)) == typ) { return 1; }
+    return 0;
+}
+fn eval_not_at(e, typ) {
+    if (eval_pos(e) >= eval_ntoks(e)) { return 1; }
+    if (tok_type(eval_toks(e), eval_pos(e)) != typ) { return 1; }
+    return 0;
+}
+fn eval_has_more(e) {
+    if (eval_pos(e) < eval_ntoks(e)) { return 1; }
+    return 0;
+}
+
+# Constants
+var CONST_PI = 0x400921FB54442D18;
+var CONST_E = 0x4005BF0A8B145769;
+var CONST_TAU = 0x401921FB54442D18;
+
+# Forward declarations handled by Cyrius's forward-call support
+
+fn parse_expr(e) {
+    if (eval_depth(e) >= MAX_DEPTH) { eval_set_err(e, ERR_PARSE); return f64_from(0); }
+    var left = parse_term(e);
+    if (eval_err(e) != ERR_NONE) { return left; }
+    while (eval_pos(e) < eval_ntoks(e)) {
+        var t = tok_type(eval_toks(e), eval_pos(e));
+        if (t == TOK_PLUS) {
+            eval_advance(e);
+            var right = parse_term(e);
+            if (eval_err(e) != ERR_NONE) { return left; }
+            left = f64_add(left, right);
+        }
+        elif (t == TOK_MINUS) {
+            eval_advance(e);
+            var right = parse_term(e);
+            if (eval_err(e) != ERR_NONE) { return left; }
+            left = f64_sub(left, right);
+        }
+        else { return left; }
+    }
+    return left;
+}
+
+fn parse_term(e) {
+    var left = parse_power(e);
+    if (eval_err(e) != ERR_NONE) { return left; }
+    while (eval_pos(e) < eval_ntoks(e)) {
+        var t = tok_type(eval_toks(e), eval_pos(e));
+        if (t == TOK_STAR) {
+            eval_advance(e);
+            var right = parse_power(e);
+            if (eval_err(e) != ERR_NONE) { return left; }
+            left = f64_mul(left, right);
+        }
+        elif (t == TOK_SLASH) {
+            eval_advance(e);
+            var right = parse_power(e);
+            if (eval_err(e) != ERR_NONE) { return left; }
+            if (f64_eq(right, f64_from(0)) == 1) {
+                eval_set_err(e, ERR_DIV_ZERO);
+                return left;
+            }
+            left = f64_div(left, right);
+        }
+        elif (t == TOK_PERCENT) {
+            # Postfix percent or binary modulo
+            var nxt = eval_pos(e) + 1;
+            var is_postfix = 0;
+            if (nxt >= eval_ntoks(e)) { is_postfix = 1; }
+            else {
+                var nt = tok_type(eval_toks(e), nxt);
+                if (nt == TOK_RPAREN) { is_postfix = 1; }
+                if (nt == TOK_COMMA) { is_postfix = 1; }
+                if (nt == TOK_PLUS) { is_postfix = 1; }
+                if (nt == TOK_MINUS) { is_postfix = 1; }
+                if (nt == TOK_STAR) { is_postfix = 1; }
+                if (nt == TOK_SLASH) { is_postfix = 1; }
+                if (nt == TOK_PERCENT) { is_postfix = 1; }
+                if (nt == TOK_POWER) { is_postfix = 1; }
+            }
+            eval_advance(e);
+            if (is_postfix == 1) {
+                left = f64_div(left, f64_from(100));
+            } else {
+                var right = parse_power(e);
+                if (eval_err(e) != ERR_NONE) { return left; }
+                if (f64_eq(right, f64_from(0)) == 1) {
+                    eval_set_err(e, ERR_DIV_ZERO);
+                    return left;
+                }
+                # Modulo: a - floor(a/b)*b
+                var quot = f64_floor(f64_div(left, right));
+                left = f64_sub(left, f64_mul(quot, right));
+            }
+        }
+        else { return left; }
+    }
+    return left;
+}
+
+# f64 power: a^b = exp2(b * log2(a))
+fn f64_pow(base, exp) {
+    var zero = f64_from(0);
+    if (f64_eq(exp, zero) == 1) { return f64_from(1); }
+    if (f64_eq(base, zero) == 1) { return zero; }
+    # For integer exponents, use repeated multiplication for precision
+    var exp_i = f64_to(exp);
+    var exp_back = f64_from(exp_i);
+    if (f64_eq(exp, exp_back) == 1) {
+        if (exp_i >= 0) {
+            var result = f64_from(1);
+            var i = 0;
+            while (i < exp_i) {
+                result = f64_mul(result, base);
+                i = i + 1;
+            }
+            return result;
+        }
+    }
+    # General case: exp2(exp * log2(|base|))
+    var result = f64_exp2(f64_mul(exp, f64_log2(f64_abs(base))));
+    # Handle negative base with odd integer exponent
+    if (f64_lt(base, zero) == 1) {
+        if (f64_eq(exp, exp_back) == 1) {
+            if (exp_i % 2 != 0) { result = f64_neg(result); }
+        }
+    }
+    return result;
+}
+
+fn parse_power(e) {
+    var base = parse_unary(e);
+    if (eval_err(e) != ERR_NONE) { return base; }
+    # Postfix factorial
+    while (eval_at(e, TOK_BANG) == 1) {
+        eval_advance(e);
+        var n = f64_to(base);
+        if (n < 0) { eval_set_err(e, ERR_MATH); return f64_from(0); }
+        if (n > 170) {
+            eval_set_err(e, ERR_MATH);
+            return base;
+        }
+        var result = f64_from(1);
+        var fi = 1;
+        while (fi <= n) {
+            result = f64_mul(result, f64_from(fi));
+            fi = fi + 1;
+        }
+        base = result;
+    }
+    if (eval_at(e, TOK_POWER) == 1) {
+        eval_advance(e);
+        var exp = parse_power(e);
+        return f64_pow(base, exp);
+    }
+    return base;
+}
+
+fn parse_unary(e) {
+    if (eval_pos(e) < eval_ntoks(e)) {
+        var t = tok_type(eval_toks(e), eval_pos(e));
+        if (t == TOK_MINUS) {
+            eval_advance(e);
+            return f64_neg(parse_unary(e));
+        }
+        if (t == TOK_PLUS) {
+            eval_advance(e);
+            return parse_unary(e);
+        }
+    }
+    return parse_primary(e);
+}
+
+# ================================================================
+# Function dispatch
+# ================================================================
+
+fn parse_primary(e) {
+    if (eval_pos(e) >= eval_ntoks(e)) {
+        eval_set_err(e, ERR_INVALID);
+        return f64_from(0);
+    }
+    var toks = eval_toks(e);
+    var pos = eval_pos(e);
+    var t = tok_type(toks, pos);
+
+    if (t == TOK_NUMBER) {
+        eval_advance(e);
+        return tok_val(toks, pos);
+    }
+    if (t == TOK_LPAREN) {
+        eval_advance(e);
+        eval_set_depth(e, eval_depth(e) + 1);
+        var val = parse_expr(e);
+        eval_set_depth(e, eval_depth(e) - 1);
+        if (eval_not_at(e, TOK_RPAREN) == 1) {
+            eval_set_err(e, ERR_PARSE);
+            return val;
+        }
+        eval_advance(e);
+        return val;
+    }
+    if (t == TOK_IDENT) {
+        var name = tok_val(toks, pos);
+        eval_advance(e);
+        # Function call?
+        if (eval_at(e, TOK_LPAREN) == 1) {
+            eval_advance(e);
+            var args = alloc(64);
+            var nargs = 0;
+            if (eval_not_at(e, TOK_RPAREN) == 1) {
+                eval_set_depth(e, eval_depth(e) + 1);
+                store64(args + nargs * 8, parse_expr(e));
+                eval_set_depth(e, eval_depth(e) - 1);
+                nargs = nargs + 1;
+                while (eval_at(e, TOK_COMMA) == 1) {
+                    eval_advance(e);
+                    eval_set_depth(e, eval_depth(e) + 1);
+                    store64(args + nargs * 8, parse_expr(e));
+                    eval_set_depth(e, eval_depth(e) - 1);
+                    nargs = nargs + 1;
+                }
+            }
+            if (eval_not_at(e, TOK_RPAREN) == 1) {
+                eval_set_err(e, ERR_PARSE);
+                return f64_from(0);
+            }
+            eval_advance(e);
+            return call_function(e, name, args, nargs);
+        }
+        # Constants
+        if (streq(name, "pi") == 1) { return CONST_PI; }
+        if (streq(name, "PI") == 1) { return CONST_PI; }
+        if (streq(name, "e") == 1) { return CONST_E; }
+        if (streq(name, "E") == 1) { return CONST_E; }
+        if (streq(name, "tau") == 1) { return CONST_TAU; }
+        if (streq(name, "TAU") == 1) { return CONST_TAU; }
+        # Variable lookup
+        if (map_has(eval_vars(e), name) == 1) {
+            return map_get(eval_vars(e), name);
+        }
+        eval_set_err(e, ERR_UNKNOWN_VAR);
+        return f64_from(0);
+    }
+    eval_set_err(e, ERR_PARSE);
+    return f64_from(0);
+}
+
+# ================================================================
+# Function dispatch (43+ functions)
+# ================================================================
+
+fn gcd_int(a, b) {
+    if (a < 0) { a = 0 - a; }
+    if (b < 0) { b = 0 - b; }
+    while (b != 0) {
+        var t = b;
+        b = a % b;
+        a = t;
+    }
+    return a;
+}
+
+fn call_function(e, name, args, nargs) {
+    var a = load64(args);
+    var b = load64(args + 8);
+
+    # Variable-arity functions first (they can have any nargs >= 1)
+    if (nargs >= 1) {
+        var is_mean = 0;
+        if (streq(name, "mean") == 1) { is_mean = 1; }
+        if (streq(name, "avg") == 1) { is_mean = 1; }
+        if (is_mean == 1) {
+            var sum = f64_from(0);
+            var mi = 0;
+            while (mi < nargs) { sum = f64_add(sum, load64(args + mi * 8)); mi = mi + 1; }
+            return f64_div(sum, f64_from(nargs));
+        }
+        if (streq(name, "median") == 1) {
+            var mi = 0;
+            while (mi < nargs - 1) {
+                var mj = 0;
+                while (mj < nargs - 1 - mi) {
+                    var va = load64(args + mj * 8);
+                    var vb = load64(args + (mj + 1) * 8);
+                    if (f64_gt(va, vb) == 1) {
+                        store64(args + mj * 8, vb);
+                        store64(args + (mj + 1) * 8, va);
+                    }
+                    mj = mj + 1;
+                }
+                mi = mi + 1;
+            }
+            if (nargs % 2 == 1) {
+                return load64(args + (nargs / 2) * 8);
+            }
+            var mid1 = load64(args + (nargs / 2 - 1) * 8);
+            var mid2 = load64(args + (nargs / 2) * 8);
+            return f64_div(f64_add(mid1, mid2), f64_from(2));
+        }
+        var is_std = 0;
+        if (streq(name, "stddev") == 1) { is_std = 1; }
+        if (streq(name, "stdev") == 1) { is_std = 1; }
+        if (is_std == 1) {
+            var sum = f64_from(0);
+            var si = 0;
+            while (si < nargs) { sum = f64_add(sum, load64(args + si * 8)); si = si + 1; }
+            var smean = f64_div(sum, f64_from(nargs));
+            var vsum = f64_from(0);
+            si = 0;
+            while (si < nargs) {
+                var diff = f64_sub(load64(args + si * 8), smean);
+                vsum = f64_add(vsum, f64_mul(diff, diff));
+                si = si + 1;
+            }
+            return f64_sqrt(f64_div(vsum, f64_from(nargs)));
+        }
+    }
+
+    # 1-arg functions
+    if (nargs == 1) {
+        if (streq(name, "sqrt") == 1) { return f64_sqrt(a); }
+        if (streq(name, "sin") == 1) { return f64_sin(a); }
+        if (streq(name, "cos") == 1) { return f64_cos(a); }
+        if (streq(name, "tan") == 1) { return f64_div(f64_sin(a), f64_cos(a)); }
+        if (streq(name, "log") == 1) { return f64_div(f64_ln(a), f64_ln(f64_from(10))); }
+        if (streq(name, "log10") == 1) { return f64_div(f64_ln(a), f64_ln(f64_from(10))); }
+        if (streq(name, "ln") == 1) { return f64_ln(a); }
+        if (streq(name, "log2") == 1) { return f64_log2(a); }
+        if (streq(name, "abs") == 1) { return f64_abs(a); }
+        if (streq(name, "ceil") == 1) { return f64_ceil(a); }
+        if (streq(name, "floor") == 1) { return f64_floor(a); }
+        if (streq(name, "round") == 1) { return f64_round(a); }
+        if (streq(name, "exp") == 1) { return f64_exp(a); }
+        if (streq(name, "trunc") == 1) { return f64_trunc(a); }
+        if (streq(name, "fract") == 1) { return f64_fract(a); }
+        if (streq(name, "sign") == 1) { return f64_sign(a); }
+        if (streq(name, "sgn") == 1) { return f64_sign(a); }
+        if (streq(name, "deg") == 1) {
+            # radians to degrees: a * 180/pi
+            return f64_mul(a, f64_div(f64_from(180), CONST_PI));
+        }
+        if (streq(name, "rad") == 1) {
+            # degrees to radians: a * pi/180
+            return f64_mul(a, f64_div(CONST_PI, f64_from(180)));
+        }
+        if (streq(name, "factorial") == 1) {
+            var n = f64_to(a);
+            if (n < 0) { eval_set_err(e, ERR_MATH); return f64_from(0); }
+        if (n > 170) { eval_set_err(e, ERR_MATH); return f64_from(0); }
+            var result = f64_from(1);
+            var fi = 1;
+            while (fi <= n) { result = f64_mul(result, f64_from(fi)); fi = fi + 1; }
+            return result;
+        }
+        if (streq(name, "isprime") == 1) {
+            var n = f64_to(a);
+            if (n < 0) { return f64_from(0); }
+            return f64_from(is_prime(n));
+        }
+        if (streq(name, "nextprime") == 1) {
+            var n = f64_to(a);
+            if (n < 0) { eval_set_err(e, ERR_MATH); return f64_from(0); }
+            return f64_from(next_prime(n));
+        }
+        if (streq(name, "prevprime") == 1) {
+            var n = f64_to(a);
+            if (n < 0) { eval_set_err(e, ERR_MATH); return f64_from(0); }
+            var r = prev_prime(n);
+            if (tag(r) == OK) { return f64_from(payload(r)); }
+            eval_set_err(e, ERR_MATH);
+            return f64_from(0);
+        }
+        if (streq(name, "totient") == 1) {
+            var n = f64_to(a);
+            if (n < 0) { eval_set_err(e, ERR_MATH); return f64_from(0); }
+            return f64_from(totient(n));
+        }
+        var is_fib = 0;
+        if (streq(name, "fibonacci") == 1) { is_fib = 1; }
+        if (streq(name, "fib") == 1) { is_fib = 1; }
+        if (is_fib == 1) {
+            var n = f64_to(a);
+            if (n < 0) { eval_set_err(e, ERR_MATH); return f64_from(0); }
+            if (n > 92) { eval_set_err(e, ERR_MATH); return f64_from(0); }
+            return f64_from(fibonacci(n));
+        }
+        eval_set_err(e, ERR_UNKNOWN_FN);
+        return f64_from(0);
+    }
+
+    # 2-arg functions
+    if (nargs == 2) {
+        if (streq(name, "min") == 1) { return f64_min(a, b); }
+        if (streq(name, "max") == 1) { return f64_max(a, b); }
+        if (streq(name, "pow") == 1) { return f64_pow(a, b); }
+        if (streq(name, "atan2") == 1) {
+            # atan2 not available as builtin, approximate via atan(y/x) with quadrant fix
+            # For now use simple atan(y/x)
+            var zero = f64_from(0);
+            if (f64_eq(b, zero) == 1) {
+                if (f64_gt(a, zero) == 1) { return DSP_PI_2; }
+                if (f64_lt(a, zero) == 1) { return f64_neg(DSP_PI_2); }
+                return zero;
+            }
+            return f64_div(f64_sin(f64_div(a, b)), f64_cos(f64_div(a, b)));
+        }
+        if (streq(name, "gcd") == 1) {
+            return f64_from(gcd_int(f64_to(f64_abs(a)), f64_to(f64_abs(b))));
+        }
+        if (streq(name, "lcm") == 1) {
+            var ai = f64_to(f64_abs(a));
+            var bi = f64_to(f64_abs(b));
+            if (ai == 0) { return f64_from(0); }
+            if (bi == 0) { return f64_from(0); }
+            return f64_from((ai / gcd_int(ai, bi)) * bi);
+        }
+        var is_binom = 0;
+        if (streq(name, "binomial") == 1) { is_binom = 1; }
+        if (streq(name, "choose") == 1) { is_binom = 1; }
+        if (is_binom == 1) {
+            return f64_from(binomial(f64_to(a), f64_to(b)));
+        }
+        eval_set_err(e, ERR_UNKNOWN_FN);
+        return f64_from(0);
+    }
+
+    eval_set_err(e, ERR_UNKNOWN_FN);
+    return f64_from(0);
+}
+
+# ================================================================
+# Public API
+# ================================================================
+
+# Evaluate expression string, return f64 bits
+# Sets eval_err on the evaluator if error
+fn Evaluator_eval(e, expr) {
+    var toks = tok_alloc();
+    eval_set_toks(e, toks);
+    eval_set_pos(e, 0);
+    eval_set_err(e, ERR_NONE);
+    eval_set_depth(e, 0);
+    var nt = tokenize(expr, toks);
+    eval_set_ntoks(e, nt);
+    if (nt == 0) { eval_set_err(e, ERR_INVALID); return f64_from(0); }
+    var result = parse_expr(e);
+    if (eval_err(e) == ERR_NONE) { if (eval_pos(e) < eval_ntoks(e)) {
+        eval_set_err(e, ERR_PARSE);
+    } }
+    return result;
+}
+
+# Evaluate and return as Value (Integer if whole, Float otherwise)
+fn Evaluator_eval_value(e, expr) {
+    var result = Evaluator_eval(e, expr);
+    if (eval_err(e) != ERR_NONE) { return Value_float(result); }
+    var i = f64_to(result);
+    var back = f64_from(i);
+    if (f64_eq(result, back) == 1) {
+        return Value_integer(i);
+    }
+    return Value_float(result);
+}
