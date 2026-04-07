@@ -1,0 +1,186 @@
+# abaco ntheory tests
+# Run: cat tests/test_ntheory.cyr | cc2 > /tmp/test_ntheory && chmod +x /tmp/test_ntheory && /tmp/test_ntheory
+
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/syscalls.cyr"
+include "lib/tagged.cyr"
+include "lib/assert.cyr"
+
+include "src/core.cyr"
+include "src/ntheory.cyr"
+
+fn test_is_prime() {
+    # Small primes
+    assert(is_prime(2) == 1, "2 is prime");
+    assert(is_prime(3) == 1, "3 is prime");
+    assert(is_prime(5) == 1, "5 is prime");
+    assert(is_prime(7) == 1, "7 is prime");
+    assert(is_prime(11) == 1, "11 is prime");
+    assert(is_prime(13) == 1, "13 is prime");
+    assert(is_prime(17) == 1, "17 is prime");
+    assert(is_prime(19) == 1, "19 is prime");
+    assert(is_prime(23) == 1, "23 is prime");
+    assert(is_prime(29) == 1, "29 is prime");
+    assert(is_prime(31) == 1, "31 is prime");
+    assert(is_prime(37) == 1, "37 is prime");
+    assert(is_prime(41) == 1, "41 is prime");
+    assert(is_prime(43) == 1, "43 is prime");
+    assert(is_prime(47) == 1, "47 is prime");
+
+    # Small composites
+    assert(is_prime(0) == 0, "0 not prime");
+    assert(is_prime(1) == 0, "1 not prime");
+    assert(is_prime(4) == 0, "4 not prime");
+    assert(is_prime(6) == 0, "6 not prime");
+    assert(is_prime(8) == 0, "8 not prime");
+    assert(is_prime(9) == 0, "9 not prime");
+    assert(is_prime(10) == 0, "10 not prime");
+    assert(is_prime(12) == 0, "12 not prime");
+    assert(is_prime(15) == 0, "15 not prime");
+    assert(is_prime(25) == 0, "25 not prime");
+
+    # Large primes
+    assert(is_prime(104729) == 1, "104729 is prime");
+    assert(is_prime(1000000007) == 1, "1000000007 is prime");
+
+    # Carmichael numbers (fool simple Fermat tests)
+    assert(is_prime(561) == 0, "561 carmichael");
+    assert(is_prime(1105) == 0, "1105 carmichael");
+    assert(is_prime(1729) == 0, "1729 carmichael");
+    assert(is_prime(2465) == 0, "2465 carmichael");
+    assert(is_prime(2821) == 0, "2821 carmichael");
+    assert(is_prime(6601) == 0, "6601 carmichael");
+    assert(is_prime(8911) == 0, "8911 carmichael");
+    return 0;
+}
+
+fn test_next_prime() {
+    assert_eq(next_prime(0), 2, "next_prime(0)");
+    assert_eq(next_prime(1), 2, "next_prime(1)");
+    assert_eq(next_prime(2), 3, "next_prime(2)");
+    assert_eq(next_prime(4), 5, "next_prime(4)");
+    assert_eq(next_prime(100), 101, "next_prime(100)");
+    assert_eq(next_prime(113), 127, "next_prime(113)");
+    return 0;
+}
+
+fn test_prev_prime() {
+    var r = prev_prime(2);
+    assert(tag(r) == ERR, "prev_prime(2) is Err");
+    r = prev_prime(3);
+    assert(tag(r) == OK, "prev_prime(3) is Ok");
+    assert_eq(payload(r), 2, "prev_prime(3) == 2");
+    r = prev_prime(10);
+    assert_eq(payload(r), 7, "prev_prime(10) == 7");
+    r = prev_prime(100);
+    assert_eq(payload(r), 97, "prev_prime(100) == 97");
+    r = prev_prime(128);
+    assert_eq(payload(r), 127, "prev_prime(128) == 127");
+    return 0;
+}
+
+fn test_factor() {
+    var f = factor(0);
+    assert_eq(vec_len(f), 0, "factor(0) empty");
+    f = factor(1);
+    assert_eq(vec_len(f), 0, "factor(1) empty");
+    f = factor(2);
+    assert_eq(vec_len(f), 1, "factor(2) len");
+    assert_eq(vec_get(f, 0), 2, "factor(2)[0]");
+    f = factor(12);
+    assert_eq(vec_len(f), 3, "factor(12) len");
+    assert_eq(vec_get(f, 0), 2, "factor(12)[0]");
+    assert_eq(vec_get(f, 1), 2, "factor(12)[1]");
+    assert_eq(vec_get(f, 2), 3, "factor(12)[2]");
+    f = factor(360);
+    assert_eq(vec_len(f), 6, "factor(360) len");
+    assert_eq(vec_get(f, 0), 2, "factor(360)[0]");
+    assert_eq(vec_get(f, 1), 2, "factor(360)[1]");
+    assert_eq(vec_get(f, 2), 2, "factor(360)[2]");
+    assert_eq(vec_get(f, 3), 3, "factor(360)[3]");
+    assert_eq(vec_get(f, 4), 3, "factor(360)[4]");
+    assert_eq(vec_get(f, 5), 5, "factor(360)[5]");
+    # Prime number factors to itself
+    f = factor(97);
+    assert_eq(vec_len(f), 1, "factor(97) len");
+    assert_eq(vec_get(f, 0), 97, "factor(97)[0]");
+    # Powers of two
+    f = factor(64);
+    assert_eq(vec_len(f), 6, "factor(64) len");
+    return 0;
+}
+
+fn test_totient() {
+    assert_eq(totient(0), 0, "totient(0)");
+    assert_eq(totient(1), 1, "totient(1)");
+    assert_eq(totient(2), 1, "totient(2)");
+    assert_eq(totient(6), 2, "totient(6)");
+    assert_eq(totient(12), 4, "totient(12)");
+    assert_eq(totient(36), 12, "totient(36)");
+    # totient(p) = p-1 for prime p
+    assert_eq(totient(97), 96, "totient(97)");
+    assert_eq(totient(101), 100, "totient(101)");
+    # totient(2^k) = 2^(k-1)
+    assert_eq(totient(8), 4, "totient(8)");
+    assert_eq(totient(16), 8, "totient(16)");
+    assert_eq(totient(1024), 512, "totient(1024)");
+    return 0;
+}
+
+fn test_fibonacci() {
+    assert_eq(fibonacci(0), 0, "fib(0)");
+    assert_eq(fibonacci(1), 1, "fib(1)");
+    assert_eq(fibonacci(2), 1, "fib(2)");
+    assert_eq(fibonacci(3), 2, "fib(3)");
+    assert_eq(fibonacci(4), 3, "fib(4)");
+    assert_eq(fibonacci(5), 5, "fib(5)");
+    assert_eq(fibonacci(6), 8, "fib(6)");
+    assert_eq(fibonacci(7), 13, "fib(7)");
+    assert_eq(fibonacci(8), 21, "fib(8)");
+    assert_eq(fibonacci(9), 34, "fib(9)");
+    assert_eq(fibonacci(10), 55, "fib(10)");
+    assert_eq(fibonacci(20), 6765, "fib(20)");
+    # Overflow returns -1
+    assert_eq(fibonacci(93), 0 - 1, "fib(93) overflow");
+    assert_eq(fibonacci(100), 0 - 1, "fib(100) overflow");
+    return 0;
+}
+
+fn test_binomial() {
+    assert_eq(binomial(0, 0), 1, "C(0,0)");
+    assert_eq(binomial(5, 0), 1, "C(5,0)");
+    assert_eq(binomial(5, 5), 1, "C(5,5)");
+    assert_eq(binomial(5, 2), 10, "C(5,2)");
+    assert_eq(binomial(10, 3), 120, "C(10,3)");
+    assert_eq(binomial(20, 10), 184756, "C(20,10)");
+    # k > n returns 0
+    assert_eq(binomial(3, 5), 0, "C(3,5)");
+    # Symmetry
+    assert_eq(binomial(10, 3), binomial(10, 7), "C(10,3)==C(10,7)");
+    assert_eq(binomial(15, 4), binomial(15, 11), "C(15,4)==C(15,11)");
+    # Pascal's triangle: C(n,k) = C(n-1,k-1) + C(n-1,k)
+    assert_eq(binomial(10, 5), binomial(9, 4) + binomial(9, 5), "pascal(10,5)");
+    assert_eq(binomial(8, 3), binomial(7, 2) + binomial(7, 3), "pascal(8,3)");
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    println("=== abaco ntheory tests ===");
+    test_is_prime();
+    test_next_prime();
+    test_prev_prime();
+    test_factor();
+    test_totient();
+    test_fibonacci();
+    test_binomial();
+    assert_summary();
+    return 0;
+}
+
+var r = main();
+syscall(SYS_EXIT, r);

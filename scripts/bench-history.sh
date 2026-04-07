@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run criterion benchmarks and produce two outputs:
-#   1) CSV history (appended each run)   — for tracking regressions over time
-#   2) Markdown table (overwritten)      — last 3 runs per benchmark for trend tracking
+# Run Cyrius benchmarks and produce two outputs:
+#   1) CSV history (appended each run)   — tracking regressions over time
+#   2) Markdown table (overwritten)      — last 3 runs per benchmark for trends
 #
 # Usage:
 #   ./scripts/bench-history.sh                          # defaults
@@ -14,99 +14,97 @@ MD_FILE="${2:-bench-latest.md}"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+CC2="${CYRIUS_HOME:-$HOME/.cyrius}/bin/cc2"
 
 # Create CSV header if file doesn't exist
 if [ ! -f "$HISTORY_FILE" ]; then
-    echo "timestamp,commit,branch,benchmark,low_ns,estimate_ns,high_ns" > "$HISTORY_FILE"
+    echo "timestamp,commit,branch,benchmark,avg_ns,min_ns,max_ns" > "$HISTORY_FILE"
 fi
 
 echo "Running benchmarks..."
-echo "  commit: $COMMIT"
-echo "  branch: $BRANCH"
+echo "  commit:  $COMMIT"
+echo "  branch:  $BRANCH"
+echo "  compiler: $CC2"
 echo ""
 
-# Run benchmarks and capture output, stripping ANSI escape codes
-BENCH_OUTPUT=$(cargo bench --bench benchmarks 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
+# Build benchmark binary
+cat benches/bench.cyr | "$CC2" > build/bench
+chmod +x build/bench
 
-# Show full output
+# Run and capture output
+BENCH_OUTPUT=$(./build/bench 2>&1)
 echo "$BENCH_OUTPUT"
 echo ""
 
-# ── Helper: normalise a value+unit pair to nanoseconds ───────────────────────
+# ── Helper: parse time string to nanoseconds ────────────────────────────────
 to_ns() {
-    local val="$1" unit="$2"
-    case "$unit" in
-        ps)     awk "BEGIN {printf \"%.4f\", $val / 1000}" ;;
-        ns)     echo "$val" ;;
-        µs|us)  awk "BEGIN {printf \"%.4f\", $val * 1000}" ;;
-        ms)     awk "BEGIN {printf \"%.4f\", $val * 1000000}" ;;
-        s)      awk "BEGIN {printf \"%.4f\", $val * 1000000000}" ;;
-        *)      echo "$val" ;;
-    esac
+    local val="$1"
+    # Input format: "17us", "534ns", "3us", "1.23ms", "0.456s"
+    if [[ "$val" == *"ms"* ]]; then
+        val="${val%ms}"
+        awk "BEGIN {printf \"%.0f\", $val * 1000000}"
+    elif [[ "$val" == *"us"* ]]; then
+        val="${val%us}"
+        awk "BEGIN {printf \"%.0f\", $val * 1000}"
+    elif [[ "$val" == *"ns"* ]]; then
+        val="${val%ns}"
+        echo "$val"
+    elif [[ "$val" == *"s"* ]]; then
+        val="${val%s}"
+        awk "BEGIN {printf \"%.0f\", $val * 1000000000}"
+    else
+        echo "$val"
+    fi
 }
 
-# ── Helper: format ns to a human-readable string ────────────────────────────
+# ── Helper: format ns to human-readable ─────────────────────────────────────
 human_ns() {
     local ns="$1"
     awk "BEGIN {
         v = $ns
-        if      (v < 1)           printf \"%.2f ps\", v * 1000
-        else if (v < 1000)        printf \"%.2f ns\", v
-        else if (v < 1000000)     printf \"%.2f µs\", v / 1000
+        if      (v < 1000)        printf \"%.0f ns\", v
+        else if (v < 1000000)     printf \"%.2f us\", v / 1000
         else if (v < 1000000000)  printf \"%.2f ms\", v / 1000000
         else                      printf \"%.2f s\",  v / 1000000000
     }"
 }
 
-# ── Parse criterion output and append to CSV ─────────────────────────────────
+# ── Parse bench output and append to CSV ────────────────────────────────────
+# Format: "  name: 17us avg (min=16us max=42us) [10000 iters]"
 LINES_ADDED=0
-PREV_LINE=""
 
 while IFS= read -r line; do
-    if [[ "$line" == *"time:"*"["* ]]; then
-        # Extract benchmark name
-        BENCH_NAME=$(echo "$line" | sed -E 's/[[:space:]]*time:.*//' | xargs)
-        if [ -z "$BENCH_NAME" ]; then
-            BENCH_NAME=$(echo "$PREV_LINE" | xargs)
-        fi
+    if [[ "$line" == *"avg"*"min="*"max="* ]]; then
+        # Extract name (between leading spaces and colon)
+        BENCH_NAME=$(echo "$line" | sed -E 's/^[[:space:]]*//' | sed -E 's/:.*//')
+        # Extract avg value
+        AVG_RAW=$(echo "$line" | sed -E 's/.*: ([^ ]+) avg.*/\1/')
+        # Extract min value
+        MIN_RAW=$(echo "$line" | sed -E 's/.*min=([^ ]+) .*/\1/')
+        # Extract max value
+        MAX_RAW=$(echo "$line" | sed -E 's/.*max=([^)]+)\).*/\1/')
 
-        # Extract the three values inside brackets: [low mid high]
-        VALS=$(echo "$line" | sed -E 's/.*\[(.+)\]/\1/')
-        LOW_VAL=$(echo "$VALS" | awk '{print $1}')
-        LOW_UNIT=$(echo "$VALS" | awk '{print $2}')
-        MID_VAL=$(echo "$VALS" | awk '{print $3}')
-        MID_UNIT=$(echo "$VALS" | awk '{print $4}')
-        HIGH_VAL=$(echo "$VALS" | awk '{print $5}')
-        HIGH_UNIT=$(echo "$VALS" | awk '{print $6}')
+        AVG_NS=$(to_ns "$AVG_RAW")
+        MIN_NS=$(to_ns "$MIN_RAW")
+        MAX_NS=$(to_ns "$MAX_RAW")
 
-        LOW_NS=$(to_ns "$LOW_VAL" "$LOW_UNIT")
-        MID_NS=$(to_ns "$MID_VAL" "$MID_UNIT")
-        HIGH_NS=$(to_ns "$HIGH_VAL" "$HIGH_UNIT")
-
-        # Append to CSV
-        echo "${TIMESTAMP},${COMMIT},${BRANCH},${BENCH_NAME},${LOW_NS},${MID_NS},${HIGH_NS}" >> "$HISTORY_FILE"
+        echo "${TIMESTAMP},${COMMIT},${BRANCH},${BENCH_NAME},${AVG_NS},${MIN_NS},${MAX_NS}" >> "$HISTORY_FILE"
         LINES_ADDED=$((LINES_ADDED + 1))
     fi
-    PREV_LINE="$line"
 done <<< "$BENCH_OUTPUT"
 
-# ── Build 3-point tracking markdown from CSV history ─────────────────────────
-# Collect the last 3 unique run timestamps
+# ── Build 3-point tracking markdown from CSV history ────────────────────────
 TIMESTAMPS=($(tail -n +2 "$HISTORY_FILE" | awk -F, '{print $1}' | sort -u | tail -3))
 NUM_TS=${#TIMESTAMPS[@]}
 
-# Labels for columns (most recent last)
 declare -a COL_LABELS=()
 for i in $(seq 0 $((NUM_TS - 1))); do
     ts="${TIMESTAMPS[$i]}"
-    # Extract commit for this timestamp
     col_commit=$(grep "^${ts}," "$HISTORY_FILE" | head -1 | awk -F, '{print $2}')
-    # Short date + commit
     short_date=$(echo "$ts" | sed 's/T.*//; s/^20//')
     COL_LABELS+=("${short_date} (${col_commit})")
 done
 
-# Get ordered list of benchmark names (preserve order from latest run)
 LATEST_TS="${TIMESTAMPS[$((NUM_TS - 1))]}"
 BENCH_NAMES=($(grep "^${LATEST_TS}," "$HISTORY_FILE" | awk -F, '{print $4}'))
 
@@ -114,7 +112,6 @@ BENCH_NAMES=($(grep "^${LATEST_TS}," "$HISTORY_FILE" | awk -F, '{print $4}'))
     echo "# Benchmark Results — Last ${NUM_TS} Runs"
     echo ""
 
-    # Header row
     HEADER="| Benchmark |"
     SEP="|-----------|"
     for label in "${COL_LABELS[@]}"; do
@@ -124,12 +121,10 @@ BENCH_NAMES=($(grep "^${LATEST_TS}," "$HISTORY_FILE" | awk -F, '{print $4}'))
     echo "$HEADER"
     echo "$SEP"
 
-    # Data rows
     for bench in "${BENCH_NAMES[@]}"; do
         ROW="| ${bench} |"
         for ts in "${TIMESTAMPS[@]}"; do
-            # Find the estimate_ns (column 6) for this bench at this timestamp
-            est_ns=$(grep "^${ts},.*,${bench}," "$HISTORY_FILE" | awk -F, '{print $6}' | head -1)
+            est_ns=$(grep "^${ts},.*,${bench}," "$HISTORY_FILE" | awk -F, '{print $5}' | head -1)
             if [ -n "$est_ns" ]; then
                 ROW+=" $(human_ns "$est_ns") |"
             else
@@ -140,7 +135,7 @@ BENCH_NAMES=($(grep "^${LATEST_TS}," "$HISTORY_FILE" | awk -F, '{print $4}'))
     done
 
     echo ""
-    echo "_Generated by \`scripts/bench-history.sh\` — showing point estimates from last ${NUM_TS} runs_"
+    echo "_Generated by \`scripts/bench-history.sh\` — Cyrius port benchmarks_"
 } > "$MD_FILE"
 
 echo ""

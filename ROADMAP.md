@@ -12,6 +12,15 @@
 - [ ] BPM ↔ Hz conversion (`registry.convert(120.0, "bpm", "Hz")`)
 - [ ] Samples ↔ milliseconds (sample-rate-aware)
 
+## Cyrius Port — unlocks hisab
+
+- [ ] Port core module (Value struct, Unit struct, constants)
+- [ ] Port ntheory module (pure i64, no deps)
+- [x] Port dsp module (all 23 functions, Cyrius 1.7.8 transcendentals)
+- [ ] Port eval module (tokenizer + recursive descent parser)
+- [ ] Port units module (registry + hashmap)
+- [ ] **BLOCKER**: ai module — requires network/async (reqwest, tokio, chrono, serde_json); hoosh problem
+
 ## Ecosystem Rollout
 
 - [ ] Audit shruti for duplicated math that should use `abaco::dsp`

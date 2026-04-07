@@ -1,0 +1,23 @@
+# abaco — Cyrius port
+# Ported from 5550 lines of Rust
+
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/syscalls.cyr"
+include "lib/tagged.cyr"
+
+include "src/core.cyr"
+include "src/ntheory.cyr"
+include "src/dsp.cyr"
+
+fn main() {
+    alloc_init();
+    println("abaco ready");
+    return 0;
+}
+
+var r = main();
+syscall(SYS_EXIT, r);

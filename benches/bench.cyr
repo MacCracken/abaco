@@ -1,0 +1,425 @@
+# abaco benchmarks
+# Parity with rust-old/benches/benchmarks.rs (ported modules only)
+# Run: cat benches/bench.cyr | cc2 > build/bench && chmod +x build/bench && ./build/bench
+
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/syscalls.cyr"
+include "lib/tagged.cyr"
+include "lib/fnptr.cyr"
+include "lib/bench.cyr"
+
+include "src/core.cyr"
+include "src/ntheory.cyr"
+include "src/dsp.cyr"
+
+var BENCH_ITERS = 10000;
+
+# ================================================================
+# ntheory benchmarks
+# ================================================================
+
+fn _bench_is_prime_small() { is_prime(104729); return 0; }
+fn _bench_is_prime_large() { is_prime(999999999989); return 0; }
+fn _bench_next_prime() { next_prime(1000000); return 0; }
+fn _bench_factor_small() { factor(360); return 0; }
+fn _bench_factor_large() { factor(1234567890); return 0; }
+fn _bench_totient() { totient(1000000); return 0; }
+fn _bench_fibonacci() { fibonacci(92); return 0; }
+fn _bench_binomial() { binomial(60, 30); return 0; }
+
+fn run_ntheory_benches() {
+    println("--- ntheory ---");
+
+    var b = bench_new("is_prime_small");
+    bench_run(b, &_bench_is_prime_small, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("is_prime_large");
+    bench_run(b, &_bench_is_prime_large, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("next_prime");
+    bench_run(b, &_bench_next_prime, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("factor_small");
+    bench_run(b, &_bench_factor_small, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("factor_large");
+    bench_run(b, &_bench_factor_large, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("totient");
+    bench_run(b, &_bench_totient, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("fibonacci");
+    bench_run(b, &_bench_fibonacci, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("binomial");
+    bench_run(b, &_bench_binomial, BENCH_ITERS);
+    bench_report(b);
+
+    return 0;
+}
+
+# ================================================================
+# dsp benchmarks
+# ================================================================
+
+fn _bench_poly_blep_mid() {
+    var half = f64_div(f64_from(1), f64_from(2));
+    var dt = f64_div(f64_from(1), f64_from(100));
+    poly_blep(half, dt);
+    return 0;
+}
+
+fn _bench_poly_blep_edge() {
+    var t = f64_div(f64_from(5), f64_from(1000));
+    var dt = f64_div(f64_from(1), f64_from(100));
+    poly_blep(t, dt);
+    return 0;
+}
+
+fn _bench_angular_freq() {
+    angular_frequency(f64_from(1000), f64_from(44100));
+    return 0;
+}
+
+fn _bench_sanitize_finite() {
+    sanitize_sample(f64_from(42));
+    return 0;
+}
+
+fn _bench_sanitize_nan() {
+    sanitize_sample(0x7FF8000000000000);
+    return 0;
+}
+
+fn _bench_hypot() {
+    f64_hypot(f64_from(3), f64_from(4));
+    return 0;
+}
+
+fn _bench_lerp() {
+    var half = f64_div(f64_from(1), f64_from(2));
+    f64_lerp(f64_from(0), f64_from(100), half);
+    return 0;
+}
+
+fn _bench_clamp() {
+    f64_clamp(f64_from(5), f64_from(0), f64_from(10));
+    return 0;
+}
+
+fn _bench_round() {
+    f64_round(f64_div(f64_from(37), f64_from(10)));
+    return 0;
+}
+
+fn _bench_sqrt() {
+    f64_sqrt(f64_from(2));
+    return 0;
+}
+
+fn _bench_abs() {
+    f64_abs(f64_neg(f64_from(42)));
+    return 0;
+}
+
+fn _bench_amp_to_db() {
+    amplitude_to_db(f64_div(f64_from(1), f64_from(2)));
+    return 0;
+}
+
+fn _bench_db_to_amp() {
+    db_to_amplitude(f64_neg(f64_from(6)));
+    return 0;
+}
+
+fn _bench_db_gain() {
+    db_gain_factor(f64_from(12));
+    return 0;
+}
+
+fn _bench_midi_to_freq() {
+    midi_to_freq(f64_from(69));
+    return 0;
+}
+
+fn _bench_freq_to_midi() {
+    freq_to_midi(f64_from(440));
+    return 0;
+}
+
+fn _bench_time_const() {
+    time_constant(f64_from(10), f64_from(44100));
+    return 0;
+}
+
+fn _bench_pan_center() {
+    var l = alloc(8);
+    var r = alloc(8);
+    constant_power_pan(f64_from(0), l, r);
+    return 0;
+}
+
+fn _bench_crossfade_mid() {
+    var a = alloc(8);
+    var b = alloc(8);
+    equal_power_crossfade(f64_div(f64_from(1), f64_from(2)), a, b);
+    return 0;
+}
+
+fn run_dsp_benches() {
+    println("--- dsp ---");
+
+    var b = bench_new("poly_blep_mid");
+    bench_run(b, &_bench_poly_blep_mid, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("poly_blep_edge");
+    bench_run(b, &_bench_poly_blep_edge, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("angular_frequency");
+    bench_run(b, &_bench_angular_freq, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("sanitize_finite");
+    bench_run(b, &_bench_sanitize_finite, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("sanitize_nan");
+    bench_run(b, &_bench_sanitize_nan, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("hypot");
+    bench_run(b, &_bench_hypot, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("lerp");
+    bench_run(b, &_bench_lerp, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("clamp");
+    bench_run(b, &_bench_clamp, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("round");
+    bench_run(b, &_bench_round, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("sqrt");
+    bench_run(b, &_bench_sqrt, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("abs");
+    bench_run(b, &_bench_abs, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("amplitude_to_db");
+    bench_run(b, &_bench_amp_to_db, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("db_to_amplitude");
+    bench_run(b, &_bench_db_to_amp, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("db_gain_factor");
+    bench_run(b, &_bench_db_gain, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("midi_to_freq");
+    bench_run(b, &_bench_midi_to_freq, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("freq_to_midi");
+    bench_run(b, &_bench_freq_to_midi, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("time_constant");
+    bench_run(b, &_bench_time_const, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("pan_center");
+    bench_run(b, &_bench_pan_center, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("crossfade_mid");
+    bench_run(b, &_bench_crossfade_mid, BENCH_ITERS);
+    bench_report(b);
+
+    return 0;
+}
+
+# ================================================================
+# core benchmarks
+# ================================================================
+
+fn _bench_category_name() {
+    category_name(CAT_FREQUENCY);
+    return 0;
+}
+
+fn _bench_category_from_str() {
+    category_from_str("viscosity");
+    return 0;
+}
+
+fn _bench_value_integer() {
+    Value_integer(42);
+    return 0;
+}
+
+fn _bench_value_as_f64() {
+    var v = Value_fraction(355, 113);
+    Value_as_f64(v);
+    return 0;
+}
+
+fn run_core_benches() {
+    println("--- core ---");
+
+    var b = bench_new("category_name");
+    bench_run(b, &_bench_category_name, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("category_from_str");
+    bench_run(b, &_bench_category_from_str, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("value_integer");
+    bench_run(b, &_bench_value_integer, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("value_as_f64");
+    bench_run(b, &_bench_value_as_f64, BENCH_ITERS);
+    bench_report(b);
+
+    return 0;
+}
+
+# ================================================================
+# batch benchmarks (4096 samples)
+# ================================================================
+
+var BATCH_SIZE = 4096;
+var _batch_buf = 0;
+
+# Pre-fill a buffer of 4096 f64 samples: (i/4096)*2 - 1 => [-1, +1)
+fn batch_init() {
+    _batch_buf = alloc(BATCH_SIZE * 8);
+    var denom = f64_from(BATCH_SIZE);
+    var two = f64_from(2);
+    var one = f64_from(1);
+    var i = 0;
+    while (i < BATCH_SIZE) {
+        var v = f64_sub(f64_mul(f64_div(f64_from(i), denom), two), one);
+        store64(_batch_buf + i * 8, v);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _bench_batch_sanitize() {
+    var i = 0;
+    while (i < BATCH_SIZE) {
+        sanitize_sample(load64(_batch_buf + i * 8));
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _bench_batch_poly_blep() {
+    var dt = f64_div(f64_from(1), f64_from(100));
+    var i = 0;
+    while (i < BATCH_SIZE) {
+        var v = f64_abs(load64(_batch_buf + i * 8));
+        poly_blep(v, dt);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _bench_batch_hypot() {
+    var i = 0;
+    while (i < BATCH_SIZE - 1) {
+        var a = load64(_batch_buf + i * 8);
+        var b = load64(_batch_buf + (i + 1) * 8);
+        f64_hypot(a, b);
+        i = i + 2;
+    }
+    return 0;
+}
+
+fn _bench_batch_sqrt() {
+    var i = 0;
+    while (i < BATCH_SIZE) {
+        f64_sqrt(f64_abs(load64(_batch_buf + i * 8)));
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _bench_batch_round() {
+    var i = 0;
+    while (i < BATCH_SIZE) {
+        var v = f64_mul(load64(_batch_buf + i * 8), f64_from(100));
+        f64_round(v);
+        i = i + 1;
+    }
+    return 0;
+}
+
+var BATCH_ITERS = 1000;
+
+fn run_batch_benches() {
+    println("--- batch (4096 samples) ---");
+    batch_init();
+
+    var b = bench_new("sanitize_4096");
+    bench_run(b, &_bench_batch_sanitize, BATCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("poly_blep_4096");
+    bench_run(b, &_bench_batch_poly_blep, BATCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("hypot_4096");
+    bench_run(b, &_bench_batch_hypot, BATCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("sqrt_4096");
+    bench_run(b, &_bench_batch_sqrt, BATCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("round_4096");
+    bench_run(b, &_bench_batch_round, BATCH_ITERS);
+    bench_report(b);
+
+    return 0;
+}
+
+# ================================================================
+# main
+# ================================================================
+
+fn main() {
+    alloc_init();
+    println("=== abaco benchmarks ===");
+    run_ntheory_benches();
+    run_dsp_benches();
+    run_core_benches();
+    run_batch_benches();
+    return 0;
+}
+
+var r = main();
+syscall(SYS_EXIT, r);

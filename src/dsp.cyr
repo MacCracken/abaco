@@ -1,0 +1,222 @@
+# abaco::dsp - DSP math primitives
+# Ported from rust-old/src/dsp.rs (448 lines)
+# Requires Cyrius 1.7.8+ (sqrt, abs, floor, ceil, sin, cos, exp, ln, log2, exp2)
+
+# -- Constants (as f64 bit patterns) --
+# TAU = 2 * pi = 6.283185307179586
+var DSP_TAU = 0x401921FB54442D18;
+# PI = 3.141592653589793
+var DSP_PI = 0x400921FB54442D18;
+# PI/4 = 0.7853981633974483
+var DSP_PI_4 = 0x3FE921FB54442D18;
+# PI/2 = 1.5707963267948966
+var DSP_PI_2 = 0x3FF921FB54442D18;
+# 1/sqrt(2) = 0.7071067811865476
+var DSP_FRAC_1_SQRT2 = 0x3FE6A09E667F3BCD;
+# A4 reference frequency (440.0 Hz)
+var DSP_A4_FREQ = 0x407B800000000000;
+# A4 MIDI note number (69.0)
+var DSP_A4_MIDI = 0x4051400000000000;
+# Semitones per octave (12.0)
+var DSP_SEMITONES = 0x4028000000000000;
+
+# -- Angular frequency --
+# w0 = 2*pi * freq_hz / sample_rate
+# Used in biquad filter coefficient design
+fn angular_frequency(freq_hz, sample_rate) {
+    return f64_div(f64_mul(DSP_TAU, freq_hz), sample_rate);
+}
+
+# -- PolyBLEP correction --
+# Reduces aliasing in saw/square/pulse waveforms
+# t = normalized phase (0.0-1.0), dt = phase increment (freq/sample_rate)
+# All values are f64 bit patterns
+fn poly_blep(t, dt) {
+    var zero = f64_from(0);
+    var one = f64_from(1);
+    var two = f64_from(2);
+    if (f64_gt(dt, zero) == 0) { return zero; }
+    if (f64_lt(t, dt) == 1) {
+        # Just past discontinuity: 2*t/dt - (t/dt)^2 - 1
+        var td = f64_div(t, dt);
+        return f64_sub(f64_sub(f64_mul(two, td), f64_mul(td, td)), one);
+    }
+    var threshold = f64_sub(one, dt);
+    if (f64_gt(t, threshold) == 1) {
+        # Just before discontinuity: (t-1)/dt)^2 + 2*(t-1)/dt + 1
+        var td = f64_div(f64_sub(t, one), dt);
+        return f64_add(f64_add(f64_mul(td, td), f64_mul(two, td)), one);
+    }
+    return zero;
+}
+
+# -- Sanitize sample --
+# Replace NaN or Inf with 0.0
+# Check: (bits & 0x7FF0000000000000) == 0x7FF0000000000000
+fn sanitize_sample(s) {
+    var exp_mask = 0x7FF0000000000000;
+    if ((s & exp_mask) == exp_mask) {
+        return f64_from(0);
+    }
+    return s;
+}
+
+# -- Clamp f64 to [lo, hi] --
+fn f64_clamp(v, lo, hi) {
+    if (f64_lt(v, lo) == 1) { return lo; }
+    if (f64_gt(v, hi) == 1) { return hi; }
+    return v;
+}
+
+# -- f64 max/min --
+fn f64_max(a, b) {
+    if (f64_gt(a, b) == 1) { return a; }
+    return b;
+}
+
+fn f64_min(a, b) {
+    if (f64_lt(a, b) == 1) { return a; }
+    return b;
+}
+
+# -- Linear interpolation --
+# lerp(a, b, t) = a + t * (b - a)
+fn f64_lerp(a, b, t) {
+    return f64_add(a, f64_mul(t, f64_sub(b, a)));
+}
+
+# -- RMS of two values --
+# rms(a, b) = sqrt((a^2 + b^2) / 2)
+fn f64_rms2(a, b) {
+    var sum = f64_add(f64_mul(a, a), f64_mul(b, b));
+    return f64_sqrt(f64_div(sum, f64_from(2)));
+}
+
+# -- Distance (2D Euclidean) --
+# dist(x, y) = sqrt(x^2 + y^2)
+fn f64_hypot(x, y) {
+    return f64_sqrt(f64_add(f64_mul(x, x), f64_mul(y, y)));
+}
+
+# -- Truncate toward zero (available via f64_to + f64_from but loses precision) --
+# trunc(x) = floor(x) if x >= 0, ceil(x) if x < 0
+fn f64_trunc(x) {
+    var zero = f64_from(0);
+    if (f64_lt(x, zero) == 1) { return f64_ceil(x); }
+    return f64_floor(x);
+}
+
+# -- Fractional part --
+# fract(x) = x - floor(x)
+fn f64_fract(x) {
+    return f64_sub(x, f64_floor(x));
+}
+
+# -- Round to nearest (half away from zero) --
+# round(x) = floor(x + 0.5)
+fn f64_round(x) {
+    var half = f64_div(f64_from(1), f64_from(2));
+    var zero = f64_from(0);
+    if (f64_lt(x, zero) == 1) {
+        return f64_ceil(f64_sub(x, half));
+    }
+    return f64_floor(f64_add(x, half));
+}
+
+# -- Sign function --
+# sign(x) = -1 if x < 0, 0 if x == 0, 1 if x > 0
+fn f64_sign(x) {
+    var zero = f64_from(0);
+    if (f64_lt(x, zero) == 1) { return f64_neg(f64_from(1)); }
+    if (f64_gt(x, zero) == 1) { return f64_from(1); }
+    return zero;
+}
+
+# ================================================================
+# Decibel conversions
+# ================================================================
+
+# Precomputed: 20/ln(10) = 8.685889638...
+var DB_SCALE = 0x40215D38B4E225BA;
+# Precomputed: ln(10)/20 = 0.115129254...
+var DB_EXP = 0x3FBD764D5B4BCDB5;
+# Precomputed: ln(10)/40 = 0.057564627...
+var DB_GAIN_EXP = 0x3FAD764D5B4BCDB5;
+
+# amplitude_to_db: 20/ln(10) * ln(amp), NEG_INF if amp <= 0
+fn amplitude_to_db(amp) {
+    var zero = f64_from(0);
+    if (f64_gt(amp, zero) == 0) { return 0xFFF0000000000000; }
+    return f64_mul(DB_SCALE, f64_ln(amp));
+}
+
+# db_to_amplitude: exp(db * ln(10)/20)
+fn db_to_amplitude(db) {
+    return f64_exp(f64_mul(db, DB_EXP));
+}
+
+# db_gain_factor: exp(db * ln(10)/40) -- for filter coefficient design
+fn db_gain_factor(db) {
+    return f64_exp(f64_mul(db, DB_GAIN_EXP));
+}
+
+# ================================================================
+# MIDI <-> Frequency (12-TET, A4 = 440 Hz)
+# ================================================================
+
+# midi_to_freq: 440 * 2^((note - 69) / 12)
+fn midi_to_freq(note) {
+    var exponent = f64_div(f64_sub(note, DSP_A4_MIDI), DSP_SEMITONES);
+    return f64_mul(DSP_A4_FREQ, f64_exp2(exponent));
+}
+
+# freq_to_midi: 69 + 12 * log2(freq / 440), NEG_INF if freq <= 0
+fn freq_to_midi(freq) {
+    var zero = f64_from(0);
+    if (f64_gt(freq, zero) == 0) { return 0xFFF0000000000000; }
+    return f64_add(DSP_A4_MIDI, f64_mul(DSP_SEMITONES, f64_log2(f64_div(freq, DSP_A4_FREQ))));
+}
+
+# ================================================================
+# Envelope / dynamics
+# ================================================================
+
+# time_constant: one-pole smoothing coefficient from time in ms
+# c = exp(-1 / (time_ms * 0.001 * sample_rate))
+fn time_constant(time_ms, sample_rate) {
+    var one = f64_from(1);
+    var thousand = f64_from(1000);
+    var samples = f64_mul(f64_div(time_ms, thousand), sample_rate);
+    samples = f64_max(samples, one);
+    return f64_exp(f64_neg(f64_div(one, samples)));
+}
+
+# ================================================================
+# Panning / crossfade
+# ================================================================
+
+# constant_power_pan: sin/cos law stereo panning
+# pan in [-1, +1], returns (left, right) via output pointers
+# theta = (pan + 1) * PI/4, left = cos(theta), right = sin(theta)
+fn constant_power_pan(pan, out_left, out_right) {
+    var neg1 = f64_neg(f64_from(1));
+    var pos1 = f64_from(1);
+    pan = f64_clamp(pan, neg1, pos1);
+    var theta = f64_mul(f64_add(pan, pos1), DSP_PI_4);
+    store64(out_left, f64_cos(theta));
+    store64(out_right, f64_sin(theta));
+    return 0;
+}
+
+# equal_power_crossfade: smooth crossfade at position t in [0, 1]
+# returns (gain_a, gain_b) via output pointers
+# angle = t * PI/2, gain_a = cos(angle), gain_b = sin(angle)
+fn equal_power_crossfade(t, out_a, out_b) {
+    var zero = f64_from(0);
+    var one = f64_from(1);
+    t = f64_clamp(t, zero, one);
+    var angle = f64_mul(t, DSP_PI_2);
+    store64(out_a, f64_cos(angle));
+    store64(out_b, f64_sin(angle));
+    return 0;
+}
