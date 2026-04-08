@@ -2,15 +2,6 @@
 # Parity with rust-old/benches/benchmarks.rs (ported modules only)
 # Run: cat benches/bench.cyr | cc2 > build/bench && chmod +x build/bench && ./build/bench
 
-include "lib/string.cyr"
-include "lib/fmt.cyr"
-include "lib/alloc.cyr"
-include "lib/vec.cyr"
-include "lib/str.cyr"
-include "lib/syscalls.cyr"
-include "lib/tagged.cyr"
-include "lib/fnptr.cyr"
-include "lib/bench.cyr"
 
 include "src/core.cyr"
 include "src/ntheory.cyr"
@@ -378,10 +369,63 @@ fn _bench_batch_round() {
     return 0;
 }
 
+var _batch_buf2 = 0;
+var _batch_dst = 0;
+
+fn batch2_init() {
+    _batch_buf2 = alloc(BATCH_SIZE * 8);
+    _batch_dst = alloc(BATCH_SIZE * 8);
+    var denom = f64_from(BATCH_SIZE);
+    var i = 0;
+    while (i < BATCH_SIZE) {
+        store64(_batch_buf2 + i * 8, f64_div(f64_from(i + 1), denom));
+        i = i + 1;
+    }
+    return 0;
+}
+
+# SIMD batch benchmarks
+fn _bench_simd_add_4096() {
+    f64v_add(_batch_dst, _batch_buf, _batch_buf2, BATCH_SIZE);
+    return 0;
+}
+
+fn _bench_simd_mul_4096() {
+    f64v_mul(_batch_dst, _batch_buf, _batch_buf2, BATCH_SIZE);
+    return 0;
+}
+
+fn _bench_simd_sub_4096() {
+    f64v_sub(_batch_dst, _batch_buf, _batch_buf2, BATCH_SIZE);
+    return 0;
+}
+
+fn _bench_batch_mac_4096() {
+    var i = 0;
+    while (i < BATCH_SIZE) { store64(_batch_dst + i * 8, f64_from(0)); i = i + 1; }
+    batch_mac(_batch_dst, _batch_buf, _batch_buf2, BATCH_SIZE);
+    return 0;
+}
+
+fn _bench_simd_div_4096() {
+    f64v_div(_batch_dst, _batch_buf, _batch_buf2, BATCH_SIZE);
+    return 0;
+}
+
+fn _bench_simd_sqrt_4096() {
+    f64v_sqrt(_batch_dst, _batch_buf, BATCH_SIZE);
+    return 0;
+}
+
+fn _bench_simd_abs_4096() {
+    f64v_abs(_batch_dst, _batch_buf, BATCH_SIZE);
+    return 0;
+}
+
 var BATCH_ITERS = 1000;
 
 fn run_batch_benches() {
-    println("--- batch (4096 samples) ---");
+    println("--- batch scalar (4096 samples) ---");
     batch_init();
 
     var b = bench_new("sanitize_4096");
@@ -402,6 +446,37 @@ fn run_batch_benches() {
 
     b = bench_new("round_4096");
     bench_run(b, &_bench_batch_round, BATCH_ITERS);
+    bench_report(b);
+
+    println("--- batch SIMD (4096 samples) ---");
+    batch2_init();
+
+    b = bench_new("simd_add_4096");
+    bench_run(b, &_bench_simd_add_4096, BATCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("simd_mul_4096");
+    bench_run(b, &_bench_simd_mul_4096, BATCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("simd_sub_4096");
+    bench_run(b, &_bench_simd_sub_4096, BATCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("simd_mac_4096");
+    bench_run(b, &_bench_batch_mac_4096, BATCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("simd_div_4096");
+    bench_run(b, &_bench_simd_div_4096, BATCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("simd_sqrt_4096");
+    bench_run(b, &_bench_simd_sqrt_4096, BATCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("simd_abs_4096");
+    bench_run(b, &_bench_simd_abs_4096, BATCH_ITERS);
     bench_report(b);
 
     return 0;

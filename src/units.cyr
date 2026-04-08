@@ -113,6 +113,23 @@ fn UnitRegistry_find(r, query) {
     return 0;
 }
 
+# -- List all units in a category --
+# Returns a vec of unit pointers for the given category
+fn UnitRegistry_list(r, category) {
+    var result = vec_new();
+    var all = load64(r);
+    var len = vec_len(all);
+    var i = 0;
+    while (i < len) {
+        var u = vec_get(all, i);
+        if (Unit_category(u) == category) {
+            vec_push(result, u);
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
 # -- Convert value between units --
 fn UnitRegistry_convert(r, value, from_str, to_str) {
     reg_set_err(r, UERR_NONE);
@@ -207,30 +224,45 @@ fn reg_populate(r) {
     reg_add(r, "mebibyte", "MiB", CAT_DATASIZE, f64_from(1048576), zero);
     reg_add(r, "gibibyte", "GiB", CAT_DATASIZE, f64_from(1073741824), zero);
 
+    reg_add(r, "tebibyte", "TiB", CAT_DATASIZE, f64_mul(f64_from(1073741824), f64_from(1024)), zero);
+    reg_add(r, "petabyte", "PB", CAT_DATASIZE, f64_mul(f64_mul(f64_from(1000000), f64_from(1000000)), f64_from(1000)), zero);
+    reg_add(r, "pebibyte", "PiB", CAT_DATASIZE, f64_mul(f64_mul(f64_from(1048576), f64_from(1048576)), f64_from(1024)), zero);
+
     # -- Speed (base: m/s) --
     reg_add(r, "meters_per_second", "m/s", CAT_SPEED, f64_from(1), zero);
     reg_add(r, "kilometers_per_hour", "km/h", CAT_SPEED, f64_div(f64_from(1), f64_div(f64_from(36), f64_from(10))), zero);
     reg_add(r, "miles_per_hour", "mph", CAT_SPEED, f64_div(f64_from(44704), f64_from(100000)), zero);
     reg_add(r, "knot", "kn", CAT_SPEED, f64_div(f64_from(514444), f64_from(1000000)), zero);
+    reg_add(r, "feet_per_second", "ft/s", CAT_SPEED, f64_div(f64_from(3048), f64_from(10000)), zero);
+    reg_add(r, "yards_per_second", "yd/s", CAT_SPEED, f64_div(f64_from(9144), f64_from(10000)), zero);
 
     # -- Area (base: sq meter) --
     reg_add(r, "square_meter", "m2", CAT_AREA, f64_from(1), zero);
     reg_add(r, "square_kilometer", "km2", CAT_AREA, f64_from(1000000), zero);
     reg_add(r, "hectare", "ha", CAT_AREA, f64_from(10000), zero);
     reg_add(r, "square_foot", "ft2", CAT_AREA, f64_div(f64_from(92903), f64_from(1000000)), zero);
+    reg_add(r, "square_inch", "in2", CAT_AREA, f64_div(f64_from(64516), f64_from(100000000)), zero);
+    reg_add(r, "acre", "ac", CAT_AREA, f64_div(f64_from(40468564), f64_from(10000)), zero);
 
     # -- Volume (base: liter) --
     reg_add(r, "liter", "L", CAT_VOLUME, f64_from(1), zero);
     reg_add(r, "milliliter", "mL", CAT_VOLUME, f64_div(f64_from(1), f64_from(1000)), zero);
     reg_add(r, "gallon", "gal", CAT_VOLUME, f64_div(f64_from(378541), f64_from(100000)), zero);
+    reg_add(r, "quart", "qt", CAT_VOLUME, f64_div(f64_from(946353), f64_from(1000000)), zero);
+    reg_add(r, "pint", "pt", CAT_VOLUME, f64_div(f64_from(473176), f64_from(1000000)), zero);
     reg_add(r, "cup", "cup", CAT_VOLUME, f64_div(f64_from(236588), f64_from(1000000)), zero);
+    reg_add(r, "tablespoon", "tbsp", CAT_VOLUME, f64_div(f64_from(147868), f64_from(10000000)), zero);
+    reg_add(r, "teaspoon", "tsp", CAT_VOLUME, f64_div(f64_from(492892), f64_from(100000000)), zero);
 
     # -- Energy (base: joule) --
     reg_add(r, "joule", "J", CAT_ENERGY, f64_from(1), zero);
     reg_add(r, "kilojoule", "kJ", CAT_ENERGY, f64_from(1000), zero);
     reg_add(r, "calorie", "cal", CAT_ENERGY, f64_div(f64_from(4184), f64_from(1000)), zero);
     reg_add(r, "kilocalorie", "kcal", CAT_ENERGY, f64_from(4184), zero);
+    reg_add(r, "watt_hour", "Wh", CAT_ENERGY, f64_from(3600), zero);
     reg_add(r, "kilowatt_hour", "kWh", CAT_ENERGY, f64_from(3600000), zero);
+    reg_add(r, "btu", "BTU", CAT_ENERGY, f64_div(f64_from(105506), f64_from(100)), zero);
+    reg_add(r, "megajoule", "MJ", CAT_ENERGY, f64_from(1000000), zero);
 
     # -- Pressure (base: pascal) --
     reg_add(r, "pascal", "Pa", CAT_PRESSURE, f64_from(1), zero);
@@ -238,10 +270,15 @@ fn reg_populate(r) {
     reg_add(r, "bar", "bar", CAT_PRESSURE, f64_from(100000), zero);
     reg_add(r, "atmosphere", "atm", CAT_PRESSURE, f64_from(101325), zero);
     reg_add(r, "psi", "psi", CAT_PRESSURE, f64_div(f64_from(689476), f64_from(100)), zero);
+    reg_add(r, "mmhg", "mmHg", CAT_PRESSURE, f64_div(f64_from(133322), f64_from(1000)), zero);
+    reg_add(r, "torr", "torr", CAT_PRESSURE, f64_div(f64_from(133322), f64_from(1000)), zero);
 
     # -- Angle (base: radian) --
     reg_add(r, "radian", "rad", CAT_ANGLE, f64_from(1), zero);
     reg_add(r, "degree", "deg", CAT_ANGLE, f64_div(0x400921FB54442D18, f64_from(180)), zero);
+    reg_add(r, "gradian", "grad", CAT_ANGLE, f64_div(0x400921FB54442D18, f64_from(200)), zero);
+    reg_add(r, "arcminute", "arcmin", CAT_ANGLE, f64_div(0x400921FB54442D18, f64_from(10800)), zero);
+    reg_add(r, "arcsecond", "arcsec", CAT_ANGLE, f64_div(0x400921FB54442D18, f64_from(648000)), zero);
 
     # -- Frequency (base: hertz) --
     reg_add(r, "hertz", "Hz", CAT_FREQUENCY, f64_from(1), zero);
@@ -253,6 +290,8 @@ fn reg_populate(r) {
     reg_add(r, "newton", "N", CAT_FORCE, f64_from(1), zero);
     reg_add(r, "kilonewton", "kN", CAT_FORCE, f64_from(1000), zero);
     reg_add(r, "pound_force", "lbf", CAT_FORCE, f64_div(f64_from(444822), f64_from(100000)), zero);
+    reg_add(r, "dyne", "dyn", CAT_FORCE, f64_div(f64_from(1), f64_from(100000)), zero);
+    reg_add(r, "kilogram_force", "kgf", CAT_FORCE, f64_div(f64_from(980665), f64_from(100000)), zero);
 
     # -- Power (base: watt) --
     reg_add(r, "watt", "W", CAT_POWER, f64_from(1), zero);
@@ -269,13 +308,20 @@ fn reg_populate(r) {
     # -- Density (base: kg/m3) --
     reg_add(r, "kilogram_per_cubic_meter", "kg/m3", CAT_DENSITY, f64_from(1), zero);
     reg_add(r, "gram_per_cubic_centimeter", "g/cm3", CAT_DENSITY, f64_from(1000), zero);
+    reg_add(r, "gram_per_milliliter", "g/mL", CAT_DENSITY, f64_from(1000), zero);
+    reg_add(r, "kilogram_per_liter", "kg/L", CAT_DENSITY, f64_from(1000), zero);
+    reg_add(r, "pound_per_cubic_foot", "lb/ft3", CAT_DENSITY, f64_div(f64_from(160185), f64_from(10000)), zero);
 
     # -- Luminosity (base: lux) --
     reg_add(r, "lux", "lx", CAT_LUMINOSITY, f64_from(1), zero);
     reg_add(r, "foot_candle", "fc", CAT_LUMINOSITY, f64_div(f64_from(107639), f64_from(10000)), zero);
+    reg_add(r, "lumen_per_square_meter", "lm/m2", CAT_LUMINOSITY, f64_from(1), zero);
+    reg_add(r, "phot", "ph", CAT_LUMINOSITY, f64_from(10000), zero);
 
     # -- Viscosity (base: Pa-s) --
     reg_add(r, "pascal_second", "Pas", CAT_VISCOSITY, f64_from(1), zero);
+    reg_add(r, "millipascal_second", "mPas", CAT_VISCOSITY, f64_div(f64_from(1), f64_from(1000)), zero);
+    reg_add(r, "poise", "P", CAT_VISCOSITY, f64_div(f64_from(1), f64_from(10)), zero);
     reg_add(r, "centipoise", "cP", CAT_VISCOSITY, f64_div(f64_from(1), f64_from(1000)), zero);
 
     return 0;
@@ -291,13 +337,19 @@ fn reg_aliases(r) {
     reg_alias(r, "kilometres", "km");
     reg_alias(r, "feet", "ft");
     reg_alias(r, "inches", "in");
+    reg_alias(r, "centimetres", "cm");
+    reg_alias(r, "millimetres", "mm");
     # Mass
+    reg_alias(r, "kilogramme", "kg");
+    reg_alias(r, "gramme", "g");
     reg_alias(r, "lbs", "lb");
     reg_alias(r, "pounds", "lb");
     reg_alias(r, "ounces", "oz");
+    reg_alias(r, "tonnes", "t");
     # Speed
     reg_alias(r, "kph", "km/h");
     reg_alias(r, "kmh", "km/h");
+    reg_alias(r, "kmph", "km/h");
     reg_alias(r, "knots", "kn");
     # Time
     reg_alias(r, "seconds", "s");
@@ -308,23 +360,43 @@ fn reg_aliases(r) {
     reg_alias(r, "days", "d");
     reg_alias(r, "weeks", "wk");
     reg_alias(r, "years", "yr");
+    reg_alias(r, "yrs", "yr");
     # Volume
     reg_alias(r, "litre", "L");
     reg_alias(r, "litres", "L");
+    reg_alias(r, "millilitre", "mL");
+    reg_alias(r, "millilitres", "mL");
     reg_alias(r, "gallons", "gal");
+    reg_alias(r, "quarts", "qt");
+    reg_alias(r, "pints", "pt");
+    reg_alias(r, "cups", "cup");
+    reg_alias(r, "tablespoons", "tbsp");
+    reg_alias(r, "teaspoons", "tsp");
     # Energy
     reg_alias(r, "joules", "J");
+    reg_alias(r, "kilojoules", "kJ");
     reg_alias(r, "calories", "cal");
+    reg_alias(r, "kilocalories", "kcal");
     # Pressure
     reg_alias(r, "pascals", "Pa");
     reg_alias(r, "atmospheres", "atm");
+    reg_alias(r, "bars", "bar");
     # Angle
     reg_alias(r, "radians", "rad");
     reg_alias(r, "degrees", "deg");
+    # Frequency
+    reg_alias(r, "hertz", "Hz");
+    # Fuel economy
+    reg_alias(r, "km per liter", "km/L");
+    reg_alias(r, "km per litre", "km/L");
     # Area
     reg_alias(r, "hectares", "ha");
+    reg_alias(r, "acres", "ac");
     reg_alias(r, "sq m", "m2");
     reg_alias(r, "sq km", "km2");
     reg_alias(r, "sq ft", "ft2");
+    reg_alias(r, "square meter", "m2");
+    reg_alias(r, "square metre", "m2");
+    reg_alias(r, "square feet", "ft2");
     return 0;
 }

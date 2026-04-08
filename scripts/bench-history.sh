@@ -15,6 +15,7 @@ TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
 CC2="${CYRIUS_HOME:-$HOME/.cyrius}/bin/cc2"
+CYRB="${CYRIUS_HOME:-$HOME/.cyrius}/bin/cyrb"
 
 # Create CSV header if file doesn't exist
 if [ ! -f "$HISTORY_FILE" ]; then
@@ -27,12 +28,14 @@ echo "  branch:  $BRANCH"
 echo "  compiler: $CC2"
 echo ""
 
-# Build benchmark binary
-cat benches/bench.cyr | "$CC2" > build/bench
-chmod +x build/bench
-
-# Run and capture output
-BENCH_OUTPUT=$(./build/bench 2>&1)
+# Run all benchmark files via cyrb
+BENCH_OUTPUT=""
+for benchfile in benches/bench.cyr benches/bench_eval.cyr benches/bench_units.cyr; do
+    if [ -f "$benchfile" ]; then
+        BENCH_OUTPUT="${BENCH_OUTPUT}
+$("$CYRB" bench "$benchfile" 2>&1)"
+    fi
+done
 echo "$BENCH_OUTPUT"
 echo ""
 

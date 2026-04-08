@@ -1,0 +1,112 @@
+# abaco units benchmarks
+# Parity with rust-old unit_conversion, unit_lookup, unit_conversion_ext, registry_creation
+
+include "src/core.cyr"
+include "src/units.cyr"
+
+var BENCH_ITERS = 10000;
+var _reg = 0;
+
+fn _bench_km_to_miles() { UnitRegistry_convert(_reg, f64_from(100), "km", "mi"); return 0; }
+fn _bench_c_to_f() { UnitRegistry_convert(_reg, f64_from(100), "C", "F"); return 0; }
+fn _bench_bytes_to_gb() { UnitRegistry_convert(_reg, f64_from(1000000000), "B", "GB"); return 0; }
+fn _bench_bytes_to_gib() { UnitRegistry_convert(_reg, f64_from(1073741824), "B", "GiB"); return 0; }
+fn _bench_gb_to_gib() { UnitRegistry_convert(_reg, f64_from(1), "GB", "GiB"); return 0; }
+fn _bench_same_unit() { UnitRegistry_convert(_reg, f64_from(42), "km", "km"); return 0; }
+
+fn _bench_lookup_symbol() { UnitRegistry_find(_reg, "km"); return 0; }
+fn _bench_lookup_name() { UnitRegistry_find(_reg, "kilometer"); return 0; }
+fn _bench_lookup_case() { UnitRegistry_find(_reg, "Kilometer"); return 0; }
+fn _bench_lookup_plural() { UnitRegistry_find(_reg, "meters"); return 0; }
+fn _bench_lookup_miss() { UnitRegistry_find(_reg, "nonexistent"); return 0; }
+fn _bench_lookup_alias() { UnitRegistry_find(_reg, "kph"); return 0; }
+
+fn _bench_fuel() { UnitRegistry_convert(_reg, f64_from(30), "mpg", "L/100km"); return 0; }
+fn _bench_density() { UnitRegistry_convert(_reg, f64_from(1), "g/cm3", "kg/m3"); return 0; }
+fn _bench_viscosity() { UnitRegistry_convert(_reg, f64_from(1), "cP", "Pas"); return 0; }
+fn _bench_lux() { UnitRegistry_convert(_reg, f64_from(100), "lx", "fc"); return 0; }
+
+fn _bench_registry_new() { UnitRegistry_new(); return 0; }
+
+fn main() {
+    alloc_init();
+    _reg = UnitRegistry_new();
+    println("=== units benchmarks ===");
+
+    println("--- unit_conversion ---");
+    var b = bench_new("km_to_miles");
+    bench_run(b, &_bench_km_to_miles, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("celsius_to_fahr");
+    bench_run(b, &_bench_c_to_f, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("bytes_to_gb");
+    bench_run(b, &_bench_bytes_to_gb, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("bytes_to_gib");
+    bench_run(b, &_bench_bytes_to_gib, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("gb_to_gib_cross");
+    bench_run(b, &_bench_gb_to_gib, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("same_unit_id");
+    bench_run(b, &_bench_same_unit, BENCH_ITERS);
+    bench_report(b);
+
+    println("--- unit_lookup ---");
+    b = bench_new("exact_symbol");
+    bench_run(b, &_bench_lookup_symbol, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("by_name");
+    bench_run(b, &_bench_lookup_name, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("case_insensitive");
+    bench_run(b, &_bench_lookup_case, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("plural");
+    bench_run(b, &_bench_lookup_plural, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("miss");
+    bench_run(b, &_bench_lookup_miss, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("alias_kph");
+    bench_run(b, &_bench_lookup_alias, BENCH_ITERS);
+    bench_report(b);
+
+    println("--- unit_conversion_ext ---");
+    b = bench_new("mpg_to_l100km");
+    bench_run(b, &_bench_fuel, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("density_g_to_kg");
+    bench_run(b, &_bench_density, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("viscosity_cp_pas");
+    bench_run(b, &_bench_viscosity, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("lux_to_fc");
+    bench_run(b, &_bench_lux, BENCH_ITERS);
+    bench_report(b);
+
+    println("--- registry ---");
+    b = bench_new("registry_creation");
+    bench_run(b, &_bench_registry_new, 1000);
+    bench_report(b);
+
+    return 0;
+}
+
+var r = main();
+syscall(SYS_EXIT, r);

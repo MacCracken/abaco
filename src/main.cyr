@@ -1,15 +1,6 @@
 # abaco — Cyrius port
 # Ported from 5550 lines of Rust
-
-include "lib/string.cyr"
-include "lib/fmt.cyr"
-include "lib/alloc.cyr"
-include "lib/vec.cyr"
-include "lib/str.cyr"
-include "lib/syscalls.cyr"
-include "lib/tagged.cyr"
-
-include "lib/hashmap.cyr"
+# stdlib deps resolved via cyrb.toml
 
 include "src/core.cyr"
 include "src/ntheory.cyr"

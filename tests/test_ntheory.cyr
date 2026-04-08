@@ -1,14 +1,6 @@
 # abaco ntheory tests
 # Run: cat tests/test_ntheory.cyr | cc2 > /tmp/test_ntheory && chmod +x /tmp/test_ntheory && /tmp/test_ntheory
 
-include "lib/string.cyr"
-include "lib/fmt.cyr"
-include "lib/alloc.cyr"
-include "lib/vec.cyr"
-include "lib/str.cyr"
-include "lib/syscalls.cyr"
-include "lib/tagged.cyr"
-include "lib/assert.cyr"
 
 include "src/core.cyr"
 include "src/ntheory.cyr"

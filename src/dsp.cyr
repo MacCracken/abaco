@@ -1,6 +1,6 @@
 # abaco::dsp - DSP math primitives
 # Ported from rust-old/src/dsp.rs (448 lines)
-# Requires Cyrius 1.7.8+ (sqrt, abs, floor, ceil, sin, cos, exp, ln, log2, exp2)
+# Requires Cyrius 1.9.2+ (transcendentals + SIMD f64v_add/sub/mul)
 
 # -- Constants (as f64 bit patterns) --
 # TAU = 2 * pi = 6.283185307179586
@@ -219,4 +219,82 @@ fn equal_power_crossfade(t, out_a, out_b) {
     store64(out_a, f64_cos(angle));
     store64(out_b, f64_sin(angle));
     return 0;
+}
+
+# ================================================================
+# SIMD batch operations (Cyrius 1.9.2+ f64v_add/sub/mul)
+# ================================================================
+
+# Batch add: dst[i] = a[i] + b[i] for n elements
+fn batch_add(dst, a, b, n) {
+    f64v_add(dst, a, b, n);
+    return 0;
+}
+
+# Batch subtract: dst[i] = a[i] - b[i] for n elements
+fn batch_sub(dst, a, b, n) {
+    f64v_sub(dst, a, b, n);
+    return 0;
+}
+
+# Batch multiply: dst[i] = a[i] * b[i] for n elements
+fn batch_mul(dst, a, b, n) {
+    f64v_mul(dst, a, b, n);
+    return 0;
+}
+
+# Batch scale: dst[i] = src[i] * scalar for n elements
+# Fills a temp buffer with scalar, then uses SIMD mul
+fn batch_scale(dst, src, scalar, n) {
+    var sbuf = alloc(n * 8);
+    var i = 0;
+    while (i < n) {
+        store64(sbuf + i * 8, scalar);
+        i = i + 1;
+    }
+    f64v_mul(dst, src, sbuf, n);
+    return 0;
+}
+
+# Batch multiply-accumulate: dst[i] += a[i] * b[i]
+fn batch_mac(dst, a, b, n) {
+    var tmp = alloc(n * 8);
+    f64v_mul(tmp, a, b, n);
+    f64v_add(dst, dst, tmp, n);
+    return 0;
+}
+
+# Batch divide: dst[i] = a[i] / b[i] for n elements
+fn batch_div(dst, a, b, n) {
+    f64v_div(dst, a, b, n);
+    return 0;
+}
+
+# Batch sqrt: dst[i] = sqrt(src[i]) for n elements
+fn batch_sqrt(dst, src, n) {
+    f64v_sqrt(dst, src, n);
+    return 0;
+}
+
+# Batch abs: dst[i] = |src[i]| for n elements
+fn batch_abs(dst, src, n) {
+    f64v_abs(dst, src, n);
+    return 0;
+}
+
+# Batch fused multiply-add: dst[i] = a[i]*b[i] + c[i]
+fn batch_fmadd(dst, a, b, c, n) {
+    f64v_fmadd(dst, a, b, c, n);
+    return 0;
+}
+
+# Batch sum: return sum of n f64 values (scalar reduction)
+fn batch_sum(src, n) {
+    var sum = f64_from(0);
+    var i = 0;
+    while (i < n) {
+        sum = f64_add(sum, load64(src + i * 8));
+        i = i + 1;
+    }
+    return sum;
 }

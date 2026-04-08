@@ -1,0 +1,54 @@
+# abaco SIMD tests
+
+include "src/core.cyr"
+include "src/ntheory.cyr"
+include "src/dsp.cyr"
+
+fn main() {
+    alloc_init();
+    println("=== abaco SIMD tests ===");
+    var a = alloc(32);
+    var b = alloc(32);
+    var dst = alloc(32);
+
+    # f64v_div
+    store64(a, f64_from(100));
+    store64(a + 8, f64_from(49));
+    store64(b, f64_from(4));
+    store64(b + 8, f64_from(7));
+    f64v_div(dst, a, b, 2);
+    assert_eq(f64_to(load64(dst)), 25, "v_div[0]");
+    assert_eq(f64_to(load64(dst + 8)), 7, "v_div[1]");
+
+    # f64v_sqrt
+    f64v_sqrt(dst, a, 2);
+    assert_eq(f64_to(load64(dst)), 10, "v_sqrt[0]");
+    assert_eq(f64_to(load64(dst + 8)), 7, "v_sqrt[1]");
+
+    # f64v_abs
+    store64(a, f64_neg(f64_from(42)));
+    store64(a + 8, f64_from(7));
+    f64v_abs(dst, a, 2);
+    assert_eq(f64_to(load64(dst)), 42, "v_abs[0]");
+    assert_eq(f64_to(load64(dst + 8)), 7, "v_abs[1]");
+
+    # f64v_add (regression)
+    store64(a, f64_from(10));
+    store64(a + 8, f64_from(20));
+    store64(b, f64_from(3));
+    store64(b + 8, f64_from(7));
+    f64v_add(dst, a, b, 2);
+    assert_eq(f64_to(load64(dst)), 13, "v_add[0]");
+    assert_eq(f64_to(load64(dst + 8)), 27, "v_add[1]");
+
+    # f64v_mul (regression)
+    f64v_mul(dst, a, b, 2);
+    assert_eq(f64_to(load64(dst)), 30, "v_mul[0]");
+    assert_eq(f64_to(load64(dst + 8)), 140, "v_mul[1]");
+
+    assert_summary();
+    return 0;
+}
+
+var r = main();
+syscall(SYS_EXIT, r);

@@ -1,11 +1,3 @@
-include "lib/string.cyr"
-include "lib/fmt.cyr"
-include "lib/alloc.cyr"
-include "lib/vec.cyr"
-include "lib/syscalls.cyr"
-include "lib/tagged.cyr"
-include "lib/hashmap.cyr"
-include "lib/assert.cyr"
 
 include "src/core.cyr"
 include "src/units.cyr"

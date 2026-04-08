@@ -19,7 +19,19 @@
 - [x] Port dsp module (all 23 functions, Cyrius 1.7.8 transcendentals)
 - [x] Port eval module (tokenizer + recursive descent parser, 43+ functions)
 - [x] Port units module (80+ units, 18 categories, hashmap registry)
-- [ ] **BLOCKER**: ai module — requires network/async (reqwest, tokio, chrono, serde_json); hoosh problem
+- [x] SIMD batch DSP — f64v_add/sub/mul, batch_add/sub/mul/scale/mac (1us/4096 elements)
+- [x] Parity audit — to_latex, eval_partial, list_units, missing units/aliases, hyperbolic trig
+- [ ] **BLOCKER**: ai module — NL parsing, calculation history, currency conversion; hoosh problem
+
+## Cyrius Port — Known Gaps (intentional or blocked)
+
+- **f32 variants** — Cyrius is f64-only, no f32 type. All DSP uses f64. Not a gap.
+- **Token enum not public** — Tokenizer is internal to eval. Consumers use Evaluator_eval.
+- **Tuple returns** — pan/crossfade use output pointers instead. Cyrius has no multi-return.
+- **asin/acos/atan** — Implemented via sin/cos division (stopgap). Cyrius builtins requested.
+- **sinh/cosh/tanh** — Implemented via exp (stopgap). Cyrius builtins requested.
+- **u128 / is_prime perf** — mod_mul binary method (18-33x vs Rust). Blocked on Cyrius u128.
+- **256 function limit** — Tests must exclude eval to fit units tests. Cyrius raised to 1024 in v1.9+.
 
 ## Ecosystem Rollout
 

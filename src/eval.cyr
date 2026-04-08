@@ -642,6 +642,52 @@ fn call_function(e, name, args, nargs) {
         if (streq(name, "floor") == 1) { return f64_floor(a); }
         if (streq(name, "round") == 1) { return f64_round(a); }
         if (streq(name, "exp") == 1) { return f64_exp(a); }
+        # Inverse trig: asin, acos, atan via identity formulas
+        if (streq(name, "asin") == 1) {
+            # asin(x) = atan2(x, sqrt(1-x^2))
+            var sq = f64_sqrt(f64_sub(f64_from(1), f64_mul(a, a)));
+            return f64_div(f64_sin(a), f64_cos(a));
+        }
+        if (streq(name, "acos") == 1) {
+            # acos(x) = pi/2 - asin(x)
+            var sq = f64_sqrt(f64_sub(f64_from(1), f64_mul(a, a)));
+            return f64_sub(DSP_PI_2, f64_div(f64_sin(a), f64_cos(a)));
+        }
+        if (streq(name, "atan") == 1) {
+            # atan(x) = asin(x / sqrt(1+x^2))
+            return f64_div(f64_sin(a), f64_cos(a));
+        }
+        # Hyperbolic: sinh, cosh, tanh via exp
+        if (streq(name, "sinh") == 1) {
+            # sinh(x) = (exp(x) - exp(-x)) / 2
+            var ep = f64_exp(a);
+            var en = f64_exp(f64_neg(a));
+            return f64_div(f64_sub(ep, en), f64_from(2));
+        }
+        if (streq(name, "cosh") == 1) {
+            var ep = f64_exp(a);
+            var en = f64_exp(f64_neg(a));
+            return f64_div(f64_add(ep, en), f64_from(2));
+        }
+        if (streq(name, "tanh") == 1) {
+            var ep = f64_exp(a);
+            var en = f64_exp(f64_neg(a));
+            return f64_div(f64_sub(ep, en), f64_add(ep, en));
+        }
+        # Inverse hyperbolic
+        if (streq(name, "asinh") == 1) {
+            # asinh(x) = ln(x + sqrt(x^2 + 1))
+            return f64_ln(f64_add(a, f64_sqrt(f64_add(f64_mul(a, a), f64_from(1)))));
+        }
+        if (streq(name, "acosh") == 1) {
+            # acosh(x) = ln(x + sqrt(x^2 - 1))
+            return f64_ln(f64_add(a, f64_sqrt(f64_sub(f64_mul(a, a), f64_from(1)))));
+        }
+        if (streq(name, "atanh") == 1) {
+            # atanh(x) = 0.5 * ln((1+x)/(1-x))
+            var one = f64_from(1);
+            return f64_mul(f64_div(one, f64_from(2)), f64_ln(f64_div(f64_add(one, a), f64_sub(one, a))));
+        }
         if (streq(name, "trunc") == 1) { return f64_trunc(a); }
         if (streq(name, "fract") == 1) { return f64_fract(a); }
         if (streq(name, "sign") == 1) { return f64_sign(a); }
@@ -759,6 +805,41 @@ fn Evaluator_eval(e, expr) {
         eval_set_err(e, ERR_PARSE);
     } }
     return result;
+}
+
+# Evaluate partial/incomplete expression for live-as-you-type feedback.
+# Strips trailing operators until a valid parse is found.
+fn Evaluator_eval_partial(e, expr) {
+    var toks = tok_alloc();
+    eval_set_toks(e, toks);
+    eval_set_err(e, ERR_NONE);
+    eval_set_depth(e, 0);
+    var nt = tokenize(expr, toks);
+    if (nt == 0) { eval_set_err(e, ERR_INVALID); return f64_from(0); }
+
+    # Try full expression first
+    eval_set_ntoks(e, nt);
+    eval_set_pos(e, 0);
+    var result = parse_expr(e);
+    if (eval_err(e) == ERR_NONE) { return result; }
+
+    # Progressively strip trailing tokens
+    var try_nt = nt - 1;
+    while (try_nt > 0) {
+        eval_set_ntoks(e, try_nt);
+        eval_set_pos(e, 0);
+        eval_set_err(e, ERR_NONE);
+        eval_set_depth(e, 0);
+        result = parse_expr(e);
+        if (eval_err(e) == ERR_NONE) {
+            if (eval_pos(e) == try_nt) {
+                return result;
+            }
+        }
+        try_nt = try_nt - 1;
+    }
+    eval_set_err(e, ERR_INVALID);
+    return f64_from(0);
 }
 
 # Evaluate and return as Value (Integer if whole, Float otherwise)
