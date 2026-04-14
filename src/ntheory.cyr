@@ -1,6 +1,4 @@
-# abaco::ntheory - Number theory primitives
-# Ported from rust-old/src/ntheory.rs (524 lines)
-# Pure i64 math: primality, factorization, combinatorics
+# abaco::ntheory — number theory primitives: primality, factorization, totient, fibonacci, binomial.
 
 # -- Modular multiplication (binary method to avoid overflow) --
 # Computes (a * b) % m without exceeding i64

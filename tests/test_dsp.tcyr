@@ -237,6 +237,90 @@ fn test_crossfade() {
     return 0;
 }
 
+fn test_windows() {
+    # Symmetry: hann(0, N) ~ hann(N-1, N) ~ 0 for odd N, both 0 for any N.
+    assert_f64_near(window_hann(0, 64), f64_from(0), 5, "hann start 0");
+    assert_f64_near(window_hann(63, 64), f64_from(0), 5, "hann end 0");
+    # Peak at middle of Hann is 1.0.
+    var mid = window_hann(31, 63);
+    assert_f64_near(mid, f64_from(1), 5, "hann mid ~1");
+    # Hamming endpoints are 0.08 (non-zero), peak near 1.
+    var hstart = window_hamming(0, 64);
+    var hmid = window_hamming(31, 63);
+    assert(f64_lt(hstart, f64_div(f64_from(1), f64_from(10))) == 1, "hamm start small");
+    assert(f64_gt(hmid, f64_div(f64_from(99), f64_from(100))) == 1, "hamm mid ~1");
+    # Blackman endpoints are near zero.
+    assert_f64_near(window_blackman(0, 64), f64_from(0), 5, "blk start 0");
+    # Kaiser(beta=0) reduces to rectangular (all ones).
+    var k0 = window_kaiser(10, 64, f64_from(0));
+    assert_f64_near(k0, f64_from(1), 5, "kaiser b0 = 1");
+    # Kaiser endpoints with beta=8 are small; peak is 1.
+    var kstart = window_kaiser(0, 64, f64_from(8));
+    var kmid = window_kaiser(31, 63, f64_from(8));
+    assert(f64_lt(kstart, f64_div(f64_from(1), f64_from(10))) == 1, "kaiser b8 start small");
+    assert_f64_near(kmid, f64_from(1), 10, "kaiser b8 mid ~1");
+    return 0;
+}
+
+fn test_interpolation() {
+    # Cubic should pass through b at t=0 and through c at t=1.
+    var a = f64_from(0);
+    var b = f64_from(1);
+    var c = f64_from(2);
+    var d = f64_from(3);
+    assert_f64_near(f64_cubic(a, b, c, d, f64_from(0)), b, 5, "cubic t=0 = b");
+    assert_f64_near(f64_cubic(a, b, c, d, f64_from(1)), c, 5, "cubic t=1 = c");
+    # For equally spaced collinear data cubic = lerp, t=0.5 -> 1.5.
+    assert_f64_near(f64_cubic(a, b, c, d, f64_div(f64_from(1), f64_from(2))), f64_div(f64_from(3), f64_from(2)), 10, "cubic linear midpoint");
+    # sinc(0) = 1.
+    assert_f64_near(f64_sinc(f64_from(0)), f64_from(1), 5, "sinc 0 = 1");
+    # sinc(1) = 0.
+    assert_f64_near(f64_sinc(f64_from(1)), f64_from(0), 5, "sinc 1 = 0");
+    # sinc_kernel outside half-width is 0.
+    var zero = f64_from(0);
+    assert_f64_near(sinc_kernel(f64_from(5), f64_from(4)), zero, 5, "sinc_kernel out");
+    # At x=0 kernel equals Hann envelope midpoint which ~= 1 * 1 = 1.
+    var kv = sinc_kernel(zero, f64_from(4));
+    assert_f64_near(kv, f64_from(1), 10, "sinc_kernel 0");
+    return 0;
+}
+
+fn test_chromagram() {
+    # A4 (440 Hz) -> pitch class 9 (A).
+    assert_eq(freq_to_pitch_class(DSP_A4_FREQ), 9, "A4 is A");
+    # C4 = 261.625 Hz -> pitch class 0 (C).
+    var c4 = f64_div(f64_from(2616250), f64_from(10000));
+    assert_eq(freq_to_pitch_class(c4), 0, "C4 is C");
+    # E5 -> pitch class 4.
+    var e5 = f64_div(f64_from(6593000), f64_from(10000));
+    assert_eq(freq_to_pitch_class(e5), 4, "E5 is E");
+    # Negative / zero freq -> -1.
+    assert_eq(freq_to_pitch_class(f64_from(0)), 0 - 1, "pc zero = -1");
+    # Octave: A4 is octave 4.
+    assert_eq(freq_to_octave(DSP_A4_FREQ), 4, "A4 oct 4");
+    # Names.
+    assert(streq(pitch_class_name(0), "C") == 1, "name C");
+    assert(streq(pitch_class_name(9), "A") == 1, "name A");
+    assert(streq(pitch_class_name(11), "B") == 1, "name B");
+    return 0;
+}
+
+fn test_audio_conv() {
+    # 1 sample at 1000 Hz = 1 ms.
+    assert_f64_near(samples_to_ms(f64_from(1), f64_from(1000)), f64_from(1), 5, "1 sample @ 1kHz = 1ms");
+    # 441 samples at 44100 Hz = 10 ms.
+    assert_f64_near(samples_to_ms(f64_from(441), f64_from(44100)), f64_from(10), 5, "441 smp @ 44.1k");
+    # Round trip.
+    var ms = f64_from(23);
+    var sr = f64_from(48000);
+    var back = samples_to_ms(ms_to_samples(ms, sr), sr);
+    assert_f64_near(back, ms, 5, "samples<->ms round trip");
+    # BPM <-> Hz.
+    assert_f64_near(bpm_to_hz(f64_from(120)), f64_from(2), 5, "120 bpm = 2 Hz");
+    assert_f64_near(hz_to_bpm(f64_from(1)), f64_from(60), 5, "1 Hz = 60 bpm");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco dsp tests ===");
@@ -254,6 +338,10 @@ fn main() {
     test_time_constant();
     test_pan();
     test_crossfade();
+    test_windows();
+    test_interpolation();
+    test_chromagram();
+    test_audio_conv();
     assert_summary();
     return 0;
 }

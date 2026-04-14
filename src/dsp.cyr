@@ -1,6 +1,5 @@
-# abaco::dsp - DSP math primitives
-# Ported from rust-old/src/dsp.rs (448 lines)
-# Requires Cyrius 1.9.2+ (transcendentals + SIMD f64v_add/sub/mul)
+# abaco::dsp — DSP math primitives: windows, interpolation, dB/MIDI, SIMD batch ops.
+# Requires Cyrius 1.9.2+ (transcendentals + SIMD f64v_add/sub/mul).
 
 # -- Constants (as f64 bit patterns) --
 # TAU = 2 * pi = 6.283185307179586
@@ -297,4 +296,186 @@ fn batch_sum(src, n) {
         i = i + 1;
     }
     return sum;
+}
+
+# ================================================================
+# Audio: samples <-> milliseconds (sample-rate aware)
+# ================================================================
+
+fn samples_to_ms(n_samples, sample_rate) {
+    return f64_div(f64_mul(n_samples, f64_from(1000)), sample_rate);
+}
+
+fn ms_to_samples(ms, sample_rate) {
+    return f64_div(f64_mul(ms, sample_rate), f64_from(1000));
+}
+
+fn bpm_to_hz(bpm) { return f64_div(bpm, f64_from(60)); }
+fn hz_to_bpm(hz)  { return f64_mul(hz, f64_from(60)); }
+
+# ================================================================
+# Window functions — single-sample generators for FFT/STFT
+# All accept (n, size) where n is the sample index and size is window length.
+# Return the window coefficient at that sample as an f64.
+# ================================================================
+
+var WIN_HAMM_A = 0x3FE147AE147AE148;   # 0.54
+var WIN_HAMM_B = 0x3FDD70A3D70A3D71;   # 0.46
+var WIN_BLK_A  = 0x3FDAE147AE147AE1;   # 0.42
+var WIN_BLK_C  = 0x3FB47AE147AE147B;   # 0.08
+
+# Hann: 0.5 * (1 - cos(2π n / (N-1)))
+fn window_hann(n, size) {
+    if (size <= 1) { return DSP_ONE; }
+    var phase = f64_div(f64_mul(DSP_TAU, f64_from(n)), f64_from(size - 1));
+    return f64_mul(DSP_HALF, f64_sub(DSP_ONE, f64_cos(phase)));
+}
+
+# Hamming: 0.54 - 0.46 * cos(2π n / (N-1))
+fn window_hamming(n, size) {
+    if (size <= 1) { return DSP_ONE; }
+    var phase = f64_div(f64_mul(DSP_TAU, f64_from(n)), f64_from(size - 1));
+    return f64_sub(WIN_HAMM_A, f64_mul(WIN_HAMM_B, f64_cos(phase)));
+}
+
+# Blackman: 0.42 - 0.5*cos(2π n/(N-1)) + 0.08*cos(4π n/(N-1))
+fn window_blackman(n, size) {
+    if (size <= 1) { return DSP_ONE; }
+    var phase = f64_div(f64_mul(DSP_TAU, f64_from(n)), f64_from(size - 1));
+    var p2 = f64_add(phase, phase);
+    var t1 = f64_mul(DSP_HALF, f64_cos(phase));
+    var t2 = f64_mul(WIN_BLK_C, f64_cos(p2));
+    return f64_add(f64_sub(WIN_BLK_A, t1), t2);
+}
+
+# Modified Bessel I0 series (used by Kaiser). Converges for any finite x.
+fn _bessel_i0(x) {
+    var sum = f64_from(1);
+    var term = f64_from(1);
+    var half_x = f64_div(x, f64_from(2));
+    var hx2 = f64_mul(half_x, half_x);
+    var k = 1;
+    while (k < 30) {
+        var kf = f64_from(k);
+        term = f64_mul(term, f64_div(hx2, f64_mul(kf, kf)));
+        sum = f64_add(sum, term);
+        k = k + 1;
+    }
+    return sum;
+}
+
+# Kaiser: I0(β * sqrt(1 - (2n/(N-1) - 1)^2)) / I0(β)
+# beta controls side-lobe attenuation (common values: 5, 8, 14).
+# For whole-window fills prefer window_kaiser_fill — it hoists the I0(β) denom.
+fn window_kaiser(n, size, beta) {
+    if (size <= 1) { return DSP_ONE; }
+    var x = f64_sub(f64_div(f64_mul(DSP_TWO, f64_from(n)), f64_from(size - 1)), DSP_ONE);
+    var arg = f64_mul(beta, f64_sqrt(f64_sub(DSP_ONE, f64_mul(x, x))));
+    return f64_div(_bessel_i0(arg), _bessel_i0(beta));
+}
+
+# Fill dst[0..size] with a Kaiser window — computes I0(β) once.
+fn window_kaiser_fill(dst, size, beta) {
+    if (size <= 0) { return 0; }
+    if (size == 1) { store64(dst, DSP_ONE); return 0; }
+    var inv_denom = f64_div(DSP_ONE, _bessel_i0(beta));
+    var nm1 = f64_from(size - 1);
+    var i = 0;
+    while (i < size) {
+        var x = f64_sub(f64_div(f64_mul(DSP_TWO, f64_from(i)), nm1), DSP_ONE);
+        var arg = f64_mul(beta, f64_sqrt(f64_sub(DSP_ONE, f64_mul(x, x))));
+        store64(dst + i * 8, f64_mul(_bessel_i0(arg), inv_denom));
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ================================================================
+# Interpolation
+# ================================================================
+
+# Module-level f64 constants for per-sample hot paths.
+var DSP_HALF       = 0x3FE0000000000000;   # 0.5
+var DSP_ONE        = 0x3FF0000000000000;   # 1.0
+var DSP_TWO        = 0x4000000000000000;   # 2.0
+var DSP_TWO_HALF   = 0x4004000000000000;   # 2.5
+var DSP_ONE_HALF   = 0x3FF8000000000000;   # 1.5
+
+# Cubic (Catmull-Rom) interpolation between b and c, using neighbors a and d.
+# t in [0, 1]. Smooth and passes through control points.
+fn f64_cubic(a, b, c, d, t) {
+    var t2 = f64_mul(t, t);
+    var t3 = f64_mul(t2, t);
+    var c1 = f64_mul(DSP_HALF, f64_sub(c, a));
+    var c2 = f64_add(f64_sub(f64_sub(a, f64_mul(DSP_TWO_HALF, b)), f64_mul(f64_neg(DSP_TWO), c)), f64_mul(f64_neg(DSP_HALF), d));
+    var c3 = f64_add(f64_mul(DSP_HALF, f64_sub(d, a)), f64_mul(DSP_ONE_HALF, f64_sub(b, c)));
+    return f64_add(b, f64_add(f64_mul(c1, t), f64_add(f64_mul(c2, t2), f64_mul(c3, t3))));
+}
+
+# Normalized sinc: sinc(x) = sin(pi x)/(pi x), sinc(0) = 1.
+fn f64_sinc(x) {
+    if (f64_eq(x, f64_from(0)) == 1) { return DSP_ONE; }
+    var px = f64_mul(DSP_PI, x);
+    return f64_div(f64_sin(px), px);
+}
+
+# Windowed sinc kernel sample at offset x (in samples), Hann-windowed,
+# clipped to +-half_width. Used as a resampling kernel.
+fn sinc_kernel(x, half_width) {
+    var ax = x;
+    if (f64_lt(ax, f64_from(0)) == 1) { ax = f64_neg(ax); }
+    if (f64_gt(ax, half_width) == 1) { return f64_from(0); }
+    var phase = f64_div(f64_mul(DSP_TAU, f64_add(x, half_width)), f64_mul(DSP_TWO, half_width));
+    var env = f64_mul(DSP_HALF, f64_sub(DSP_ONE, f64_cos(phase)));
+    return f64_mul(f64_sinc(x), env);
+}
+
+# ================================================================
+# Chromagram helpers — pitch class mapping
+# ================================================================
+
+# C0 = 16.3516 Hz (MIDI note 12). Reference for pitch class computation.
+var DSP_C0_FREQ = 0x4030B40000000000;
+
+# Internal: round(12 * log2(freq / C0)) — semitones above C0 as an integer.
+# Returns -1 when freq <= 0.
+fn _freq_semis_from_c0(freq) {
+    if (f64_gt(freq, f64_from(0)) == 0) { return 0 - 1; }
+    var semis = f64_mul(DSP_SEMITONES, f64_log2(f64_div(freq, DSP_C0_FREQ)));
+    return f64_to(f64_round(semis));
+}
+
+# freq_to_pitch_class: 0..11 for C..B, or -1 when freq <= 0.
+fn freq_to_pitch_class(freq) {
+    var n = _freq_semis_from_c0(freq);
+    if (n < 0) { return 0 - 1; }
+    var pc = n % 12;
+    if (pc < 0) { pc = pc + 12; }
+    return pc;
+}
+
+# freq_to_octave: 0..N indicating which octave above C0 the freq falls in.
+fn freq_to_octave(freq) {
+    var n = _freq_semis_from_c0(freq);
+    if (n < 0) { return 0 - 1; }
+    return n / 12;
+}
+
+# Pitch-class name for 0..11 (12-TET, C..B). Returns "?" out of range.
+fn pitch_class_name(pc) {
+    switch (pc) {
+        case 0:  return "C";
+        case 1:  return "C#";
+        case 2:  return "D";
+        case 3:  return "D#";
+        case 4:  return "E";
+        case 5:  return "F";
+        case 6:  return "F#";
+        case 7:  return "G";
+        case 8:  return "G#";
+        case 9:  return "A";
+        case 10: return "A#";
+        case 11: return "B";
+        default: return "?";
+    }
 }

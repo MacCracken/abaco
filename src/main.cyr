@@ -1,12 +1,12 @@
-# abaco — Cyrius port
-# Ported from 5550 lines of Rust
-# stdlib deps resolved via cyrb.toml
+# abaco — math engine entry point.
+# Library modules are included below; stdlib deps resolve via cyrius.toml.
 
 include "src/core.cyr"
 include "src/ntheory.cyr"
 include "src/dsp.cyr"
 include "src/eval.cyr"
 include "src/units.cyr"
+include "src/ai.cyr"
 
 fn main() {
     alloc_init();

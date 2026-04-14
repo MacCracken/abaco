@@ -1,0 +1,555 @@
+# abaco::ai — natural-language parsing, calculation history, currency conversion.
+#
+# The currency converter is split into a pure rates cache (`set_rates` +
+# `convert`); live HTTP fetch via hoosh is a follow-up once hoosh is added
+# as a sibling dep.
+
+enum AiError {
+    AI_OK;
+    AI_ERR_PARSE;
+    AI_ERR_UNSUPPORTED;
+    AI_ERR_CURRENCY;
+    AI_ERR_HTTP;
+}
+
+# ================================================================
+# ParsedQuery — tagged union
+# Layout: { kind (i64), value (f64 bits), s1 (cstr*), s2 (cstr*) }
+#   kind=0  Calculation(expr=s1)
+#   kind=1  Conversion(value, from=s1, to=s2)
+#   kind=2  CurrencyConversion(value, from=s1, to=s2)
+# ================================================================
+enum ParsedQueryKind {
+    PQ_CALCULATION;
+    PQ_CONVERSION;
+    PQ_CURRENCY;
+}
+
+fn ParsedQuery_new(kind, value, s1, s2) {
+    var p = alloc(32);
+    store64(p, kind);
+    store64(p + 8, value);
+    store64(p + 16, s1);
+    store64(p + 24, s2);
+    return p;
+}
+
+fn pq_kind(p) { return load64(p); }
+fn pq_value(p) { return load64(p + 8); }
+fn pq_s1(p) { return load64(p + 16); }
+fn pq_s2(p) { return load64(p + 24); }
+
+# ================================================================
+# NlParser — pure string parsing. No state.
+# ================================================================
+
+# Split a cstring on a single-byte delimiter into a vec of cstrings.
+# Skips empty segments.
+fn _nl_split(s, delim) {
+    var parts = vec_new();
+    var len = strlen(s);
+    var start = 0;
+    var i = 0;
+    while (i < len) {
+        if (load8(s + i) == delim) {
+            if (i > start) {
+                var n = i - start;
+                var buf = alloc(n + 1);
+                memcpy(buf, s + start, n);
+                store8(buf + n, 0);
+                vec_push(parts, buf);
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    if (len > start) {
+        var n = len - start;
+        var buf = alloc(n + 1);
+        memcpy(buf, s + start, n);
+        store8(buf + n, 0);
+        vec_push(parts, buf);
+    }
+    return parts;
+}
+
+# Split on whitespace runs. Returns a vec of cstrings.
+fn _nl_split_ws(s) {
+    var parts = vec_new();
+    var len = strlen(s);
+    var i = 0;
+    while (i < len) {
+        while (i < len) {
+            if (is_space(load8(s + i)) == 0) { break; }
+            i = i + 1;
+        }
+        var start = i;
+        while (i < len) {
+            if (is_space(load8(s + i)) == 1) { break; }
+            i = i + 1;
+        }
+        if (i > start) {
+            var n = i - start;
+            var buf = alloc(n + 1);
+            memcpy(buf, s + start, n);
+            store8(buf + n, 0);
+            vec_push(parts, buf);
+        }
+    }
+    return parts;
+}
+
+# Return 1 if haystack starts with prefix, else 0.
+fn _nl_starts_with(s, prefix) {
+    var pl = strlen(prefix);
+    var sl = strlen(s);
+    if (sl < pl) { return 0; }
+    var i = 0;
+    while (i < pl) {
+        if (load8(s + i) != load8(prefix + i)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# Strip prefix from s if present; returns fresh copy (of s untouched if no match).
+fn _nl_strip_prefix(s, prefix) {
+    if (_nl_starts_with(s, prefix) == 0) { return s; }
+    var pl = strlen(prefix);
+    var sl = strlen(s);
+    var n = sl - pl;
+    var buf = alloc(n + 1);
+    memcpy(buf, s + pl, n);
+    store8(buf + n, 0);
+    return buf;
+}
+
+# Try parse full cstring as f64. Returns Ok(value) or Err(0).
+# Handles optional sign, decimal point, basic scientific notation.
+fn _nl_parse_f64(s) {
+    var len = strlen(s);
+    if (len == 0) { return Err(0); }
+    var i = 0;
+    var neg = 0;
+    if (load8(s) == 45) { neg = 1; i = 1; }
+    elif (load8(s) == 43) { i = 1; }
+    if (i == len) { return Err(0); }
+    var saw_digit = 0;
+    var int_part = 0;
+    while (i < len) {
+        var c = load8(s + i);
+        if (is_digit(c) == 0) { break; }
+        int_part = int_part * 10 + (c - 48);
+        saw_digit = 1;
+        i = i + 1;
+    }
+    var frac_num = 0;
+    var frac_den = 1;
+    if (i < len) {
+        if (load8(s + i) == 46) {
+            i = i + 1;
+            while (i < len) {
+                var c = load8(s + i);
+                if (is_digit(c) == 0) { break; }
+                frac_num = frac_num * 10 + (c - 48);
+                frac_den = frac_den * 10;
+                saw_digit = 1;
+                i = i + 1;
+            }
+        }
+    }
+    if (saw_digit == 0) { return Err(0); }
+    if (i != len) { return Err(0); }  # trailing junk
+    var v = f64_add(f64_from(int_part), f64_div(f64_from(frac_num), f64_from(frac_den)));
+    if (neg == 1) { v = f64_neg(v); }
+    return Ok(v);
+}
+
+# Known ISO currency codes (lowercase). Returns 1 if w matches any.
+fn _nl_is_currency(w) {
+    if (streq(w, "usd") == 1) { return 1; }
+    if (streq(w, "eur") == 1) { return 1; }
+    if (streq(w, "gbp") == 1) { return 1; }
+    if (streq(w, "jpy") == 1) { return 1; }
+    if (streq(w, "cad") == 1) { return 1; }
+    if (streq(w, "aud") == 1) { return 1; }
+    if (streq(w, "chf") == 1) { return 1; }
+    if (streq(w, "cny") == 1) { return 1; }
+    if (streq(w, "inr") == 1) { return 1; }
+    if (streq(w, "krw") == 1) { return 1; }
+    if (streq(w, "brl") == 1) { return 1; }
+    if (streq(w, "mxn") == 1) { return 1; }
+    if (streq(w, "sek") == 1) { return 1; }
+    if (streq(w, "nok") == 1) { return 1; }
+    if (streq(w, "dkk") == 1) { return 1; }
+    if (streq(w, "nzd") == 1) { return 1; }
+    if (streq(w, "sgd") == 1) { return 1; }
+    if (streq(w, "hkd") == 1) { return 1; }
+    if (streq(w, "try") == 1) { return 1; }
+    if (streq(w, "rub") == 1) { return 1; }
+    if (streq(w, "zar") == 1) { return 1; }
+    if (streq(w, "pln") == 1) { return 1; }
+    if (streq(w, "thb") == 1) { return 1; }
+    if (streq(w, "twd") == 1) { return 1; }
+    return 0;
+}
+
+# ---- NlParser entry points ----------------------------------------------
+
+# Try "<number> <ccy> to/in <ccy>".
+fn _nl_try_currency(lower) {
+    var words = _nl_split_ws(lower);
+    if (vec_len(words) < 4) { return 0; }
+    var valr = _nl_parse_f64(vec_get(words, 0));
+    if (is_ok(valr) != 1) { return 0; }
+    var v = payload(valr);
+    var from = vec_get(words, 1);
+    var conn = vec_get(words, 2);
+    var to   = vec_get(words, 3);
+    if (streq(conn, "to") == 0) { if (streq(conn, "in") == 0) { return 0; } }
+    if (_nl_is_currency(from) == 0) { return 0; }
+    if (_nl_is_currency(to) == 0) { return 0; }
+    return ParsedQuery_new(PQ_CURRENCY, v, str_upper(from), str_upper(to));
+}
+
+# Try "<number> <unit...> to/in <unit...>" (strip optional leading "convert ").
+fn _nl_try_conversion(lower) {
+    var s = _nl_strip_prefix(lower, "convert ");
+    var words = _nl_split_ws(s);
+    var wn = vec_len(words);
+    if (wn < 4) { return 0; }
+    var valr = _nl_parse_f64(vec_get(words, 0));
+    if (is_ok(valr) != 1) { return 0; }
+    var v = payload(valr);
+    # Find "to" or "in" separator at position i >= 2.
+    var i = 2;
+    while (i < wn) {
+        var w = vec_get(words, i);
+        if (streq(w, "to") == 1) { break; }
+        if (streq(w, "in") == 1) { break; }
+        i = i + 1;
+    }
+    if (i >= wn) { return 0; }
+    # from words [1..i], to words [i+1..wn].
+    var from_parts = vec_new();
+    var k = 1;
+    while (k < i) { vec_push(from_parts, vec_get(words, k)); k = k + 1; }
+    var to_parts = vec_new();
+    k = i + 1;
+    while (k < wn) { vec_push(to_parts, vec_get(words, k)); k = k + 1; }
+    if (vec_len(from_parts) == 0) { return 0; }
+    if (vec_len(to_parts) == 0) { return 0; }
+    var from = _nl_join_space(from_parts);
+    var to = _nl_join_space(to_parts);
+    return ParsedQuery_new(PQ_CONVERSION, v, from, to);
+}
+
+# Join a vec of cstrings with a single space; returns a fresh cstring.
+fn _nl_join_space(parts) {
+    var n = vec_len(parts);
+    if (n == 0) {
+        var empty = alloc(1);
+        store8(empty, 0);
+        return empty;
+    }
+    var total = 0;
+    var i = 0;
+    while (i < n) {
+        total = total + strlen(vec_get(parts, i));
+        i = i + 1;
+    }
+    total = total + (n - 1);   # separators
+    var buf = alloc(total + 1);
+    var off = 0;
+    i = 0;
+    while (i < n) {
+        if (i > 0) { store8(buf + off, 32); off = off + 1; }
+        var p = vec_get(parts, i);
+        var pl = strlen(p);
+        memcpy(buf + off, p, pl);
+        off = off + pl;
+        i = i + 1;
+    }
+    store8(buf + total, 0);
+    return buf;
+}
+
+# "<pct>% of <base>" -> "<base> * <pct> / 100", else 0.
+fn _nl_try_percent_of(s) {
+    var needle = "% of ";
+    var len = strlen(s);
+    var nlen = strlen(needle);
+    # find needle in s
+    var pos = 0 - 1;
+    var i = 0;
+    while (i + nlen <= len) {
+        var j = 0;
+        var ok = 1;
+        while (j < nlen) {
+            if (load8(s + i + j) != load8(needle + j)) { ok = 0; break; }
+            j = j + 1;
+        }
+        if (ok == 1) { pos = i; break; }
+        i = i + 1;
+    }
+    if (pos < 0) { return 0; }
+    # pct = s[0..pos], base = s[pos+nlen..]
+    var pct_buf = alloc(pos + 1);
+    memcpy(pct_buf, s, pos);
+    store8(pct_buf + pos, 0);
+    var pct = _nl_trim_simple(pct_buf);
+    var brest_len = len - (pos + nlen);
+    var base_buf = alloc(brest_len + 1);
+    memcpy(base_buf, s + pos + nlen, brest_len);
+    store8(base_buf + brest_len, 0);
+    var base = _nl_trim_simple(base_buf);
+    # Validate pct parses as f64.
+    if (is_ok(_nl_parse_f64(pct)) != 1) { return 0; }
+    # Compose "<base> * <pct> / 100".
+    var bl = strlen(base);
+    var pl = strlen(pct);
+    var out_len = bl + 3 + pl + 6;
+    var out = alloc(out_len + 1);
+    var off = 0;
+    memcpy(out + off, base, bl); off = off + bl;
+    store8(out + off, 32); off = off + 1;
+    store8(out + off, 42); off = off + 1;
+    store8(out + off, 32); off = off + 1;
+    memcpy(out + off, pct, pl); off = off + pl;
+    store8(out + off, 32); off = off + 1;
+    store8(out + off, 47); off = off + 1;
+    store8(out + off, 32); off = off + 1;
+    store8(out + off, 49); off = off + 1;
+    store8(out + off, 48); off = off + 1;
+    store8(out + off, 48); off = off + 1;
+    store8(out + off, 0);
+    return out;
+}
+
+# Simple trim (no-mutation variant of _nl_trim used above to avoid control flow issues).
+fn _nl_trim_simple(s) {
+    var len = strlen(s);
+    var start = 0;
+    while (start < len) {
+        if (is_space(load8(s + start)) == 0) { break; }
+        start = start + 1;
+    }
+    var end = len;
+    while (end > start) {
+        if (is_space(load8(s + end - 1)) == 0) { break; }
+        end = end - 1;
+    }
+    var n = end - start;
+    var buf = alloc(n + 1);
+    memcpy(buf, s + start, n);
+    store8(buf + n, 0);
+    return buf;
+}
+
+# Try calculation prefixes: "what is X", "calculate X", "compute X", "eval X", "how much is X", "what's X".
+fn _nl_try_calc(lower) {
+    var p1 = "what is ";
+    var p2 = "what's ";
+    var p3 = "calculate ";
+    var p4 = "compute ";
+    var p5 = "eval ";
+    var p6 = "how much is ";
+    var rest = 0;
+    if (_nl_starts_with(lower, p1) == 1) { rest = _nl_strip_prefix(lower, p1); }
+    elif (_nl_starts_with(lower, p2) == 1) { rest = _nl_strip_prefix(lower, p2); }
+    elif (_nl_starts_with(lower, p3) == 1) { rest = _nl_strip_prefix(lower, p3); }
+    elif (_nl_starts_with(lower, p4) == 1) { rest = _nl_strip_prefix(lower, p4); }
+    elif (_nl_starts_with(lower, p5) == 1) { rest = _nl_strip_prefix(lower, p5); }
+    elif (_nl_starts_with(lower, p6) == 1) { rest = _nl_strip_prefix(lower, p6); }
+    if (rest != 0) {
+        var pct = _nl_try_percent_of(rest);
+        if (pct != 0) { return ParsedQuery_new(PQ_CALCULATION, 0, pct, 0); }
+        return ParsedQuery_new(PQ_CALCULATION, 0, rest, 0);
+    }
+    # Standalone "X% of Y".
+    var pct2 = _nl_try_percent_of(lower);
+    if (pct2 != 0) { return ParsedQuery_new(PQ_CALCULATION, 0, pct2, 0); }
+    return 0;
+}
+
+# Does s contain any char that hints at arithmetic?
+fn _nl_looks_numeric(s) {
+    var len = strlen(s);
+    var i = 0;
+    while (i < len) {
+        var c = load8(s + i);
+        if (is_digit(c) == 1) { return 1; }
+        if (c == 43) { return 1; }  # +
+        if (c == 45) { return 1; }  # -
+        if (c == 42) { return 1; }  # *
+        if (c == 47) { return 1; }  # /
+        if (c == 94) { return 1; }  # ^
+        if (c == 37) { return 1; }  # %
+        if (c == 40) { return 1; }  # (
+        if (c == 41) { return 1; }  # )
+        if (c == 46) { return 1; }  # .
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Parse natural language input into a ParsedQuery ptr, or 0 on parse failure.
+fn nl_parse(input) {
+    var trimmed = _nl_trim_simple(input);
+    var lower = str_lower(trimmed);
+    var q = _nl_try_currency(lower);
+    if (q != 0) { return q; }
+    q = _nl_try_conversion(lower);
+    if (q != 0) { return q; }
+    q = _nl_try_calc(lower);
+    if (q != 0) { return q; }
+    if (_nl_looks_numeric(lower) == 1) {
+        return ParsedQuery_new(PQ_CALCULATION, 0, lower, 0);
+    }
+    return 0;
+}
+
+# ================================================================
+# CalculationHistory — bounded ring buffer of (input, result, timestamp) entries.
+# Layout: { head_vec, max_entries }
+# Entry layout: { input_cstr, result_cstr, timestamp_cstr }
+# ================================================================
+
+fn HistoryEntry_new(input, result, timestamp) {
+    var e = alloc(24);
+    store64(e, input);
+    store64(e + 8, result);
+    store64(e + 16, timestamp);
+    return e;
+}
+
+fn he_input(e) { return load64(e); }
+fn he_result(e) { return load64(e + 8); }
+fn he_timestamp(e) { return load64(e + 16); }
+
+fn CalcHistory_new(max_entries) {
+    var h = alloc(16);
+    store64(h, vec_new());        # entries vec
+    store64(h + 8, max_entries);
+    return h;
+}
+
+fn history_entries(h) { return load64(h); }
+fn history_max(h) { return load64(h + 8); }
+
+fn CalcHistory_len(h) {
+    return vec_len(load64(h));
+}
+
+fn CalcHistory_is_empty(h) {
+    if (vec_len(load64(h)) == 0) { return 1; }
+    return 0;
+}
+
+fn CalcHistory_clear(h) {
+    store64(h, vec_new());
+    return 0;
+}
+
+# Push a new entry. If at capacity, drop the oldest (index 0).
+# The caller supplies the timestamp so we don't couple to a Cyrius time API.
+fn CalcHistory_push(h, input, result, timestamp) {
+    var entries = load64(h);
+    var max_n = load64(h + 8);
+    if (vec_len(entries) >= max_n) {
+        # drop-front: copy entries[1..] into a new vec.
+        var newv = vec_new();
+        var i = 1;
+        while (i < vec_len(entries)) {
+            vec_push(newv, vec_get(entries, i));
+            i = i + 1;
+        }
+        store64(h, newv);
+        entries = newv;
+    }
+    vec_push(entries, HistoryEntry_new(input, result, timestamp));
+    return 0;
+}
+
+fn CalcHistory_get(h, i) {
+    return vec_get(load64(h), i);
+}
+
+# ================================================================
+# CurrencyConverter — rates cache + conversion.
+# Live HTTP fetch via hoosh is a follow-up (needs [deps.hoosh] and
+# a JSON parser for nested rate maps).
+# Layout: { base_cstr, rates_map, base_url_cstr }
+# rates_map is a hashmap<cstr, f64_bits>
+# ================================================================
+
+fn CurrencyCache_new(base_url) {
+    var c = alloc(24);
+    store64(c, 0);                 # base (unset)
+    store64(c + 8, map_new());     # rates map
+    store64(c + 16, base_url);
+    return c;
+}
+
+fn ccy_base(c) { return load64(c); }
+fn ccy_rates(c) { return load64(c + 8); }
+fn ccy_base_url(c) { return load64(c + 16); }
+
+# Manually install rates. base is the reference currency (uppercase).
+# rates is a map<cstr_upper, f64_bits>: 1 base == rate target.
+fn CurrencyCache_set_rates(c, base, rates) {
+    store64(c, base);
+    store64(c + 8, rates);
+    return 0;
+}
+
+# Convert value from -> to via cached rates. Returns a CurrencyResult ptr
+# or 0 on failure (check ai_err for reason).
+# Layout of CurrencyResult: { from_val, from_cstr, to_val, to_cstr, rate_bits }
+fn CurrencyResult_new(from_val, from_s, to_val, to_s, rate) {
+    var r = alloc(40);
+    store64(r, from_val);
+    store64(r + 8, from_s);
+    store64(r + 16, to_val);
+    store64(r + 24, to_s);
+    store64(r + 32, rate);
+    return r;
+}
+
+fn cr_from_value(r) { return load64(r); }
+fn cr_from_currency(r) { return load64(r + 8); }
+fn cr_to_value(r) { return load64(r + 16); }
+fn cr_to_currency(r) { return load64(r + 24); }
+fn cr_rate(r) { return load64(r + 32); }
+
+# Last-error slot for the currency module (simple, avoids threading Result).
+var AI_LAST_ERR = 0;
+
+fn ai_last_err() { return AI_LAST_ERR; }
+fn ai_clear_err() { AI_LAST_ERR = AI_OK; return 0; }
+
+fn CurrencyCache_convert(c, value, from_raw, to_raw) {
+    AI_LAST_ERR = AI_OK;
+    var from = str_upper(from_raw);
+    var to = str_upper(to_raw);
+    var base = ccy_base(c);
+    if (base == 0) { AI_LAST_ERR = AI_ERR_CURRENCY; return 0; }
+    var rates = ccy_rates(c);
+    var from_rate = 0;
+    if (streq(from, base) == 1) {
+        from_rate = f64_from(1);
+    } else {
+        if (map_has(rates, from) == 0) { AI_LAST_ERR = AI_ERR_CURRENCY; return 0; }
+        from_rate = map_get(rates, from);
+    }
+    var to_rate = 0;
+    if (streq(to, base) == 1) {
+        to_rate = f64_from(1);
+    } else {
+        if (map_has(rates, to) == 0) { AI_LAST_ERR = AI_ERR_CURRENCY; return 0; }
+        to_rate = map_get(rates, to);
+    }
+    var rate = f64_div(to_rate, from_rate);
+    var result = f64_mul(value, rate);
+    return CurrencyResult_new(value, from, result, to, rate);
+}

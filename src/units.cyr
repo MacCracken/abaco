@@ -1,6 +1,5 @@
-# abaco::units - Unit conversion engine
-# Ported from rust-old/src/units.rs (1645 lines)
-# 120+ built-in units, 18 categories, O(1) hashmap lookup
+# abaco::units — unit conversion engine.
+# 120+ built-in units, 19 categories, O(1) hashmap lookup by symbol or lowercased name.
 
 # -- Error codes --
 enum UnitErr {
@@ -31,42 +30,26 @@ fn reg_low(r) { return load64(r + 16); }
 fn reg_err(r) { return load64(r + 24); }
 fn reg_set_err(r, e) { store64(r + 24, e); return 0; }
 
-# Lowercase a string (in-place copy to new allocation)
-fn str_lower(s) {
-    var len = strlen(s);
-    var out = alloc(len + 1);
-    var i = 0;
-    while (i < len) {
-        var c = load8(s + i);
-        if (c >= 65) { if (c <= 90) { c = c + 32; } }
-        store8(out + i, c);
-        i = i + 1;
-    }
-    store8(out + len, 0);
-    return out;
-}
-
-fn reg_add(r, name, symbol, category, factor, offset) {
-    var u = Unit_new(name, symbol, category, factor, offset);
+# Shared registry index helper: add unit to vec + by-symbol + by-lower maps.
+fn _reg_index(r, u, name, symbol) {
     vec_push(load64(r), u);
     map_set(load64(r + 8), symbol, u);
-    map_set(load64(r + 16), str_lower(name), u);
-    var ls = str_lower(symbol);
-    if (streq(ls, str_lower(name)) != 1) {
-        map_set(load64(r + 16), ls, u);
+    var lname = str_lower(name);
+    map_set(load64(r + 16), lname, u);
+    var lsym = str_lower(symbol);
+    if (streq(lsym, lname) != 1) {
+        map_set(load64(r + 16), lsym, u);
     }
     return 0;
 }
 
+fn reg_add(r, name, symbol, category, factor, offset) {
+    _reg_index(r, Unit_new(name, symbol, category, factor, offset), name, symbol);
+    return 0;
+}
+
 fn reg_add_inv(r, name, symbol, category, factor) {
-    var u = Unit_new_inverse(name, symbol, category, factor);
-    vec_push(load64(r), u);
-    map_set(load64(r + 8), symbol, u);
-    map_set(load64(r + 16), str_lower(name), u);
-    var ls = str_lower(symbol);
-    if (streq(ls, str_lower(name)) != 1) {
-        map_set(load64(r + 16), ls, u);
-    }
+    _reg_index(r, Unit_new_inverse(name, symbol, category, factor), name, symbol);
     return 0;
 }
 
@@ -87,27 +70,34 @@ fn reg_alias_exact(r, alias, target_sym) {
     return 0;
 }
 
+# Does the cstring contain any uppercase ASCII byte?
+fn _has_upper(s) {
+    var len = strlen(s);
+    var i = 0;
+    while (i < len) {
+        var c = load8(s + i);
+        if (c >= 65) { if (c <= 90) { return 1; } }
+        i = i + 1;
+    }
+    return 0;
+}
+
 # -- Find unit by name or symbol --
 fn UnitRegistry_find(r, query) {
-    # Exact symbol match first
-    if (map_has(load64(r + 8), query) == 1) {
-        return map_get(load64(r + 8), query);
-    }
-    # Case-insensitive
-    var lq = str_lower(query);
-    if (map_has(load64(r + 16), lq) == 1) {
-        return map_get(load64(r + 16), lq);
-    }
-    # Plural: strip trailing 's'
+    var sym = reg_sym(r);
+    var low = reg_low(r);
+    if (map_has(sym, query) == 1) { return map_get(sym, query); }
+    # Skip the allocation when query is already lowercase.
+    var lq = query;
+    if (_has_upper(query) == 1) { lq = str_lower(query); }
+    if (map_has(low, lq) == 1) { return map_get(low, lq); }
     var lqlen = strlen(lq);
     if (lqlen > 1) {
         if (load8(lq + lqlen - 1) == 115) {
             var singular = alloc(lqlen);
             memcpy(singular, lq, lqlen - 1);
             store8(singular + lqlen - 1, 0);
-            if (map_has(load64(r + 16), singular) == 1) {
-                return map_get(load64(r + 16), singular);
-            }
+            if (map_has(low, singular) == 1) { return map_get(low, singular); }
         }
     }
     return 0;
@@ -288,6 +278,8 @@ fn reg_populate(r) {
     reg_add(r, "kilohertz", "kHz", CAT_FREQUENCY, f64_from(1000), zero);
     reg_add(r, "megahertz", "MHz", CAT_FREQUENCY, f64_from(1000000), zero);
     reg_add(r, "gigahertz", "GHz", CAT_FREQUENCY, f64_from(1000000000), zero);
+    # 1 BPM = 1/60 Hz — lets "120 bpm to Hz" work via the registry.
+    reg_add(r, "beats_per_minute", "bpm", CAT_FREQUENCY, f64_div(f64_from(1), f64_from(60)), zero);
 
     # -- Force (base: newton) --
     reg_add(r, "newton", "N", CAT_FORCE, f64_from(1), zero);
@@ -327,10 +319,24 @@ fn reg_populate(r) {
     reg_add(r, "poise", "P", CAT_VISCOSITY, f64_div(f64_from(1), f64_from(10)), zero);
     reg_add(r, "centipoise", "cP", CAT_VISCOSITY, f64_div(f64_from(1), f64_from(1000)), zero);
 
+    # -- Pitch (base: semitone, 12-TET) --
+    reg_add(r, "semitone", "semi", CAT_PITCH, f64_from(1), zero);
+    reg_add(r, "cent", "cent", CAT_PITCH, f64_div(f64_from(1), f64_from(100)), zero);
+    reg_add(r, "octave", "oct", CAT_PITCH, f64_from(12), zero);
+
     return 0;
 }
 
 fn reg_aliases(r) {
+    # Tempo / audio
+    reg_alias(r, "bpm", "bpm");
+    reg_alias(r, "bpms", "bpm");
+    reg_alias(r, "beats_per_min", "bpm");
+    # Pitch
+    reg_alias(r, "semitones", "semi");
+    reg_alias(r, "st", "semi");
+    reg_alias(r, "cents", "cent");
+    reg_alias(r, "octaves", "oct");
     # Temperature
     reg_alias(r, "degc", "C");
     reg_alias(r, "degf", "F");

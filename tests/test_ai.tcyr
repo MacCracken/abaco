@@ -1,0 +1,221 @@
+# abaco ai tests
+
+include "lib/syscalls.cyr"
+include "lib/alloc.cyr"
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/tagged.cyr"
+include "lib/hashmap.cyr"
+include "lib/fnptr.cyr"
+include "lib/math.cyr"
+include "lib/assert.cyr"
+
+include "src/core.cyr"
+include "src/ntheory.cyr"
+include "src/dsp.cyr"
+include "src/eval.cyr"
+include "src/units.cyr"
+include "src/ai.cyr"
+
+fn test_parse_what_is() {
+    var q = nl_parse("what is 2 + 3");
+    assert(q != 0, "parse what is");
+    assert_eq(pq_kind(q), PQ_CALCULATION, "kind calc");
+    assert(streq(pq_s1(q), "2 + 3") == 1, "expr = 2 + 3");
+    return 0;
+}
+
+fn test_parse_calculate() {
+    var q = nl_parse("calculate 10 * 5");
+    assert(q != 0, "parse calc");
+    assert_eq(pq_kind(q), PQ_CALCULATION, "kind calc");
+    assert(streq(pq_s1(q), "10 * 5") == 1, "expr = 10 * 5");
+    return 0;
+}
+
+fn test_parse_percent_of() {
+    var q = nl_parse("what is 15% of 230");
+    assert(q != 0, "parse pct");
+    assert_eq(pq_kind(q), PQ_CALCULATION, "kind calc");
+    assert(streq(pq_s1(q), "230 * 15 / 100") == 1, "pct expansion");
+    return 0;
+}
+
+fn test_parse_standalone_percent() {
+    var q = nl_parse("15% of 200");
+    assert(q != 0, "parse standalone pct");
+    assert(streq(pq_s1(q), "200 * 15 / 100") == 1, "standalone pct");
+    return 0;
+}
+
+fn test_parse_conversion() {
+    var q = nl_parse("convert 5 km to miles");
+    assert(q != 0, "parse conv");
+    assert_eq(pq_kind(q), PQ_CONVERSION, "kind conv");
+    assert_eq(f64_to(pq_value(q)), 5, "v=5");
+    assert(streq(pq_s1(q), "km") == 1, "from=km");
+    assert(streq(pq_s2(q), "miles") == 1, "to=miles");
+    return 0;
+}
+
+fn test_parse_conversion_in() {
+    var q = nl_parse("10 meters in feet");
+    assert(q != 0, "parse conv in");
+    assert_eq(pq_kind(q), PQ_CONVERSION, "kind conv");
+    assert_eq(f64_to(pq_value(q)), 10, "v=10");
+    assert(streq(pq_s1(q), "meters") == 1, "from=meters");
+    assert(streq(pq_s2(q), "feet") == 1, "to=feet");
+    return 0;
+}
+
+fn test_parse_currency() {
+    var q = nl_parse("100 usd to eur");
+    assert(q != 0, "parse ccy");
+    assert_eq(pq_kind(q), PQ_CURRENCY, "kind ccy");
+    assert_eq(f64_to(pq_value(q)), 100, "v=100");
+    assert(streq(pq_s1(q), "USD") == 1, "from=USD");
+    assert(streq(pq_s2(q), "EUR") == 1, "to=EUR");
+    return 0;
+}
+
+fn test_parse_currency_in() {
+    var q = nl_parse("50 gbp in jpy");
+    assert(q != 0, "ccy in");
+    assert_eq(pq_kind(q), PQ_CURRENCY, "kind ccy");
+    assert(streq(pq_s1(q), "GBP") == 1, "GBP");
+    assert(streq(pq_s2(q), "JPY") == 1, "JPY");
+    return 0;
+}
+
+fn test_parse_how_much() {
+    var q = nl_parse("how much is 5 + 3");
+    assert(q != 0, "parse how much");
+    assert(streq(pq_s1(q), "5 + 3") == 1, "expr = 5 + 3");
+    return 0;
+}
+
+fn test_parse_compute() {
+    var q = nl_parse("compute sqrt(16)");
+    assert(q != 0, "parse compute");
+    assert(streq(pq_s1(q), "sqrt(16)") == 1, "expr = sqrt(16)");
+    return 0;
+}
+
+fn test_parse_raw_expr() {
+    var q = nl_parse("3.14 * 2");
+    assert(q != 0, "parse raw expr");
+    assert_eq(pq_kind(q), PQ_CALCULATION, "kind calc");
+    return 0;
+}
+
+fn test_parse_number_only() {
+    var q = nl_parse("42");
+    assert(q != 0, "parse number");
+    assert_eq(pq_kind(q), PQ_CALCULATION, "kind calc");
+    return 0;
+}
+
+fn test_parse_unparseable() {
+    var q = nl_parse("hello world");
+    assert_eq(q, 0, "unparseable = 0");
+    return 0;
+}
+
+fn test_history_push() {
+    var h = CalcHistory_new(100);
+    CalcHistory_push(h, "2 + 3", "5", "2026-04-14T00:00:00Z");
+    assert_eq(CalcHistory_len(h), 1, "len 1");
+    var e = CalcHistory_get(h, 0);
+    assert(streq(he_input(e), "2 + 3") == 1, "input");
+    assert(streq(he_result(e), "5") == 1, "result");
+    return 0;
+}
+
+fn test_history_limit() {
+    var h = CalcHistory_new(3);
+    CalcHistory_push(h, "1", "1", "t1");
+    CalcHistory_push(h, "2", "2", "t2");
+    CalcHistory_push(h, "3", "3", "t3");
+    CalcHistory_push(h, "4", "4", "t4");
+    assert_eq(CalcHistory_len(h), 3, "bounded to 3");
+    var e0 = CalcHistory_get(h, 0);
+    assert(streq(he_input(e0), "2") == 1, "oldest dropped, now starts at 2");
+    return 0;
+}
+
+fn test_history_clear() {
+    var h = CalcHistory_new(100);
+    CalcHistory_push(h, "1", "1", "t");
+    CalcHistory_push(h, "2", "2", "t");
+    CalcHistory_clear(h);
+    assert_eq(CalcHistory_is_empty(h), 1, "empty after clear");
+    return 0;
+}
+
+fn test_currency_convert() {
+    var c = CurrencyCache_new("http://localhost:8088");
+    var rates = map_new();
+    # 1 USD = 0.92 EUR, 0.79 GBP, 149.5 JPY
+    var eur_rate = f64_div(f64_from(92), f64_from(100));
+    var gbp_rate = f64_div(f64_from(79), f64_from(100));
+    var jpy_rate = f64_div(f64_from(1495), f64_from(10));
+    map_set(rates, "EUR", eur_rate);
+    map_set(rates, "GBP", gbp_rate);
+    map_set(rates, "JPY", jpy_rate);
+    CurrencyCache_set_rates(c, "USD", rates);
+
+    # 100 USD -> EUR = 92
+    var r = CurrencyCache_convert(c, f64_from(100), "usd", "eur");
+    assert(r != 0, "convert ok");
+    var tv = f64_to(cr_to_value(r));
+    assert_eq(tv, 92, "100 USD = 92 EUR");
+    assert(streq(cr_from_currency(r), "USD") == 1, "from USD uppercase");
+    assert(streq(cr_to_currency(r), "EUR") == 1, "to EUR uppercase");
+
+    # 1 EUR -> JPY = 149.5 / 0.92 ≈ 162.5
+    var r2 = CurrencyCache_convert(c, f64_from(1), "EUR", "JPY");
+    assert(r2 != 0, "cross convert");
+    var t2 = f64_to(cr_to_value(r2));
+    assert(t2 >= 162, "cross >= 162");
+    assert(t2 <= 163, "cross <= 163");
+
+    # USD -> USD: identity.
+    var r3 = CurrencyCache_convert(c, f64_from(100), "USD", "USD");
+    assert(r3 != 0, "same ccy");
+    assert_eq(f64_to(cr_to_value(r3)), 100, "USD->USD = 100");
+
+    # Unknown currency -> 0 + last_err.
+    var r4 = CurrencyCache_convert(c, f64_from(100), "USD", "XYZ");
+    assert_eq(r4, 0, "unknown returns 0");
+    assert_eq(ai_last_err(), AI_ERR_CURRENCY, "last_err = currency");
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    println("=== abaco ai tests ===");
+    test_parse_what_is();
+    test_parse_calculate();
+    test_parse_percent_of();
+    test_parse_standalone_percent();
+    test_parse_conversion();
+    test_parse_conversion_in();
+    test_parse_currency();
+    test_parse_currency_in();
+    test_parse_how_much();
+    test_parse_compute();
+    test_parse_raw_expr();
+    test_parse_number_only();
+    test_parse_unparseable();
+    test_history_push();
+    test_history_limit();
+    test_history_clear();
+    test_currency_convert();
+    assert_summary();
+    return 0;
+}
+
+var rr = main();
+syscall(SYS_EXIT, rr);
