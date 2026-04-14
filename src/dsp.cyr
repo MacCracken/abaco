@@ -66,6 +66,7 @@ fn f64_max(a, b) {
     return b;
 }
 
+# Return the smaller of two f64 values.
 fn f64_min(a, b) {
     if (f64_lt(a, b) == 1) { return a; }
     return b;
@@ -293,15 +294,20 @@ fn batch_sum(src, n) {
 # Audio: samples <-> milliseconds (sample-rate aware)
 # ================================================================
 
+# Duration of n samples in milliseconds, at the given sample rate.
 fn samples_to_ms(n_samples, sample_rate) {
     return f64_div(f64_mul(n_samples, f64_from(1000)), sample_rate);
 }
 
+# Sample count for a given duration (ms) at the given sample rate.
 fn ms_to_samples(ms, sample_rate) {
     return f64_div(f64_mul(ms, sample_rate), f64_from(1000));
 }
 
+# Tempo (beats per minute) → frequency (Hz). 120 bpm = 2 Hz.
 fn bpm_to_hz(bpm) { return f64_div(bpm, f64_from(60)); }
+
+# Frequency (Hz) → tempo (beats per minute).
 fn hz_to_bpm(hz)  { return f64_mul(hz, f64_from(60)); }
 
 # ================================================================

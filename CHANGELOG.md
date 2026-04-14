@@ -5,6 +5,74 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] — 2026-04-14
+
+Major version bump: abaco is no longer a Rust crate. The entire library
+has been ported to [Cyrius][cyrius] and the Rust implementation removed.
+This is a breaking change for anyone who was depending on `abaco` via
+`crates.io` or Cargo.
+
+[cyrius]: https://github.com/MacCracken/cyrius
+
+### Breaking
+
+- **Implementation language changed from Rust to Cyrius.** `Cargo.toml`,
+  `crates/*`, and all `.rs` sources are gone.
+- **Distribution format changed.** abaco is now a Cyrius module set
+  consumed via `[deps.abaco]` in a downstream `cyrius.toml`, not a
+  crates.io dependency.
+- **API shape changed.** Method-style `Evaluator::new()`/`.eval()` is now
+  prefix-style `Evaluator_new()` / `Evaluator_eval(e, ...)`. See
+  `docs/architecture.md` for naming conventions.
+- **f64 values are bit patterns** through the public API (Cyrius convention).
+- **`#[non_exhaustive]`, `Serialize`/`Deserialize`, `Display`, async
+  futures** — no Rust-specific annotations apply anymore. Structured
+  output goes through explicit `*_to_latex`, `*_to_json`, etc.
+- **No Cargo features.** The `ai` feature is now an included module
+  (`src/ai.cyr`), not feature-gated at link time. Cyrius's cross-unit
+  DCE strips unused modules at build.
+
+### Added — Cyrius port
+
+- **`src/ai.cyr`** (520 lines) — NL parsing, `CalcHistory`,
+  `CurrencyCache` with live `http_get` fetch and nested JSON extractor.
+- **DSP expansions** — Hann / Hamming / Blackman / Kaiser windows,
+  `window_kaiser_fill` (hoists I0(β) denom), `_bessel_i0`, `f64_cubic`
+  (Catmull–Rom), `f64_sinc`, `sinc_kernel`, `freq_to_pitch_class`,
+  `freq_to_octave`, `pitch_class_name`, `samples_to_ms` /
+  `ms_to_samples`, `bpm_to_hz` / `hz_to_bpm`.
+- **`CAT_PITCH` category** — semitone / cent / octave unit conversions.
+- **BPM in `CAT_FREQUENCY`** — `registry.convert(120, "bpm", "Hz")`
+  works naturally.
+- **Multi-word aliases** — `"square kilometers"`, `"meters per second"`,
+  `"kilometers per hour"`, `"miles per hour"`, `"miles per gallon"`.
+- **`programs/basic.cyr`** — runnable end-to-end demo.
+- **`fuzz/` harnesses** — `fuzz_eval`, `fuzz_ntheory`, `fuzz_units`
+  with a `run.sh` runner. Clean at 50k iters each.
+- **`cyrius capacity`** + `cyrius doc --check` wired into the dev loop.
+
+### Changed
+
+- Test count: 283 → **381 assertions** across 6 `.tcyr` files.
+- Benchmarks: 56 tracked in `bench-history.csv`, last-3-runs table in
+  `bench-latest.md`.
+- Hyperbolic trig (`sinh`/`cosh`/`tanh`) now uses stdlib
+  `lib/math.cyr::f64_sinh/cosh/tanh` instead of inlined formulas.
+- Numeric constants in `src/dsp.cyr` use `_` digit separators
+  (Cyrius 4.8.0): `0x4009_21FB_5444_2D18`.
+- Docs rewritten for Cyrius — `README.md`, `docs/architecture.md`,
+  `docs/development.md`, `CONTRIBUTING.md`, `SECURITY.md`.
+
+### Known gaps
+
+- **u128 is_prime perf** — Cyrius 4.8.0 `u128_mod` software long-division
+  is ~40× slower than the current binary double-and-add; reverted.
+  Waiting on hardware 128-bit div-mod emission.
+- **`asin` / `acos` / `atan` / `atan2`** — still identity-formula stopgaps;
+  filed as P1-2 in `cyrius/docs/issues/stdlib-math-recommendations-from-abaco.md`.
+- **dBFS** — log-scale unit, requires special handling beyond the
+  linear `to_base` factor; deferred.
+
 ## [1.1.0] - 2026-03-27
 
 ### Added

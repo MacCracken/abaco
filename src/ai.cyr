@@ -25,6 +25,8 @@ enum ParsedQueryKind {
     PQ_CURRENCY;
 }
 
+# Build a ParsedQuery tagged with one of PQ_CALCULATION / PQ_CONVERSION /
+# PQ_CURRENCY. Field meaning depends on kind (see the layout comment above).
 fn ParsedQuery_new(kind, value, s1, s2) {
     var p = alloc(32);
     store64(p, kind);
@@ -415,6 +417,8 @@ fn nl_parse(input) {
 # Entry layout: { input_cstr, result_cstr, timestamp_cstr }
 # ================================================================
 
+# Build a single history entry: input expression, formatted result, RFC-3339
+# timestamp cstring supplied by the caller (decoupled from any time API).
 fn HistoryEntry_new(input, result, timestamp) {
     var e = alloc(24);
     store64(e, input);
@@ -427,6 +431,8 @@ fn he_input(e) { return load64(e); }
 fn he_result(e) { return load64(e + 8); }
 fn he_timestamp(e) { return load64(e + 16); }
 
+# Build a bounded history buffer holding up to `max_entries` entries.
+# Push is FIFO: the oldest entry is dropped when at capacity.
 fn CalcHistory_new(max_entries) {
     var h = alloc(16);
     store64(h, vec_new());        # entries vec
@@ -437,15 +443,18 @@ fn CalcHistory_new(max_entries) {
 fn history_entries(h) { return load64(h); }
 fn history_max(h) { return load64(h + 8); }
 
+# Number of history entries currently held.
 fn CalcHistory_len(h) {
     return vec_len(load64(h));
 }
 
+# Return 1 if the history holds zero entries.
 fn CalcHistory_is_empty(h) {
     if (vec_len(load64(h)) == 0) { return 1; }
     return 0;
 }
 
+# Discard all entries; the buffer remains usable with the same capacity.
 fn CalcHistory_clear(h) {
     store64(h, vec_new());
     return 0;
@@ -471,6 +480,8 @@ fn CalcHistory_push(h, input, result, timestamp) {
     return 0;
 }
 
+# Return the i-th entry (0 is oldest). Out-of-range behaviour inherits
+# from the underlying vec; check CalcHistory_len first.
 fn CalcHistory_get(h, i) {
     return vec_get(load64(h), i);
 }
@@ -483,6 +494,9 @@ fn CalcHistory_get(h, i) {
 # rates_map is a hashmap<cstr, f64_bits>
 # ================================================================
 
+# Build an empty rate cache pointing at `base_url` (hoosh `/rates` endpoint).
+# Call CurrencyCache_fetch to populate live rates, or CurrencyCache_set_rates
+# to install a fixed map for offline/test use.
 fn CurrencyCache_new(base_url) {
     var c = alloc(24);
     store64(c, 0);                 # base (unset)
@@ -525,7 +539,10 @@ fn cr_rate(r) { return load64(r + 32); }
 # Last-error slot for the currency module (simple, avoids threading Result).
 var AI_LAST_ERR = 0;
 
+# Return the last AI_ERR_* code set by an ai fn (0 = no error).
 fn ai_last_err() { return AI_LAST_ERR; }
+
+# Reset the module-level last-error slot to AI_OK.
 fn ai_clear_err() { AI_LAST_ERR = AI_OK; return 0; }
 
 # Scan body[..len] for `"key"` followed by `:` and return the offset of the
@@ -655,6 +672,9 @@ fn CurrencyCache_fetch(c) {
     return 0;
 }
 
+# Convert `value` from currency `from_raw` to `to_raw` using cached rates.
+# `from_raw` / `to_raw` are accepted in any case; the result uses uppercase
+# ISO codes. Returns a CurrencyResult ptr, or 0 on failure (see ai_last_err).
 fn CurrencyCache_convert(c, value, from_raw, to_raw) {
     AI_LAST_ERR = AI_OK;
     var from = str_upper(from_raw);

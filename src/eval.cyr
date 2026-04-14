@@ -50,6 +50,8 @@ fn tok_set(toks, i, typ, val) {
 # { variables_map, tokens, token_count, pos, error, depth }
 struct Evaluator { vars; toks; ntoks; pos; err; depth; }
 
+# Build a fresh evaluator with empty variable map and no pending expression.
+# Call Evaluator_set_variable to install user vars, then Evaluator_eval.
 fn Evaluator_new() {
     var e = alloc(48);
     store64(e, map_new());
@@ -75,11 +77,14 @@ fn eval_set_err(e, err) { store64(e + 32, err); return 0; }
 fn eval_set_depth(e, d) { store64(e + 40, d); return 0; }
 fn eval_advance(e) { store64(e + 24, load64(e + 24) + 1); return 0; }
 
+# Bind `name` (cstring) to an f64 bit-pattern value. Later expressions that
+# reference this identifier resolve to `val`.
 fn Evaluator_set_variable(e, name, val) {
     map_set(load64(e), name, val);
     return 0;
 }
 
+# Look up a previously-bound variable. Returns 0 if unbound.
 fn Evaluator_get_variable(e, name) {
     return map_get(load64(e), name);
 }

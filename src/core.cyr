@@ -47,6 +47,7 @@ struct Value { tag; data1; data2; }
 
 # --- Value constructors ---
 
+# Build a Value wrapping an i64 integer.
 fn Value_integer(n) {
     var v = alloc(24);
     store64(v, INTEGER);
@@ -55,6 +56,7 @@ fn Value_integer(n) {
     return v;
 }
 
+# Build a Value wrapping an f64 (bit pattern).
 fn Value_float(f) {
     var v = alloc(24);
     store64(v, FLOAT);
@@ -63,6 +65,7 @@ fn Value_float(f) {
     return v;
 }
 
+# Build a Value as the exact fraction num/den (both i64).
 fn Value_fraction(num, den) {
     var v = alloc(24);
     store64(v, FRACTION);
@@ -71,6 +74,7 @@ fn Value_fraction(num, den) {
     return v;
 }
 
+# Build a Value as a complex number re + im*i (both f64 bit patterns).
 fn Value_complex(re, im) {
     var v = alloc(24);
     store64(v, COMPLEX);
@@ -79,6 +83,7 @@ fn Value_complex(re, im) {
     return v;
 }
 
+# Build a Value wrapping a text cstring (caller owns the string).
 fn Value_text(s) {
     var v = alloc(24);
     store64(v, TEXT);
@@ -93,10 +98,8 @@ fn Value_tag(self) { return load64(self); }
 fn Value_data1(self) { return load64(self + 8); }
 fn Value_data2(self) { return load64(self + 16); }
 
-# --- Value_as_f64 ---
-# Returns f64 bits on success, 0 with err flag set on failure.
-# Caller must check return tag: Ok(f64_bits) or Err(0).
-
+# Convert to f64 bits, returning Ok(bits) or Err(0).
+# INTEGER / FLOAT / FRACTION succeed; COMPLEX and TEXT cannot convert.
 fn Value_as_f64(self) {
     var t = load64(self);
     var d1 = load64(self + 8);
@@ -118,8 +121,8 @@ fn Value_as_f64(self) {
     return Err(0);
 }
 
-# --- Value_to_latex ---
-# Render value as a LaTeX string (returns alloc'd C-string)
+# Render the value as a LaTeX cstring. `\frac{n}{d}` for fractions,
+# `a + bi` for complex, `\text{...}` for text.
 fn Value_to_latex(self) {
     var t = load64(self);
     var d1 = load64(self + 8);
@@ -284,6 +287,8 @@ fn category_from_str(s) {
 
 struct Unit { name; symbol; category; to_base_factor; to_base_offset; to_base_inverse; }
 
+# Build a linear unit: base_val = (value + offset) * factor.
+# Temperature uses a non-zero offset (°C ↔ K); most units use offset 0.
 fn Unit_new(name, symbol, category, to_base_factor, to_base_offset) {
     var u = alloc(48);
     store64(u, name);
@@ -295,6 +300,7 @@ fn Unit_new(name, symbol, category, to_base_factor, to_base_offset) {
     return u;
 }
 
+# Build a reciprocal unit: base_val = factor / value (e.g. L/100km).
 fn Unit_new_inverse(name, symbol, category, to_base_factor) {
     var u = alloc(48);
     store64(u, name);
@@ -319,6 +325,7 @@ fn Unit_inverse(self) { return load64(self + 40); }
 
 struct ConversionResult { from_value; from_unit; to_value; to_unit; }
 
+# Build a conversion result pairing input value+unit with output value+unit.
 fn ConversionResult_new(from_value, from_unit, to_value, to_unit) {
     var r = alloc(32);
     store64(r, from_value);
@@ -338,6 +345,7 @@ fn ConversionResult_to_unit(self) { return load64(self + 24); }
 
 struct Currency { code; name; symbol; }
 
+# Build a Currency record (ISO code, full name, display symbol).
 fn Currency_new(code, name, symbol) {
     var c = alloc(24);
     store64(c, code);

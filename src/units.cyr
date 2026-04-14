@@ -13,6 +13,9 @@ enum UnitErr {
 # { units_vec, by_symbol (map: string -> unit_ptr), by_lower (map: string -> unit_ptr), error }
 struct UnitRegistry { units; by_sym; by_low; err; }
 
+# Build a fresh registry populated with the 110+ built-in units and
+# 80+ aliases. Return value is the UnitRegistry pointer used by
+# UnitRegistry_find / UnitRegistry_convert / UnitRegistry_list.
 fn UnitRegistry_new() {
     var r = alloc(32);
     store64(r, vec_new());
@@ -43,16 +46,20 @@ fn _reg_index(r, u, name, symbol) {
     return 0;
 }
 
+# Register a linear unit with the given to-base conversion (factor, offset).
 fn reg_add(r, name, symbol, category, factor, offset) {
     _reg_index(r, Unit_new(name, symbol, category, factor, offset), name, symbol);
     return 0;
 }
 
+# Register a reciprocal unit (base_val = factor / value). Used for L/100km.
 fn reg_add_inv(r, name, symbol, category, factor) {
     _reg_index(r, Unit_new_inverse(name, symbol, category, factor), name, symbol);
     return 0;
 }
 
+# Add a lowercase alias (e.g. "kph" -> "km/h") that resolves via the
+# case-insensitive lookup path. No-op if target_sym is unknown.
 fn reg_alias(r, alias, target_sym) {
     if (map_has(load64(r + 8), target_sym) == 1) {
         var u = map_get(load64(r + 8), target_sym);
@@ -61,6 +68,8 @@ fn reg_alias(r, alias, target_sym) {
     return 0;
 }
 
+# Like reg_alias but also registers the alias exactly in the by-symbol
+# map (case-sensitive). Useful for symbol-level aliases.
 fn reg_alias_exact(r, alias, target_sym) {
     if (map_has(load64(r + 8), target_sym) == 1) {
         var u = map_get(load64(r + 8), target_sym);
@@ -169,6 +178,7 @@ fn UnitRegistry_convert(r, value, from_str, to_str) {
 # Helper: convert f64 literal to bits for factors
 # We use f64_div/f64_mul/f64_from to build exact factors
 
+# Populate the registry with all built-in units (called by UnitRegistry_new).
 fn reg_populate(r) {
     var zero = f64_from(0);
     # -- Length (base: meter) --
@@ -327,6 +337,7 @@ fn reg_populate(r) {
     return 0;
 }
 
+# Populate the registry's alias table (called by UnitRegistry_new).
 fn reg_aliases(r) {
     # Tempo / audio
     reg_alias(r, "bpm", "bpm");
