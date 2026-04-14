@@ -17,8 +17,8 @@ Thumbs.db
 
 # Debugging
 *.pdb
-core
-core.*
+/core
+/core.[0-9]*
 
 # Coverage
 lcov.info

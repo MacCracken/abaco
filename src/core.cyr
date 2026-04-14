@@ -1,0 +1,351 @@
+# abaco::core — Core types: Value, Unit, UnitCategory, conversion results.
+
+# -- ASCII case helpers (shared across units, ai, eval) --
+
+# Lowercase a cstring in-place on a freshly allocated copy.
+fn str_lower(s) {
+    var len = strlen(s);
+    var out = alloc(len + 1);
+    var i = 0;
+    while (i < len) {
+        var c = load8(s + i);
+        if (c >= 65) { if (c <= 90) { c = c + 32; } }
+        store8(out + i, c);
+        i = i + 1;
+    }
+    store8(out + len, 0);
+    return out;
+}
+
+# Uppercase a cstring in-place on a freshly allocated copy.
+fn str_upper(s) {
+    var len = strlen(s);
+    var out = alloc(len + 1);
+    var i = 0;
+    while (i < len) {
+        var c = load8(s + i);
+        if (c >= 97) { if (c <= 122) { c = c - 32; } }
+        store8(out + i, c);
+        i = i + 1;
+    }
+    store8(out + len, 0);
+    return out;
+}
+
+
+# --- Value tags ---
+# Value is a tagged struct: { tag, data1, data2 }
+#   INTEGER:  tag=0, data1=i64 value,           data2=unused
+#   FLOAT:    tag=1, data1=f64 (as bits),        data2=unused
+#   FRACTION: tag=2, data1=numerator (i64),      data2=denominator (i64)
+#   COMPLEX:  tag=3, data1=real (f64 bits),      data2=imag (f64 bits)
+#   TEXT:     tag=4, data1=Str pointer,           data2=unused
+
+enum ValueTag { INTEGER; FLOAT; FRACTION; COMPLEX; TEXT; }
+
+struct Value { tag; data1; data2; }
+
+# --- Value constructors ---
+
+fn Value_integer(n) {
+    var v = alloc(24);
+    store64(v, INTEGER);
+    store64(v + 8, n);
+    store64(v + 16, 0);
+    return v;
+}
+
+fn Value_float(f) {
+    var v = alloc(24);
+    store64(v, FLOAT);
+    store64(v + 8, f);
+    store64(v + 16, 0);
+    return v;
+}
+
+fn Value_fraction(num, den) {
+    var v = alloc(24);
+    store64(v, FRACTION);
+    store64(v + 8, num);
+    store64(v + 16, den);
+    return v;
+}
+
+fn Value_complex(re, im) {
+    var v = alloc(24);
+    store64(v, COMPLEX);
+    store64(v + 8, re);
+    store64(v + 16, im);
+    return v;
+}
+
+fn Value_text(s) {
+    var v = alloc(24);
+    store64(v, TEXT);
+    store64(v + 8, s);
+    store64(v + 16, 0);
+    return v;
+}
+
+# --- Value accessors ---
+
+fn Value_tag(self) { return load64(self); }
+fn Value_data1(self) { return load64(self + 8); }
+fn Value_data2(self) { return load64(self + 16); }
+
+# --- Value_as_f64 ---
+# Returns f64 bits on success, 0 with err flag set on failure.
+# Caller must check return tag: Ok(f64_bits) or Err(0).
+
+fn Value_as_f64(self) {
+    var t = load64(self);
+    var d1 = load64(self + 8);
+    var d2 = load64(self + 16);
+
+    if (t == INTEGER) {
+        return Ok(f64_from(d1));
+    }
+    if (t == FLOAT) {
+        return Ok(d1);
+    }
+    if (t == FRACTION) {
+        if (d2 == 0) { return Err(0); }
+        var num_f = f64_from(d1);
+        var den_f = f64_from(d2);
+        return Ok(f64_div(num_f, den_f));
+    }
+    # Complex and Text cannot convert
+    return Err(0);
+}
+
+# --- Value_to_latex ---
+# Render value as a LaTeX string (returns alloc'd C-string)
+fn Value_to_latex(self) {
+    var t = load64(self);
+    var d1 = load64(self + 8);
+    var d2 = load64(self + 16);
+    var buf = alloc(128);
+    if (t == INTEGER) {
+        var len = fmt_int_buf(d1, buf);
+        store8(buf + len, 0);
+        return buf;
+    }
+    if (t == FLOAT) {
+        # Check if whole number
+        var i = f64_to(d1);
+        if (f64_eq(d1, f64_from(i)) == 1) {
+            var len = fmt_int_buf(i, buf);
+            store8(buf + len, 46);
+            store8(buf + len + 1, 48);
+            store8(buf + len + 2, 0);
+            return buf;
+        }
+        # General float - use integer part.frac approximation
+        var len = fmt_int_buf(i, buf);
+        store8(buf + len, 0);
+        return buf;
+    }
+    if (t == FRACTION) {
+        # \frac{num}{den}
+        memcpy(buf, "\\frac{", 6);
+        var pos = 6;
+        pos = pos + fmt_int_buf(d1, buf + pos);
+        memcpy(buf + pos, "}{", 2);
+        pos = pos + 2;
+        pos = pos + fmt_int_buf(d2, buf + pos);
+        store8(buf + pos, 125);
+        store8(buf + pos + 1, 0);
+        return buf;
+    }
+    if (t == COMPLEX) {
+        var ri = f64_to(d1);
+        var ii = f64_to(d2);
+        var pos = fmt_int_buf(ri, buf);
+        if (ii >= 0) {
+            memcpy(buf + pos, " + ", 3);
+            pos = pos + 3;
+            pos = pos + fmt_int_buf(ii, buf + pos);
+        } else {
+            memcpy(buf + pos, " - ", 3);
+            pos = pos + 3;
+            pos = pos + fmt_int_buf(0 - ii, buf + pos);
+        }
+        store8(buf + pos, 105);
+        store8(buf + pos + 1, 0);
+        return buf;
+    }
+    if (t == TEXT) {
+        memcpy(buf, "\\text{", 6);
+        var slen = strlen(d1);
+        memcpy(buf + 6, d1, slen);
+        store8(buf + 6 + slen, 125);
+        store8(buf + 6 + slen + 1, 0);
+        return buf;
+    }
+    store8(buf, 0);
+    return buf;
+}
+
+# --- UnitCategory ---
+# Represented as integer constants
+
+enum UnitCategory {
+    CAT_LENGTH;
+    CAT_MASS;
+    CAT_TEMPERATURE;
+    CAT_TIME;
+    CAT_DATASIZE;
+    CAT_SPEED;
+    CAT_AREA;
+    CAT_VOLUME;
+    CAT_ENERGY;
+    CAT_PRESSURE;
+    CAT_ANGLE;
+    CAT_FREQUENCY;
+    CAT_FORCE;
+    CAT_POWER;
+    CAT_FUELECONOMY;
+    CAT_DENSITY;
+    CAT_LUMINOSITY;
+    CAT_VISCOSITY;
+    CAT_PITCH;
+}
+
+var UNIT_CATEGORY_COUNT = 19;
+
+# Returns category name as a string pointer
+# Dense switch: 18 cases (0-17), jump table on 1.7.7+
+fn category_name(cat) {
+    switch (cat) {
+        case 0: return "Length";
+        case 1: return "Mass";
+        case 2: return "Temperature";
+        case 3: return "Time";
+        case 4: return "Data Size";
+        case 5: return "Speed";
+        case 6: return "Area";
+        case 7: return "Volume";
+        case 8: return "Energy";
+        case 9: return "Pressure";
+        case 10: return "Angle";
+        case 11: return "Frequency";
+        case 12: return "Force";
+        case 13: return "Power";
+        case 14: return "Fuel Economy";
+        case 15: return "Density";
+        case 16: return "Luminosity";
+        case 17: return "Viscosity";
+        case 18: return "Pitch";
+        default: return "Unknown";
+    }
+}
+
+# Parse category from string, returns category id or -1 on error
+fn category_from_str(s) {
+    if (streq(s, "length") == 1) { return CAT_LENGTH; }
+    if (streq(s, "mass") == 1) { return CAT_MASS; }
+    if (streq(s, "weight") == 1) { return CAT_MASS; }
+    if (streq(s, "temperature") == 1) { return CAT_TEMPERATURE; }
+    if (streq(s, "temp") == 1) { return CAT_TEMPERATURE; }
+    if (streq(s, "time") == 1) { return CAT_TIME; }
+    if (streq(s, "datasize") == 1) { return CAT_DATASIZE; }
+    if (streq(s, "data_size") == 1) { return CAT_DATASIZE; }
+    if (streq(s, "data") == 1) { return CAT_DATASIZE; }
+    if (streq(s, "speed") == 1) { return CAT_SPEED; }
+    if (streq(s, "velocity") == 1) { return CAT_SPEED; }
+    if (streq(s, "area") == 1) { return CAT_AREA; }
+    if (streq(s, "volume") == 1) { return CAT_VOLUME; }
+    if (streq(s, "energy") == 1) { return CAT_ENERGY; }
+    if (streq(s, "pressure") == 1) { return CAT_PRESSURE; }
+    if (streq(s, "angle") == 1) { return CAT_ANGLE; }
+    if (streq(s, "frequency") == 1) { return CAT_FREQUENCY; }
+    if (streq(s, "freq") == 1) { return CAT_FREQUENCY; }
+    if (streq(s, "force") == 1) { return CAT_FORCE; }
+    if (streq(s, "power") == 1) { return CAT_POWER; }
+    if (streq(s, "wattage") == 1) { return CAT_POWER; }
+    if (streq(s, "fueleconomy") == 1) { return CAT_FUELECONOMY; }
+    if (streq(s, "fuel_economy") == 1) { return CAT_FUELECONOMY; }
+    if (streq(s, "fuel") == 1) { return CAT_FUELECONOMY; }
+    if (streq(s, "mpg") == 1) { return CAT_FUELECONOMY; }
+    if (streq(s, "density") == 1) { return CAT_DENSITY; }
+    if (streq(s, "luminosity") == 1) { return CAT_LUMINOSITY; }
+    if (streq(s, "light") == 1) { return CAT_LUMINOSITY; }
+    if (streq(s, "illuminance") == 1) { return CAT_LUMINOSITY; }
+    if (streq(s, "viscosity") == 1) { return CAT_VISCOSITY; }
+    if (streq(s, "pitch") == 1) { return CAT_PITCH; }
+    if (streq(s, "semitones") == 1) { return CAT_PITCH; }
+    if (streq(s, "cents") == 1) { return CAT_PITCH; }
+    return 0 - 1;
+}
+
+# --- Unit struct ---
+# Unit { name (Str), symbol (Str), category (i64), to_base_factor (f64),
+#        to_base_offset (f64), to_base_inverse (i64 bool) }
+
+struct Unit { name; symbol; category; to_base_factor; to_base_offset; to_base_inverse; }
+
+fn Unit_new(name, symbol, category, to_base_factor, to_base_offset) {
+    var u = alloc(48);
+    store64(u, name);
+    store64(u + 8, symbol);
+    store64(u + 16, category);
+    store64(u + 24, to_base_factor);
+    store64(u + 32, to_base_offset);
+    store64(u + 40, 0);
+    return u;
+}
+
+fn Unit_new_inverse(name, symbol, category, to_base_factor) {
+    var u = alloc(48);
+    store64(u, name);
+    store64(u + 8, symbol);
+    store64(u + 16, category);
+    store64(u + 24, to_base_factor);
+    store64(u + 32, 0);
+    store64(u + 40, 1);
+    return u;
+}
+
+# Unit accessors
+fn Unit_name(self) { return load64(self); }
+fn Unit_symbol(self) { return load64(self + 8); }
+fn Unit_category(self) { return load64(self + 16); }
+fn Unit_factor(self) { return load64(self + 24); }
+fn Unit_offset(self) { return load64(self + 32); }
+fn Unit_inverse(self) { return load64(self + 40); }
+
+# --- ConversionResult ---
+# { from_value (f64), from_unit (Str), to_value (f64), to_unit (Str) }
+
+struct ConversionResult { from_value; from_unit; to_value; to_unit; }
+
+fn ConversionResult_new(from_value, from_unit, to_value, to_unit) {
+    var r = alloc(32);
+    store64(r, from_value);
+    store64(r + 8, from_unit);
+    store64(r + 16, to_value);
+    store64(r + 24, to_unit);
+    return r;
+}
+
+fn ConversionResult_from_value(self) { return load64(self); }
+fn ConversionResult_from_unit(self) { return load64(self + 8); }
+fn ConversionResult_to_value(self) { return load64(self + 16); }
+fn ConversionResult_to_unit(self) { return load64(self + 24); }
+
+# --- Currency ---
+# { code (Str), name (Str), symbol (Str) }
+
+struct Currency { code; name; symbol; }
+
+fn Currency_new(code, name, symbol) {
+    var c = alloc(24);
+    store64(c, code);
+    store64(c + 8, name);
+    store64(c + 16, symbol);
+    return c;
+}
+
+fn Currency_code(self) { return load64(self); }
+fn Currency_name(self) { return load64(self + 8); }
+fn Currency_symbol(self) { return load64(self + 16); }
