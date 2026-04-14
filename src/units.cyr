@@ -406,6 +406,22 @@ fn reg_aliases(r) {
     reg_alias(r, "sq ft", "ft2");
     reg_alias(r, "square meter", "m2");
     reg_alias(r, "square metre", "m2");
+    reg_alias(r, "square meters", "m2");
+    reg_alias(r, "square metres", "m2");
+    reg_alias(r, "square kilometer", "km2");
+    reg_alias(r, "square kilometre", "km2");
+    reg_alias(r, "square kilometers", "km2");
+    reg_alias(r, "square kilometres", "km2");
     reg_alias(r, "square feet", "ft2");
+    # Speed multi-word
+    reg_alias(r, "meters per second", "m/s");
+    reg_alias(r, "metres per second", "m/s");
+    reg_alias(r, "meters/second", "m/s");
+    reg_alias(r, "metres/second", "m/s");
+    reg_alias(r, "kilometers per hour", "km/h");
+    reg_alias(r, "kilometres per hour", "km/h");
+    reg_alias(r, "miles per hour", "mph");
+    # Fuel economy multi-word
+    reg_alias(r, "miles per gallon", "mpg");
     return 0;
 }

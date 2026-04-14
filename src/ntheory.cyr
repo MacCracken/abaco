@@ -1,15 +1,18 @@
 # abaco::ntheory — number theory primitives: primality, factorization, totient, fibonacci, binomial.
 
-# -- Modular multiplication (binary method to avoid overflow) --
-# Computes (a * b) % m without exceeding i64
+# Modular multiplication: (a * b) mod m via the double-and-add binary method,
+# which avoids i64 overflow for any a, b < 2^63.
+#
+# We tried Cyrius 4.8.0 u128 (u128_mul + u128_mod from lib/u128.cyr) as a
+# "native" path, but u128_mod is a binary long-division loop in software and
+# was ~40x slower than this method on is_prime benchmarks. Hardware 128-bit
+# div-mod would flip the tradeoff; revisit when the backend emits it.
 fn mod_mul(a, b, m) {
     var result = 0;
     a = a % m;
     b = b % m;
     while (b > 0) {
-        if (b & 1 == 1) {
-            result = (result + a) % m;
-        }
+        if (b & 1 == 1) { result = (result + a) % m; }
         a = (a + a) % m;
         b = b >> 1;
     }

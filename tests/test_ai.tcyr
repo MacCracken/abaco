@@ -10,6 +10,10 @@ include "lib/tagged.cyr"
 include "lib/hashmap.cyr"
 include "lib/fnptr.cyr"
 include "lib/math.cyr"
+include "lib/io.cyr"
+include "lib/net.cyr"
+include "lib/http.cyr"
+include "lib/json.cyr"
 include "lib/assert.cyr"
 
 include "src/core.cyr"
@@ -193,6 +197,21 @@ fn test_currency_convert() {
     return 0;
 }
 
+fn test_ccy_parse_body() {
+    var c = CurrencyCache_new("http://localhost:8088");
+    var body = "{\"base\":\"USD\",\"rates\":{\"EUR\":0.92,\"GBP\":0.79,\"JPY\":149.5}}";
+    var err = _ccy_load_body(c, body, strlen(body));
+    assert_eq(err, 0, "load_body ok");
+    assert(streq(ccy_base(c), "USD") == 1, "base = USD");
+    var r = CurrencyCache_convert(c, f64_from(100), "USD", "EUR");
+    assert(r != 0, "convert after parse");
+    assert_eq(f64_to(cr_to_value(r)), 92, "100 USD = 92 EUR after parse");
+    var r2 = CurrencyCache_convert(c, f64_from(1), "USD", "JPY");
+    assert(r2 != 0, "convert to JPY");
+    assert_eq(f64_to(cr_to_value(r2)), 149, "1 USD ~ 149 JPY");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco ai tests ===");
@@ -213,6 +232,7 @@ fn main() {
     test_history_limit();
     test_history_clear();
     test_currency_convert();
+    test_ccy_parse_body();
     assert_summary();
     return 0;
 }

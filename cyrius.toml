@@ -11,4 +11,4 @@ entry = "src/main.cyr"
 output = "abaco"
 
 [deps]
-stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged", "hashmap", "assert", "fnptr", "bench", "args", "math"]
+stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged", "hashmap", "assert", "fnptr", "bench", "args", "math", "io", "net", "http", "json"]

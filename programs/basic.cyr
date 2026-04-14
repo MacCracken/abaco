@@ -1,0 +1,91 @@
+# abaco — runnable demo of Evaluator + UnitRegistry.
+# Mirrors rust-old/examples/basic.rs.
+# Build + run: cyrius run programs/basic.cyr
+
+include "lib/syscalls.cyr"
+include "lib/alloc.cyr"
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/tagged.cyr"
+include "lib/hashmap.cyr"
+include "lib/fnptr.cyr"
+include "lib/math.cyr"
+include "lib/assert.cyr"
+
+include "src/core.cyr"
+include "src/ntheory.cyr"
+include "src/dsp.cyr"
+include "src/eval.cyr"
+include "src/units.cyr"
+
+fn write_str(s) {
+    syscall(1, 1, s, strlen(s));
+    return 0;
+}
+
+fn show(label, f) {
+    write_str(label);
+    write_str(" = ");
+    fmt_float(f, 4);
+    write_str("\n");
+    return 0;
+}
+
+fn show_conv(value, from, to, result) {
+    fmt_float(value, 2);
+    write_str(" "); write_str(from);
+    write_str(" = ");
+    fmt_float(result, 4);
+    write_str(" "); write_str(to); write_str("\n");
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+
+    # -- Expression evaluation --
+    println("=== expressions ===");
+    var e = Evaluator_new();
+    show("2 + 3 * 4",              Evaluator_eval(e, "2 + 3 * 4"));
+    show("sqrt(144) + sin(pi/2)",  Evaluator_eval(e, "sqrt(144) + sin(pi/2)"));
+    show("200 * 15%",              Evaluator_eval(e, "200 * 15%"));
+    show("1.5e3 + 2.5e2",          Evaluator_eval(e, "1.5e3 + 2.5e2"));
+
+    # -- Variables --
+    println("");
+    println("=== variables ===");
+    Evaluator_set_variable(e, "x", f64_from(42));
+    show("x^2 + 1 (x=42)",         Evaluator_eval(e, "x^2 + 1"));
+
+    # -- Unit conversion --
+    println("");
+    println("=== unit conversions ===");
+    var r = UnitRegistry_new();
+    show_conv(f64_from(100), "C",   "F",   UnitRegistry_convert(r, f64_from(100), "C", "F"));
+    show_conv(f64_from(5),   "km",  "mi",  UnitRegistry_convert(r, f64_from(5),   "km", "mi"));
+    show_conv(f64_from(1),   "GB",  "GiB", UnitRegistry_convert(r, f64_from(1),   "GB", "GiB"));
+    show_conv(f64_from(1),   "TiB", "GB",  UnitRegistry_convert(r, f64_from(1),   "TiB", "GB"));
+    show_conv(f64_from(120), "bpm", "Hz",  UnitRegistry_convert(r, f64_from(120), "bpm", "Hz"));
+
+    # -- List units by category --
+    println("");
+    println("=== data size units ===");
+    var units = UnitRegistry_list(r, CAT_DATASIZE);
+    var i = 0;
+    while (i < vec_len(units)) {
+        var u = vec_get(units, i);
+        write_str("  ");
+        write_str(Unit_name(u));
+        write_str(" (");
+        write_str(Unit_symbol(u));
+        write_str(")\n");
+        i = i + 1;
+    }
+
+    return 0;
+}
+
+var rc = main();
+sys_exit(rc);

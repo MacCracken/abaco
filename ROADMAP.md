@@ -22,7 +22,7 @@
 - [x] Port units module (80+ units, 18 categories, hashmap registry)
 - [x] SIMD batch DSP — f64v_add/sub/mul, batch_add/sub/mul/scale/mac (1us/4096 elements)
 - [x] Parity audit — to_latex, eval_partial, list_units, missing units/aliases, hyperbolic trig
-- [x] ai module (2026-04-14) — NL parsing, calculation history, currency cache + conversion. Live HTTP rate fetch via hoosh still pending (see below).
+- [x] ai module (2026-04-14) — NL parsing, calculation history, currency cache + convert + `CurrencyCache_fetch` via `lib/http.cyr` + nested JSON extractor.
 
 ## Cyrius Port — Known Gaps (intentional or blocked)
 
@@ -31,9 +31,8 @@
 - **Tuple returns** — pan/crossfade use output pointers instead. Cyrius has no multi-return.
 - **asin/acos/atan** — Implemented via sin/cos division (stopgap). Cyrius builtins requested.
 - **sinh/cosh/tanh** — Now use `lib/math.cyr` (`f64_sinh/cosh/tanh`) as of 2026-04-14.
-- **u128 / is_prime perf** — mod_mul binary method (18-33x vs Rust). Blocked on Cyrius u128.
+- **u128 / is_prime perf** — mod_mul still uses the binary double-and-add method. Cyrius 4.8.0 shipped `u128` scalar + `lib/u128.cyr`, but `u128_mod` is a software long-division loop and benched ~40x *slower* than the binary method. Revisit when the backend emits hardware 128-bit div-mod.
 - **256 function limit** — Tests must exclude eval to fit units tests. Cyrius raised to 1024 in v1.9+.
-- **ai: live currency HTTP fetch** — `CurrencyCache_set_rates` works; live `/rates` fetch via hoosh HTTP still to do (needs `[deps.hoosh] path = "../hoosh" tag = "2.0.0"` and a nested-JSON parser for the rate map).
 
 ## Ecosystem Rollout
 
