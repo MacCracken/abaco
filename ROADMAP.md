@@ -21,7 +21,7 @@
 - [x] Port units module (80+ units, 18 categories, hashmap registry)
 - [x] SIMD batch DSP — f64v_add/sub/mul, batch_add/sub/mul/scale/mac (1us/4096 elements)
 - [x] Parity audit — to_latex, eval_partial, list_units, missing units/aliases, hyperbolic trig
-- [ ] **BLOCKER**: ai module — NL parsing, calculation history, currency conversion; hoosh problem
+- [ ] ai module — NL parsing, calculation history, currency conversion (unblocked 2026-04-14: hoosh 2.0 + ai-hwaccel 2.0 now Cyrius-ported)
 
 ## Cyrius Port — Known Gaps (intentional or blocked)
 
@@ -29,7 +29,7 @@
 - **Token enum not public** — Tokenizer is internal to eval. Consumers use Evaluator_eval.
 - **Tuple returns** — pan/crossfade use output pointers instead. Cyrius has no multi-return.
 - **asin/acos/atan** — Implemented via sin/cos division (stopgap). Cyrius builtins requested.
-- **sinh/cosh/tanh** — Implemented via exp (stopgap). Cyrius builtins requested.
+- **sinh/cosh/tanh** — Now use `lib/math.cyr` (`f64_sinh/cosh/tanh`) as of 2026-04-14.
 - **u128 / is_prime perf** — mod_mul binary method (18-33x vs Rust). Blocked on Cyrius u128.
 - **256 function limit** — Tests must exclude eval to fit units tests. Cyrius raised to 1024 in v1.9+.
 

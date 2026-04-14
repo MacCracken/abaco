@@ -8,117 +8,73 @@ on:
   workflow_call:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
-
 jobs:
-  check:
-    name: Check & Lint
+  build:
+    name: Build & Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-      - name: Clippy (default features)
-        run: cargo clippy --all-targets -- -D warnings
-      - name: Clippy (all features)
-        run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Check
-        run: cargo check --all-features
 
-  security:
-    name: Security Audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install cargo-audit
-        run: cargo install cargo-audit
-      - name: Run security audit
-        run: cargo audit
+      - name: Install Cyrius toolchain
+        run: |
+          CYRIUS_VERSION="${CYRIUS_VERSION:-$(cat .cyrius-toolchain 2>/dev/null | tr -d '[:space:]')}"
+          CYRIUS_VERSION="${CYRIUS_VERSION:-4.8.3}"
+          echo "Installing Cyrius $CYRIUS_VERSION"
+          curl -sLO "https://github.com/MacCracken/cyrius/releases/download/$CYRIUS_VERSION/cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
+          tar xzf "cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
+          CYRIUS_DIR="cyrius-$CYRIUS_VERSION-x86_64-linux"
+          mkdir -p "$HOME/.cyrius/bin" "$HOME/.cyrius/lib"
+          cp "$CYRIUS_DIR/bin/"* "$HOME/.cyrius/bin/" 2>/dev/null || true
+          cp -r "$CYRIUS_DIR/lib/"* "$HOME/.cyrius/lib/" 2>/dev/null || true
+          chmod +x "$HOME/.cyrius/bin/"* 2>/dev/null || true
+          echo "$HOME/.cyrius/bin" >> $GITHUB_PATH
+          echo "CYRIUS_HOME=$HOME/.cyrius" >> $GITHUB_ENV
 
-  deny:
-    name: Supply Chain
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - name: Resolve dependencies
+        run: cyrius deps
 
-  test:
-    name: Test (${{ matrix.os }})
-    needs: [check]
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Build abaco binary
+        run: |
+          mkdir -p build
+          cyrius build src/main.cyr build/abaco
+          echo "abaco size: $(wc -c < build/abaco) bytes"
+
       - name: Run tests
-        run: cargo test --all-features
-      - name: Doc tests
-        run: cargo test --doc
+        run: cyrius test
 
-  msrv:
-    name: MSRV (1.89)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.89
-      - name: Check
-        run: cargo check --all-features
-      - name: Test
-        run: cargo test --all-features
+      - name: Run benchmarks (non-fatal)
+        run: |
+          cyrius bench | tee bench-results.txt || exit 0
 
-  coverage:
-    name: Coverage
-    needs: [check]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install llvm-cov
-        run: cargo install cargo-llvm-cov
-      - name: Generate coverage
-        run: cargo llvm-cov --all-features --lcov --output-path lcov.info
-      - name: Upload to Codecov
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: codecov/codecov-action@v4
-        with:
-          files: lcov.info
-
-  benchmarks:
-    name: Benchmarks
-    needs: [check]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Run benchmarks
-        run: cargo bench --bench benchmarks
-      - name: Upload results
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: criterion-report
-          path: target/criterion/
-          retention-days: 30
+          name: abaco-${{ github.sha }}
+          path: |
+            build/abaco
+            bench-results.txt
+          if-no-files-found: warn
 
-  doc:
+  docs:
     name: Documentation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Build docs
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+      - name: Check required docs
+        run: |
+          for doc in README.md CHANGELOG.md VERSION LICENSE cyrius.toml; do
+            test -f "$doc" && echo "OK: $doc" || { echo "MISSING: $doc"; exit 1; }
+          done
+
+      - name: Verify version consistency
+        run: |
+          V_FILE=$(cat VERSION | tr -d '[:space:]')
+          V_TOML=$(grep '^version' cyrius.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if [ "$V_FILE" != "$V_TOML" ]; then
+            echo "Version mismatch: VERSION=$V_FILE, cyrius.toml=$V_TOML"
+            exit 1
+          fi
+          echo "Version: $V_FILE"

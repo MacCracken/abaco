@@ -657,23 +657,10 @@ fn call_function(e, name, args, nargs) {
             # atan(x) = asin(x / sqrt(1+x^2))
             return f64_div(f64_sin(a), f64_cos(a));
         }
-        # Hyperbolic: sinh, cosh, tanh via exp
-        if (streq(name, "sinh") == 1) {
-            # sinh(x) = (exp(x) - exp(-x)) / 2
-            var ep = f64_exp(a);
-            var en = f64_exp(f64_neg(a));
-            return f64_div(f64_sub(ep, en), f64_from(2));
-        }
-        if (streq(name, "cosh") == 1) {
-            var ep = f64_exp(a);
-            var en = f64_exp(f64_neg(a));
-            return f64_div(f64_add(ep, en), f64_from(2));
-        }
-        if (streq(name, "tanh") == 1) {
-            var ep = f64_exp(a);
-            var en = f64_exp(f64_neg(a));
-            return f64_div(f64_sub(ep, en), f64_add(ep, en));
-        }
+        # Hyperbolic: sinh, cosh, tanh (stdlib math.cyr)
+        if (streq(name, "sinh") == 1) { return f64_sinh(a); }
+        if (streq(name, "cosh") == 1) { return f64_cosh(a); }
+        if (streq(name, "tanh") == 1) { return f64_tanh(a); }
         # Inverse hyperbolic
         if (streq(name, "asinh") == 1) {
             # asinh(x) = ln(x + sqrt(x^2 + 1))
@@ -723,7 +710,7 @@ fn call_function(e, name, args, nargs) {
             var n = f64_to(a);
             if (n < 0) { eval_set_err(e, ERR_MATH); return f64_from(0); }
             var r = prev_prime(n);
-            if (tag(r) == OK) { return f64_from(payload(r)); }
+            if (is_ok(r) == 1) { return f64_from(payload(r)); }
             eval_set_err(e, ERR_MATH);
             return f64_from(0);
         }

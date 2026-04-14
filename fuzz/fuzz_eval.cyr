@@ -1,0 +1,90 @@
+# Fuzz: expression evaluator with random input strings.
+# Invariants:
+#   - Evaluator_eval never crashes on any input.
+#   - err is set when input is invalid; result f64 is still a defined word.
+#   - Evaluator_eval_partial never crashes (strips trailing operators).
+
+include "src/core.cyr"
+include "src/ntheory.cyr"
+include "src/dsp.cyr"
+include "src/eval.cyr"
+
+# LCG PRNG
+var _fz_state = 42424242;
+
+fn _fz_rand() {
+    _fz_state = _fz_state * 6364136223846793005 + 1442695040888963407;
+    return _fz_state;
+}
+
+fn _fz_u(m) {
+    var r = _fz_rand();
+    if (r < 0) { r = 0 - r; }
+    return r % m;
+}
+
+# Bias toward expression-relevant bytes — digits, operators, identifiers.
+fn _fz_byte() {
+    var kind = _fz_u(20);
+    if (kind < 6)  { return 48 + _fz_u(10); }     # 0-9
+    if (kind < 10) { return 97 + _fz_u(26); }     # a-z
+    if (kind == 10) { return 43; }                # +
+    if (kind == 11) { return 45; }                # -
+    if (kind == 12) { return 42; }                # *
+    if (kind == 13) { return 47; }                # /
+    if (kind == 14) { return 40; }                # (
+    if (kind == 15) { return 41; }                # )
+    if (kind == 16) { return 46; }                # .
+    if (kind == 17) { return 44; }                # ,
+    if (kind == 18) { return 32; }                # space
+    return _fz_u(128);                            # wild byte
+}
+
+fn _fz_expr() {
+    var len = _fz_u(48) + 1;
+    var buf = alloc(len + 1);
+    var i = 0;
+    while (i < len) {
+        store8(buf + i, _fz_byte());
+        i = i + 1;
+    }
+    store8(buf + len, 0);
+    return buf;
+}
+
+fn main() {
+    alloc_init();
+    args_init();
+
+    var iters = 5000;
+    if (argc() > 1) {
+        var arg = argv(1);
+        iters = 0;
+        var ai = 0;
+        while (load8(arg + ai) != 0) {
+            iters = iters * 10 + load8(arg + ai) - 48;
+            ai = ai + 1;
+        }
+    }
+    var ev = Evaluator_new();
+    var pass = 0;
+    var iter = 0;
+    while (iter < iters) {
+        var s = _fz_expr();
+
+        # Must not crash.
+        Evaluator_eval(ev, s);
+        # Partial eval must not crash either.
+        Evaluator_eval_partial(ev, s);
+
+        pass = pass + 1;
+        iter = iter + 1;
+    }
+
+    print_num(pass);
+    println(" eval fuzz iterations passed");
+    return 0;
+}
+
+var r = main();
+sys_exit(r);

@@ -1,0 +1,81 @@
+# Fuzz: unit registry with random lookup queries and conversions.
+# Invariants:
+#   - UnitRegistry_find never crashes on any string.
+#   - UnitRegistry_convert never crashes; sets UERR_UNKNOWN / UERR_INCOMPAT cleanly.
+
+include "src/core.cyr"
+include "src/ntheory.cyr"
+include "src/dsp.cyr"
+include "src/eval.cyr"
+include "src/units.cyr"
+
+var _fz_state = 998877;
+
+fn _fz_rand() {
+    _fz_state = _fz_state * 6364136223846793005 + 1442695040888963407;
+    return _fz_state;
+}
+
+fn _fz_u(m) {
+    var r = _fz_rand();
+    if (r < 0) { r = 0 - r; }
+    return r % m;
+}
+
+# Build a random-ish unit string — letters, digits, punctuation.
+fn _fz_unit() {
+    var len = _fz_u(16) + 1;
+    var buf = alloc(len + 1);
+    var i = 0;
+    while (i < len) {
+        var kind = _fz_u(10);
+        var c = 0;
+        if (kind < 6) { c = 97 + _fz_u(26); }       # a-z
+        elif (kind < 8) { c = 48 + _fz_u(10); }     # 0-9
+        elif (kind == 8) { c = 47; }                # /
+        else { c = _fz_u(128); }
+        store8(buf + i, c);
+        i = i + 1;
+    }
+    store8(buf + len, 0);
+    return buf;
+}
+
+fn main() {
+    alloc_init();
+    args_init();
+
+    var iters = 5000;
+    if (argc() > 1) {
+        var arg = argv(1);
+        iters = 0;
+        var ai = 0;
+        while (load8(arg + ai) != 0) {
+            iters = iters * 10 + load8(arg + ai) - 48;
+            ai = ai + 1;
+        }
+    }
+
+    var reg = UnitRegistry_new();
+    var pass = 0;
+    var iter = 0;
+    while (iter < iters) {
+        var q = _fz_unit();
+        # Must not crash.
+        UnitRegistry_find(reg, q);
+
+        var from = _fz_unit();
+        var to = _fz_unit();
+        UnitRegistry_convert(reg, f64_from(100), from, to);
+
+        pass = pass + 1;
+        iter = iter + 1;
+    }
+
+    print_num(pass);
+    println(" units fuzz iterations passed");
+    return 0;
+}
+
+var r = main();
+sys_exit(r);

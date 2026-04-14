@@ -14,8 +14,7 @@ MD_FILE="${2:-bench-latest.md}"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-CC2="${CYRIUS_HOME:-$HOME/.cyrius}/bin/cc2"
-CYRB="${CYRIUS_HOME:-$HOME/.cyrius}/bin/cyrb"
+CYRIUS="${CYRIUS_HOME:-$HOME/.cyrius}/bin/cyrius"
 
 # Create CSV header if file doesn't exist
 if [ ! -f "$HISTORY_FILE" ]; then
@@ -25,15 +24,15 @@ fi
 echo "Running benchmarks..."
 echo "  commit:  $COMMIT"
 echo "  branch:  $BRANCH"
-echo "  compiler: $CC2"
+echo "  compiler: $CYRIUS"
 echo ""
 
-# Run all benchmark files via cyrb
+# Run all benchmark files via cyrius
 BENCH_OUTPUT=""
 for benchfile in benches/bench.cyr benches/bench_eval.cyr benches/bench_units.cyr; do
     if [ -f "$benchfile" ]; then
         BENCH_OUTPUT="${BENCH_OUTPUT}
-$("$CYRB" bench "$benchfile" 2>&1)"
+$("$CYRIUS" bench "$benchfile" 2>&1)"
     fi
 done
 echo "$BENCH_OUTPUT"

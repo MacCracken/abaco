@@ -1,6 +1,17 @@
 # abaco eval benchmarks
 # Parity with rust-old eval_simple, eval_functions, eval_complex, eval_scientific, tokenizer
 
+include "lib/syscalls.cyr"
+include "lib/alloc.cyr"
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/tagged.cyr"
+include "lib/hashmap.cyr"
+include "lib/fnptr.cyr"
+include "lib/bench.cyr"
+
 include "src/core.cyr"
 include "src/ntheory.cyr"
 include "src/dsp.cyr"

@@ -1,0 +1,14 @@
+[package]
+name = "abaco"
+version = "1.1.0"
+description = "Math engine — expression evaluation, unit conversion, DSP math"
+license = "AGPL-3.0-only"
+language = "cyrius"
+cyrius = "4.8.3"
+
+[build]
+entry = "src/main.cyr"
+output = "abaco"
+
+[deps]
+stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged", "hashmap", "assert", "fnptr", "bench", "args", "math"]

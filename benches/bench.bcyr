@@ -1,7 +1,16 @@
 # abaco benchmarks
 # Parity with rust-old/benches/benchmarks.rs (ported modules only)
-# Run: cat benches/bench.cyr | cc2 > build/bench && chmod +x build/bench && ./build/bench
 
+include "lib/syscalls.cyr"
+include "lib/alloc.cyr"
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/tagged.cyr"
+include "lib/hashmap.cyr"
+include "lib/fnptr.cyr"
+include "lib/bench.cyr"
 
 include "src/core.cyr"
 include "src/ntheory.cyr"

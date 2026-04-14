@@ -1,9 +1,0 @@
-name = "abaco"
-version = "0.1.0"
-license = "AGPL-3.0-only"
-entry = "src/main.cyr"
-output = "abaco"
-description = "Math engine — expression evaluation, unit conversion, DSP math"
-
-[deps]
-stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged", "hashmap", "assert", "fnptr", "bench"]

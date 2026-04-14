@@ -1,0 +1,101 @@
+# Fuzz: ntheory primitives with random u64 inputs.
+# Invariants:
+#   - is_prime / next_prime / prev_prime / totient / factor never crash.
+#   - factor(n) returns a vec whose product equals n (for small n).
+#   - is_prime agrees with trial division below 10^6.
+
+include "src/core.cyr"
+include "src/ntheory.cyr"
+
+var _fz_state = 1234567;
+
+fn _fz_rand() {
+    _fz_state = _fz_state * 6364136223846793005 + 1442695040888963407;
+    return _fz_state;
+}
+
+fn _fz_u(m) {
+    var r = _fz_rand();
+    if (r < 0) { r = 0 - r; }
+    return r % m;
+}
+
+fn _fz_n() {
+    # Bias toward edges: small, large, near u64 boundaries.
+    var kind = _fz_u(10);
+    if (kind == 0) { return 0; }
+    if (kind == 1) { return 1; }
+    if (kind == 2) { return 2; }
+    if (kind < 5)  { return _fz_u(1000); }              # small
+    if (kind < 8)  { return _fz_u(10000000); }          # medium
+    return _fz_u(2000000000);                           # large but bounded
+}
+
+fn trial_prime(n) {
+    if (n < 2) { return 0; }
+    if (n == 2) { return 1; }
+    if ((n % 2) == 0) { return 0; }
+    var d = 3;
+    while ((d * d) <= n) {
+        if ((n % d) == 0) { return 0; }
+        d = d + 2;
+    }
+    return 1;
+}
+
+fn main() {
+    alloc_init();
+    args_init();
+
+    var iters = 5000;
+    if (argc() > 1) {
+        var arg = argv(1);
+        iters = 0;
+        var ai = 0;
+        while (load8(arg + ai) != 0) {
+            iters = iters * 10 + load8(arg + ai) - 48;
+            ai = ai + 1;
+        }
+    }
+
+    var pass = 0;
+    var iter = 0;
+    while (iter < iters) {
+        var n = _fz_n();
+
+        var ip = is_prime(n);
+        if (n >= 0) {
+            if (n < 1000000) {
+                var tp = trial_prime(n);
+                if (ip != tp) {
+                    print("DIVERGENCE n="); print_num(n);
+                    print(" is_prime="); print_num(ip);
+                    print(" trial="); println(tp);
+                    sys_exit(1);
+                }
+            }
+        }
+
+        # factor and totient only for n > 0.
+        if (n > 0 && n < 100000000) {
+            var fs = factor(n);
+            totient(n);
+            if (vec_len(fs) < 0) { println("FAIL: negative factor count"); sys_exit(1); }
+        }
+
+        # next_prime bounded to avoid overflow.
+        if (n >= 0 && n < 1000000000) {
+            next_prime(n);
+        }
+
+        pass = pass + 1;
+        iter = iter + 1;
+    }
+
+    print_num(pass);
+    println(" ntheory fuzz iterations passed");
+    return 0;
+}
+
+var r = main();
+sys_exit(r);

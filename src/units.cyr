@@ -225,12 +225,15 @@ fn reg_populate(r) {
     reg_add(r, "gibibyte", "GiB", CAT_DATASIZE, f64_from(1073741824), zero);
 
     reg_add(r, "tebibyte", "TiB", CAT_DATASIZE, f64_mul(f64_from(1073741824), f64_from(1024)), zero);
-    reg_add(r, "petabyte", "PB", CAT_DATASIZE, f64_mul(f64_mul(f64_from(1000000), f64_from(1000000)), f64_from(1000)), zero);
-    reg_add(r, "pebibyte", "PiB", CAT_DATASIZE, f64_mul(f64_mul(f64_from(1048576), f64_from(1048576)), f64_from(1024)), zero);
+    var pb = f64_mul(f64_mul(f64_from(1000000), f64_from(1000000)), f64_from(1000));
+    reg_add(r, "petabyte", "PB", CAT_DATASIZE, pb, zero);
+    var pib = f64_mul(f64_mul(f64_from(1048576), f64_from(1048576)), f64_from(1024));
+    reg_add(r, "pebibyte", "PiB", CAT_DATASIZE, pib, zero);
 
     # -- Speed (base: m/s) --
     reg_add(r, "meters_per_second", "m/s", CAT_SPEED, f64_from(1), zero);
-    reg_add(r, "kilometers_per_hour", "km/h", CAT_SPEED, f64_div(f64_from(1), f64_div(f64_from(36), f64_from(10))), zero);
+    var kmh = f64_div(f64_from(1), f64_div(f64_from(36), f64_from(10)));
+    reg_add(r, "kilometers_per_hour", "km/h", CAT_SPEED, kmh, zero);
     reg_add(r, "miles_per_hour", "mph", CAT_SPEED, f64_div(f64_from(44704), f64_from(100000)), zero);
     reg_add(r, "knot", "kn", CAT_SPEED, f64_div(f64_from(514444), f64_from(1000000)), zero);
     reg_add(r, "feet_per_second", "ft/s", CAT_SPEED, f64_div(f64_from(3048), f64_from(10000)), zero);

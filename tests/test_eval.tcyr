@@ -1,5 +1,15 @@
 # abaco eval tests
 
+include "lib/syscalls.cyr"
+include "lib/alloc.cyr"
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/tagged.cyr"
+include "lib/hashmap.cyr"
+include "lib/fnptr.cyr"
+include "lib/assert.cyr"
 
 include "src/core.cyr"
 include "src/ntheory.cyr"

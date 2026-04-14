@@ -15,4 +15,4 @@ fn main() {
 }
 
 var r = main();
-syscall(SYS_EXIT, r);
+sys_exit(r);
