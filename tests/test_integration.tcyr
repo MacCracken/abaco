@@ -1,0 +1,164 @@
+# abaco — end-to-end integration tests.
+# Exercise full flows: nl_parse -> Evaluator / UnitRegistry -> history.
+
+include "lib/syscalls.cyr"
+include "lib/alloc.cyr"
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/tagged.cyr"
+include "lib/hashmap.cyr"
+include "lib/fnptr.cyr"
+include "lib/math.cyr"
+include "lib/io.cyr"
+include "lib/net.cyr"
+include "lib/http.cyr"
+include "lib/json.cyr"
+include "lib/assert.cyr"
+
+include "src/core.cyr"
+include "src/ntheory.cyr"
+include "src/dsp.cyr"
+include "src/eval.cyr"
+include "src/units.cyr"
+include "src/ai.cyr"
+
+# NL input -> Evaluator, then push into history.
+fn test_nl_to_eval_to_history() {
+    var ev = Evaluator_new();
+    var h = CalcHistory_new(10);
+
+    var q = nl_parse("what is 2 + 3 * 4");
+    assert(q != 0, "nl parsed");
+    assert_eq(pq_kind(q), PQ_CALCULATION, "kind = calc");
+
+    var result = Evaluator_eval(ev, pq_s1(q));
+    assert_eq(eval_err(ev), ERR_NONE, "eval clean");
+    assert_eq(f64_to(result), 14, "14");
+
+    CalcHistory_push(h, pq_s1(q), "14", "2026-04-14T00:00:00Z");
+    assert_eq(CalcHistory_len(h), 1, "history len 1");
+    return 0;
+}
+
+# Percent-of expansion actually evaluates.
+fn test_percent_of_end_to_end() {
+    var q = nl_parse("what is 15% of 230");
+    assert(q != 0, "pct parsed");
+    var ev = Evaluator_new();
+    var r = Evaluator_eval(ev, pq_s1(q));
+    assert_eq(eval_err(ev), ERR_NONE, "eval pct clean");
+    assert_eq(f64_to(r), 34, "15% of 230 = 34 (trunc)");
+    return 0;
+}
+
+# NL conversion -> UnitRegistry.
+fn test_nl_to_units() {
+    var q = nl_parse("convert 100 celsius to fahrenheit");
+    assert(q != 0, "conv parsed");
+    assert_eq(pq_kind(q), PQ_CONVERSION, "kind = conversion");
+
+    var reg = UnitRegistry_new();
+    var result = UnitRegistry_convert(reg, pq_value(q), pq_s1(q), pq_s2(q));
+    assert_eq(reg_err(reg), UERR_NONE, "conv clean");
+    assert_eq(f64_to(result), 212, "100C = 212F");
+    return 0;
+}
+
+# NL conversion with plural + alias.
+fn test_nl_multiword_alias() {
+    var q = nl_parse("convert 60 miles per hour to meters per second");
+    assert(q != 0, "multi-word parsed");
+    assert_eq(pq_kind(q), PQ_CONVERSION, "kind = conversion");
+    var reg = UnitRegistry_new();
+    var result = UnitRegistry_convert(reg, pq_value(q), pq_s1(q), pq_s2(q));
+    assert_eq(reg_err(reg), UERR_NONE, "multi-word conv clean");
+    # 60 mph ≈ 26.8 m/s; integer truncation = 26.
+    assert_eq(f64_to(result), 26, "60 mph ~ 27 m/s");
+    return 0;
+}
+
+# NL currency -> CurrencyCache.
+fn test_nl_to_currency() {
+    var q = nl_parse("100 usd to eur");
+    assert(q != 0, "ccy parsed");
+    assert_eq(pq_kind(q), PQ_CURRENCY, "kind = currency");
+
+    var c = CurrencyCache_new("http://localhost:8088");
+    var rates = map_new();
+    map_set(rates, "EUR", f64_div(f64_from(92), f64_from(100)));
+    CurrencyCache_set_rates(c, "USD", rates);
+
+    var r = CurrencyCache_convert(c, pq_value(q), pq_s1(q), pq_s2(q));
+    assert(r != 0, "ccy convert ok");
+    assert_eq(f64_to(cr_to_value(r)), 92, "100 USD = 92 EUR");
+    return 0;
+}
+
+# Variables persist across multiple eval calls.
+fn test_variable_persistence() {
+    var ev = Evaluator_new();
+    Evaluator_set_variable(ev, "pi_sq", Evaluator_eval(ev, "pi * pi"));
+    var r = Evaluator_eval(ev, "pi_sq + 1");
+    # pi^2 ≈ 9.87, + 1 ≈ 10.87. truncated = 10.
+    assert_eq(f64_to(r), 10, "var survives eval");
+    return 0;
+}
+
+# History round-trip: push -> to_json -> from_json -> verify.
+fn test_history_roundtrip_with_eval() {
+    var ev = Evaluator_new();
+    var h = CalcHistory_new(5);
+    CalcHistory_push(h, "2 + 3", "5", "t0");
+    CalcHistory_push(h, "10 * 10", "100", "t1");
+    var s = CalcHistory_to_json(h);
+    var cstr_len = str_len(s);
+    var cbuf = alloc(cstr_len + 1);
+    memcpy(cbuf, str_data(s), cstr_len);
+    store8(cbuf + cstr_len, 0);
+    var h2 = CalcHistory_new(5);
+    assert_eq(CalcHistory_from_json(h2, cbuf), 0, "load clean");
+    assert_eq(CalcHistory_len(h2), 2, "2 entries");
+    # Re-evaluate the reloaded input — should match the stored result.
+    var e = CalcHistory_get(h2, 0);
+    var r = Evaluator_eval(ev, he_input(e));
+    assert_eq(f64_to(r), 5, "reloaded input still evaluates correctly");
+    return 0;
+}
+
+# DSP + units: convert 120 bpm to Hz, compare to bpm_to_hz helper.
+fn test_bpm_two_ways() {
+    var reg = UnitRegistry_new();
+    var via_reg = UnitRegistry_convert(reg, f64_from(120), "bpm", "Hz");
+    var via_dsp = bpm_to_hz(f64_from(120));
+    assert_eq(f64_to(via_reg), f64_to(via_dsp), "bpm_to_hz matches registry");
+    assert_eq(f64_to(via_reg), 2, "both = 2");
+    return 0;
+}
+
+# Unparseable NL -> 0; doesn't crash pipeline.
+fn test_unparseable_safe() {
+    var q = nl_parse("hello world");
+    assert_eq(q, 0, "unparseable returns 0");
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    println("=== abaco integration tests ===");
+    test_nl_to_eval_to_history();
+    test_percent_of_end_to_end();
+    test_nl_to_units();
+    test_nl_multiword_alias();
+    test_nl_to_currency();
+    test_variable_persistence();
+    test_history_roundtrip_with_eval();
+    test_bpm_two_ways();
+    test_unparseable_safe();
+    assert_summary();
+    return 0;
+}
+
+var rr = main();
+syscall(SYS_EXIT, rr);

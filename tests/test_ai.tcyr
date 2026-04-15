@@ -212,6 +212,116 @@ fn test_ccy_parse_body() {
     return 0;
 }
 
+fn test_history_json_roundtrip() {
+    var h = CalcHistory_new(100);
+    CalcHistory_push(h, "2 + 3", "5", "2026-04-14T00:00:00Z");
+    CalcHistory_push(h, "sqrt(16)", "4", "2026-04-14T00:00:01Z");
+    var s = CalcHistory_to_json(h);
+    assert(str_len(s) > 20, "json nonempty");
+    var h2 = CalcHistory_new(100);
+    var cstr_len = str_len(s);
+    var cbuf = alloc(cstr_len + 1);
+    memcpy(cbuf, str_data(s), cstr_len);
+    store8(cbuf + cstr_len, 0);
+    var err = CalcHistory_from_json(h2, cbuf);
+    assert_eq(err, 0, "from_json ok");
+    assert_eq(CalcHistory_len(h2), 2, "2 entries after load");
+    var e0 = CalcHistory_get(h2, 0);
+    assert(streq(he_input(e0), "2 + 3") == 1, "entry 0 input");
+    assert(streq(he_result(e0), "5") == 1, "entry 0 result");
+    var e1 = CalcHistory_get(h2, 1);
+    assert(streq(he_input(e1), "sqrt(16)") == 1, "entry 1 input");
+    return 0;
+}
+
+fn test_history_json_escapes() {
+    var h = CalcHistory_new(10);
+    CalcHistory_push(h, "f(\"x\", 1)", "ok\\", "t\n");
+    var s = CalcHistory_to_json(h);
+    var h2 = CalcHistory_new(10);
+    var cstr_len = str_len(s);
+    var cbuf = alloc(cstr_len + 1);
+    memcpy(cbuf, str_data(s), cstr_len);
+    store8(cbuf + cstr_len, 0);
+    var err = CalcHistory_from_json(h2, cbuf);
+    assert_eq(err, 0, "escape roundtrip ok");
+    var e = CalcHistory_get(h2, 0);
+    assert(streq(he_input(e), "f(\"x\", 1)") == 1, "quote escape");
+    assert(streq(he_result(e), "ok\\") == 1, "backslash escape");
+    assert(streq(he_timestamp(e), "t\n") == 1, "newline escape");
+    return 0;
+}
+
+fn test_security_percent_of_rejects_operators() {
+    # CWE-917: "2+3% of 4" must NOT expand to "4 * 2+3 / 100".
+    # Instead _nl_try_percent_of should reject and fall through.
+    var q = nl_parse("2+3% of 4");
+    # Allowed outcome: either reject entirely (q==0) or route as a plain
+    # calculation with the original literal string (not the % expansion).
+    if (q != 0) {
+        # If accepted, must not be the percent expansion — it would say
+        # "4 * 2+3 / 100" which contains "* 2+" and yields the wrong value.
+        var s = pq_s1(q);
+        # The unsafe form contains " * 2+" or " * 2+3 "; the safe fallthrough
+        # just keeps the original literal.
+        assert(streq(s, "4 * 2+3 / 100") == 0, "must not synthesise unsafe expr");
+    }
+    return 0;
+}
+
+fn test_security_percent_of_paren_injection() {
+    # "15%) of 100" — stray paren in "pct" slot. Must reject.
+    var q = nl_parse("15%) of 100");
+    if (q != 0) {
+        var s = pq_s1(q);
+        assert(streq(s, "100 * 15) / 100") == 0, "must not synth with stray paren");
+    }
+    return 0;
+}
+
+fn test_security_fetch_rejects_plaintext() {
+    # HTTP fetch must refuse non-https URLs (except localhost).
+    var c = CurrencyCache_new("http://evil.example.com");
+    assert_eq(CurrencyCache_fetch(c), AI_ERR_HTTP, "plaintext non-local rejected");
+    assert_eq(ai_last_err(), AI_ERR_HTTP, "last_err = HTTP");
+    return 0;
+}
+
+fn test_security_fetch_rejects_crlf() {
+    # CRLF in URL must be rejected before any wire-format construction.
+    var c = CurrencyCache_new("https://evil\r\nX-Injected: 1.com");
+    assert_eq(CurrencyCache_fetch(c), AI_ERR_HTTP, "CRLF rejected");
+    return 0;
+}
+
+fn test_security_fetch_accepts_localhost() {
+    # Plaintext to localhost is allowed for local hoosh testing.
+    # We don't actually connect — just verify validation passes.
+    # Since there's no server, fetch will fail at the HTTP layer, not
+    # validation. We only assert validation didn't short-circuit.
+    var c1 = CurrencyCache_new("http://localhost:8088");
+    var c2 = CurrencyCache_new("http://127.0.0.1:8088");
+    # _ccy_validate_url is the gate; call it directly for a clean test.
+    assert_eq(_ccy_validate_url("http://localhost:8088"), 0, "localhost ok");
+    assert_eq(_ccy_validate_url("http://127.0.0.1:8088"), 0, "127.0.0.1 ok");
+    assert_eq(_ccy_validate_url("https://api.example.com"), 0, "https ok");
+    return 0;
+}
+
+fn test_history_empty_json() {
+    var h = CalcHistory_new(10);
+    var s = CalcHistory_to_json(h);
+    var cstr_len = str_len(s);
+    var cbuf = alloc(cstr_len + 1);
+    memcpy(cbuf, str_data(s), cstr_len);
+    store8(cbuf + cstr_len, 0);
+    var h2 = CalcHistory_new(10);
+    var err = CalcHistory_from_json(h2, cbuf);
+    assert_eq(err, 0, "empty json ok");
+    assert_eq(CalcHistory_is_empty(h2), 1, "empty after load");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco ai tests ===");
@@ -233,6 +343,14 @@ fn main() {
     test_history_clear();
     test_currency_convert();
     test_ccy_parse_body();
+    test_history_json_roundtrip();
+    test_history_json_escapes();
+    test_history_empty_json();
+    test_security_percent_of_rejects_operators();
+    test_security_percent_of_paren_injection();
+    test_security_fetch_rejects_plaintext();
+    test_security_fetch_rejects_crlf();
+    test_security_fetch_accepts_localhost();
     assert_summary();
     return 0;
 }

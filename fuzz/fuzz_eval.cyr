@@ -3,6 +3,8 @@
 #   - Evaluator_eval never crashes on any input.
 #   - err is set when input is invalid; result f64 is still a defined word.
 #   - Evaluator_eval_partial never crashes (strips trailing operators).
+#   - Whitespace idempotence: " 2 + 3 " == "2+3".
+#   - Commutativity: a + b == b + a, a * b == b * a (on valid expressions).
 
 include "src/core.cyr"
 include "src/ntheory.cyr"
@@ -76,6 +78,54 @@ fn main() {
         Evaluator_eval(ev, s);
         # Partial eval must not crash either.
         Evaluator_eval_partial(ev, s);
+
+        # Whitespace idempotence + commutativity on synthesized valid exprs.
+        # a in [1..1000), b in [1..1000).
+        var a = _fz_u(999) + 1;
+        var b = _fz_u(999) + 1;
+
+        # Build "a + b".
+        var e1 = alloc(32);
+        var p1 = fmt_int_buf(a, e1); store8(e1 + p1, 43); p1 = p1 + 1;
+        p1 = p1 + fmt_int_buf(b, e1 + p1); store8(e1 + p1, 0);
+        # Build "  a + b  " with surrounding / inner whitespace.
+        var e2 = alloc(64);
+        store8(e2, 32); store8(e2 + 1, 32);
+        var p2 = 2 + fmt_int_buf(a, e2 + 2);
+        store8(e2 + p2, 32); p2 = p2 + 1;
+        store8(e2 + p2, 43); p2 = p2 + 1;
+        store8(e2 + p2, 32); p2 = p2 + 1;
+        p2 = p2 + fmt_int_buf(b, e2 + p2);
+        store8(e2 + p2, 32); store8(e2 + p2 + 1, 32); store8(e2 + p2 + 2, 0);
+        # Build "b + a".
+        var e3 = alloc(32);
+        var p3 = fmt_int_buf(b, e3); store8(e3 + p3, 43); p3 = p3 + 1;
+        p3 = p3 + fmt_int_buf(a, e3 + p3); store8(e3 + p3, 0);
+
+        var r1 = Evaluator_eval(ev, e1);
+        var err1 = eval_err(ev);
+        var r2 = Evaluator_eval(ev, e2);
+        var err2 = eval_err(ev);
+        var r3 = Evaluator_eval(ev, e3);
+        var err3 = eval_err(ev);
+
+        if (err1 != ERR_NONE || err2 != ERR_NONE || err3 != ERR_NONE) {
+            println("FAIL: synthesized expr should parse");
+            sys_exit(1);
+        }
+        if (f64_to(r1) != f64_to(r2)) {
+            print("FAIL: whitespace idempotence ");
+            print(e1); print(" vs "); println(e2);
+            sys_exit(1);
+        }
+        if (f64_to(r1) != f64_to(r3)) {
+            print("FAIL: commutativity a+b vs b+a for a=");
+            print_num(a);
+            print(" b=");
+            print_num(b);
+            println("");
+            sys_exit(1);
+        }
 
         pass = pass + 1;
         iter = iter + 1;

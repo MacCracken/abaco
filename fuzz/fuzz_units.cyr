@@ -2,6 +2,8 @@
 # Invariants:
 #   - UnitRegistry_find never crashes on any string.
 #   - UnitRegistry_convert never crashes; sets UERR_UNKNOWN / UERR_INCOMPAT cleanly.
+#   - Round-trip within a category: convert(convert(x, a, b), b, a) ≈ x.
+#   - Converting a value between the same unit is the identity.
 
 include "src/core.cyr"
 include "src/ntheory.cyr"
@@ -41,6 +43,26 @@ fn _fz_unit() {
     return buf;
 }
 
+# Known-good unit pairs for round-trip testing (same category, linear).
+# Temperature offsets are tested separately to avoid the offset cancellation
+# edge case at x=0.
+var RT_PAIRS_N = 10;
+fn _rt_pair(i, out_from, out_to) {
+    switch (i) {
+        case 0: { store64(out_from, "km");  store64(out_to, "m");     return 0; }
+        case 1: { store64(out_from, "mi");  store64(out_to, "ft");    return 0; }
+        case 2: { store64(out_from, "kg");  store64(out_to, "g");     return 0; }
+        case 3: { store64(out_from, "lb");  store64(out_to, "oz");    return 0; }
+        case 4: { store64(out_from, "GB");  store64(out_to, "MB");    return 0; }
+        case 5: { store64(out_from, "GiB"); store64(out_to, "MiB");   return 0; }
+        case 6: { store64(out_from, "hr");  store64(out_to, "min");   return 0; }
+        case 7: { store64(out_from, "Hz");  store64(out_to, "bpm");   return 0; }
+        case 8: { store64(out_from, "J");   store64(out_to, "cal");   return 0; }
+        case 9: { store64(out_from, "oct"); store64(out_to, "cent");  return 0; }
+    }
+    return 0;
+}
+
 fn main() {
     alloc_init();
     args_init();
@@ -57,16 +79,58 @@ fn main() {
     }
 
     var reg = UnitRegistry_new();
+    var from_slot = alloc(8);
+    var to_slot = alloc(8);
     var pass = 0;
     var iter = 0;
     while (iter < iters) {
         var q = _fz_unit();
-        # Must not crash.
         UnitRegistry_find(reg, q);
 
         var from = _fz_unit();
         var to = _fz_unit();
         UnitRegistry_convert(reg, f64_from(100), from, to);
+
+        # Round-trip invariant on a known-good pair.
+        var idx = _fz_u(RT_PAIRS_N);
+        _rt_pair(idx, from_slot, to_slot);
+        var a = load64(from_slot);
+        var b = load64(to_slot);
+        # Use a non-zero input that survives integer truncation.
+        var x_i = _fz_u(1000) + 1;
+        var x = f64_from(x_i);
+        var mid = UnitRegistry_convert(reg, x, a, b);
+        if (reg_err(reg) != UERR_NONE) {
+            print("FAIL: forward convert ");
+            print(a); print(" -> "); println(b);
+            sys_exit(1);
+        }
+        var back = UnitRegistry_convert(reg, mid, b, a);
+        if (reg_err(reg) != UERR_NONE) {
+            print("FAIL: back convert ");
+            print(b); print(" -> "); println(a);
+            sys_exit(1);
+        }
+        # Integer-truncate both sides and allow 1 ulp tolerance.
+        var back_i = f64_to(back);
+        var diff = back_i - x_i;
+        if (diff < 0) { diff = 0 - diff; }
+        if (diff > 1) {
+            print("FAIL: roundtrip ");
+            print(a); print("<->"); print(b);
+            print(" x="); print_num(x_i);
+            print(" back="); print_num(back_i);
+            println("");
+            sys_exit(1);
+        }
+
+        # Identity: converting to same unit = input.
+        var same = UnitRegistry_convert(reg, x, a, a);
+        if (f64_to(same) != x_i) {
+            print("FAIL: identity ");
+            print(a); println("");
+            sys_exit(1);
+        }
 
         pass = pass + 1;
         iter = iter + 1;
