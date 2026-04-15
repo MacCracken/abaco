@@ -5,6 +5,41 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] — 2026-04-15
+
+Cyrius 4.10.2 upgrade — stdlib now provides primitives that were
+previously hand-rolled in abaco. Net effect: less code to maintain,
+identical behaviour, and abaco gains stdlib improvements for free
+(e.g. `f64_parse` handles scientific notation and NaN/Inf).
+
+### Changed
+
+- **Cyrius bumped 4.8.5 → 4.10.2.** All `lib/` stdlib files synced.
+- **`src/dsp.cyr`** — removed 8 hand-rolled functions now in stdlib
+  `math.cyr`: `f64_clamp`, `f64_max`, `f64_min`, `f64_lerp`,
+  `f64_hypot`, `f64_trunc`, `f64_fract`, `f64_sign`. Call sites
+  resolve to the stdlib versions transparently.
+- **`src/eval.cyr`** — `CONST_PI`/`CONST_E`/`CONST_TAU` now alias
+  `F64_PI`/`F64_E`/`F64_TAU` from stdlib. `gcd_int` delegates to
+  stdlib `gcd()`. `lcm()` dispatch delegates to stdlib `lcm()`.
+- **`src/ntheory.cyr`** — `fibonacci` and `binomial` removed; callers
+  resolve to identical stdlib implementations in `math.cyr`.
+- **`src/ai.cyr`** — `_nl_parse_f64` now uses stdlib `f64_parse` for
+  the heavy lifting while preserving strict "entire string consumed"
+  semantics (CWE-917 guard intact).
+
+### Added (stdlib)
+
+- **`lib/math.cyr`** gains: `f64_lerp`, `f64_hypot`, `f64_sign`,
+  `f64_trunc`, `f64_fract`, `gcd`, `lcm`, `fibonacci`, `binomial`,
+  `f64_parse`, `f64_parse_ok`.
+- **`lib/fmt.cyr`** — `fmt_sprintf` now takes a `bufsz` parameter for
+  bounds-checked formatting (breaking change in stdlib; no abaco call
+  sites affected).
+- **`lib/linalg.cyr`** — new stdlib module (LU, Cholesky, QR,
+  determinant, inverse, least-squares). Not yet dep'd by abaco.
+- **`lib/cyml.cyr`** — new stdlib module (CYML document parser).
+
 ## [2.0.0] — 2026-04-14
 
 Major version bump: abaco is no longer a Rust crate. The entire library
@@ -236,6 +271,7 @@ This is a breaking change for anyone who was depending on `abaco` via
 - `units` — Unit registry with 95+ built-in units across 14 categories, conversion engine
 - `ai` — Natural language math parsing, calculation history (feature-gated)
 
+[2.1.0]: https://github.com/MacCracken/abaco/compare/2.0.0...2.1.0
 [0.22.4]: https://github.com/MacCracken/abaco/compare/0.22.3...0.22.4
 [0.22.3]: https://github.com/MacCracken/abaco/compare/0.1.0...0.22.3
 [0.1.0]: https://github.com/MacCracken/abaco/releases/tag/0.1.0

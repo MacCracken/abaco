@@ -5,9 +5,8 @@
 **Abaco** (Italian/Spanish: abacus) — Math engine — expression evaluation, unit conversion, DSP math
 
 - **Type**: Flat library crate
-- **License**: AGPL-3.0-only
-- **MSRV**: 1.89
-- **Version**: SemVer 0.D.M pre-1.0
+- **License**: GPL-3.0-only
+- **Version**: 2.1.0
 
 ## Consumers
 

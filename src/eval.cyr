@@ -342,10 +342,10 @@ fn eval_has_more(e) {
     return 0;
 }
 
-# Constants
-var CONST_PI = 0x400921FB54442D18;
-var CONST_E = 0x4005BF0A8B145769;
-var CONST_TAU = 0x401921FB54442D18;
+# Constants — alias onto stdlib math.cyr (Cyrius 4.10.2+).
+var CONST_PI = F64_PI;
+var CONST_E = F64_E;
+var CONST_TAU = F64_TAU;
 
 # Forward declarations handled by Cyrius's forward-call support
 
@@ -590,15 +590,9 @@ fn parse_primary(e) {
 # Function dispatch (43+ functions)
 # ================================================================
 
+# gcd_int — now delegated to stdlib gcd() from math.cyr (Cyrius 4.10.2+).
 fn gcd_int(a, b) {
-    if (a < 0) { a = 0 - a; }
-    if (b < 0) { b = 0 - b; }
-    while (b != 0) {
-        var t = b;
-        b = a % b;
-        a = t;
-    }
-    return a;
+    return gcd(a, b);
 }
 
 fn call_function(e, name, args, nargs) {
@@ -755,11 +749,7 @@ fn call_function(e, name, args, nargs) {
             return f64_from(gcd_int(f64_to(f64_abs(a)), f64_to(f64_abs(b))));
         }
         if (streq(name, "lcm") == 1) {
-            var ai = f64_to(f64_abs(a));
-            var bi = f64_to(f64_abs(b));
-            if (ai == 0) { return f64_from(0); }
-            if (bi == 0) { return f64_from(0); }
-            return f64_from((ai / gcd_int(ai, bi)) * bi);
+            return f64_from(lcm(f64_to(a), f64_to(b)));
         }
         var is_binom = 0;
         if (streq(name, "binomial") == 1) { is_binom = 1; }

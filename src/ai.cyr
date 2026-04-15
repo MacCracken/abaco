@@ -127,43 +127,57 @@ fn _nl_strip_prefix(s, prefix) {
 }
 
 # Try parse full cstring as f64. Returns Ok(value) or Err(0).
-# Handles optional sign, decimal point, basic scientific notation.
+# Uses stdlib f64_parse (Cyrius 4.10.2+) for the heavy lifting, but
+# enforces strict "entire string consumed" semantics — trailing junk
+# (e.g. "2+3") is rejected. This strictness is load-bearing for the
+# CWE-917 guard in _nl_try_percent_of.
 fn _nl_parse_f64(s) {
     var len = strlen(s);
     if (len == 0) { return Err(0); }
+    # Quick pre-check: first non-whitespace must be sign, digit, or dot.
     var i = 0;
-    var neg = 0;
-    if (load8(s) == 45) { neg = 1; i = 1; }
-    elif (load8(s) == 43) { i = 1; }
-    if (i == len) { return Err(0); }
-    var saw_digit = 0;
-    var int_part = 0;
     while (i < len) {
         var c = load8(s + i);
-        if (is_digit(c) == 0) { break; }
-        int_part = int_part * 10 + (c - 48);
-        saw_digit = 1;
+        if (c != 32) { if (c != 9) { break; } }
         i = i + 1;
     }
-    var frac_num = 0;
-    var frac_den = 1;
-    if (i < len) {
-        if (load8(s + i) == 46) {
-            i = i + 1;
-            while (i < len) {
-                var c = load8(s + i);
-                if (is_digit(c) == 0) { break; }
-                frac_num = frac_num * 10 + (c - 48);
-                frac_den = frac_den * 10;
-                saw_digit = 1;
-                i = i + 1;
+    if (i == len) { return Err(0); }
+    var c0 = load8(s + i);
+    if (c0 != 45) { if (c0 != 43) { if (c0 != 46) {
+        if (c0 < 48) { return Err(0); }
+        if (c0 > 57) { return Err(0); }
+    } } }
+    # Parse via stdlib, then verify the entire string was consumed by
+    # re-scanning: after optional sign, digits/dot/exponent should reach NUL.
+    var v = f64_parse(s);
+    # Verify: walk past the same characters f64_parse would consume.
+    var j = i;
+    if (load8(s + j) == 45 || load8(s + j) == 43) { j = j + 1; }
+    var saw_digit = 0;
+    while (j < len) {
+        var cc = load8(s + j);
+        if (cc >= 48) { if (cc <= 57) { saw_digit = 1; j = j + 1; continue; } }
+        if (cc == 46) { j = j + 1; continue; }
+        break;
+    }
+    if (saw_digit == 0) { return Err(0); }
+    # Optional exponent
+    if (j < len) {
+        var ec = load8(s + j);
+        if (ec == 101 || ec == 69) {
+            j = j + 1;
+            if (j < len) {
+                var sc = load8(s + j);
+                if (sc == 43 || sc == 45) { j = j + 1; }
+            }
+            while (j < len) {
+                var dc = load8(s + j);
+                if (dc < 48 || dc > 57) { break; }
+                j = j + 1;
             }
         }
     }
-    if (saw_digit == 0) { return Err(0); }
-    if (i != len) { return Err(0); }  # trailing junk
-    var v = f64_add(f64_from(int_part), f64_div(f64_from(frac_num), f64_from(frac_den)));
-    if (neg == 1) { v = f64_neg(v); }
+    if (j != len) { return Err(0); }  # trailing junk
     return Ok(v);
 }
 

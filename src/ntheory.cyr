@@ -159,35 +159,5 @@ fn totient(n) {
     return result;
 }
 
-# -- Fibonacci via iterative method --
-# Returns exact results for n <= 92 (max positive i64)
-# Returns -1 for n > 92 (overflow)
-fn fibonacci(n) {
-    if (n == 0) { return 0; }
-    if (n > 92) { return 0 - 1; }
-    var a = 0;
-    var b = 1;
-    var i = 2;
-    while (i <= n) {
-        var next = a + b;
-        a = b;
-        b = next;
-        i = i + 1;
-    }
-    return b;
-}
-
-# -- Binomial coefficient C(n, k) --
-# Uses multiplicative formula to avoid intermediate overflow
-fn binomial(n, k) {
-    if (k > n) { return 0; }
-    # Symmetry: C(n, k) = C(n, n-k)
-    if (k > n - k) { k = n - k; }
-    var result = 1;
-    var i = 0;
-    while (i < k) {
-        result = result * (n - i) / (i + 1);
-        i = i + 1;
-    }
-    return result;
-}
+# fibonacci, binomial — now provided by stdlib math.cyr (Cyrius 4.10.2+).
+# Removed hand-rolled duplicates; callers resolve to the stdlib versions.

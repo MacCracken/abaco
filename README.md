@@ -138,4 +138,4 @@ Known gaps live in [ROADMAP.md](ROADMAP.md).
 
 ## License
 
-AGPL-3.0-only. See [LICENSE](LICENSE).
+GPL-3.0-only. See [LICENSE](LICENSE).

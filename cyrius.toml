@@ -1,10 +1,10 @@
 [package]
 name = "abaco"
-version = "2.0.0"
+version = "2.1.0"
 description = "Math engine — expression evaluation, unit conversion, DSP math"
-license = "AGPL-3.0-only"
+license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "4.8.5"
+cyrius = "4.10.2"
 
 [build]
 entry = "src/main.cyr"

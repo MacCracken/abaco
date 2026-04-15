@@ -83,4 +83,4 @@ Longer messages (multi-paragraph) are welcome for non-trivial changes
 ## License
 
 By contributing you agree your contributions are licensed under
-AGPL-3.0-only.
+GPL-3.0-only.

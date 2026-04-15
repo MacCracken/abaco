@@ -1,9 +1,9 @@
 # abaco::dsp — DSP math primitives: windows, interpolation, dB/MIDI, SIMD batch ops.
-# Requires Cyrius 1.9.2+ (transcendentals + SIMD f64v_add/sub/mul).
+# Requires Cyrius 4.10.2+ (transcendentals, SIMD, stdlib math utilities).
 
 # -- Constants (as f64 bit patterns) --
 # TAU = 2 * pi = 6.283185307179586
-# Mathematical constants — alias onto stdlib `lib/math.cyr` (Cyrius 4.8.5+).
+# Mathematical constants — alias onto stdlib `lib/math.cyr`.
 # Kept under the `DSP_*` names so existing call sites don't churn; new code
 # can use the stdlib names directly.
 var DSP_TAU          = F64_TAU;
@@ -57,30 +57,8 @@ fn sanitize_sample(s) {
     return s;
 }
 
-# -- Clamp f64 to [lo, hi] --
-fn f64_clamp(v, lo, hi) {
-    if (f64_lt(v, lo) == 1) { return lo; }
-    if (f64_gt(v, hi) == 1) { return hi; }
-    return v;
-}
-
-# -- f64 max/min --
-fn f64_max(a, b) {
-    if (f64_gt(a, b) == 1) { return a; }
-    return b;
-}
-
-# Return the smaller of two f64 values.
-fn f64_min(a, b) {
-    if (f64_lt(a, b) == 1) { return a; }
-    return b;
-}
-
-# -- Linear interpolation --
-# lerp(a, b, t) = a + t * (b - a)
-fn f64_lerp(a, b, t) {
-    return f64_add(a, f64_mul(t, f64_sub(b, a)));
-}
+# f64_clamp, f64_max, f64_min, f64_lerp — now provided by stdlib math.cyr
+# (Cyrius 4.10.2+). Removed hand-rolled duplicates.
 
 # -- RMS of two values --
 # rms(a, b) = sqrt((a^2 + b^2) / 2)
@@ -89,28 +67,12 @@ fn f64_rms2(a, b) {
     return f64_sqrt(f64_div(sum, f64_from(2)));
 }
 
-# -- Distance (2D Euclidean) --
-# dist(x, y) = sqrt(x^2 + y^2)
-fn f64_hypot(x, y) {
-    return f64_sqrt(f64_add(f64_mul(x, x), f64_mul(y, y)));
-}
-
-# -- Truncate toward zero (available via f64_to + f64_from but loses precision) --
-# trunc(x) = floor(x) if x >= 0, ceil(x) if x < 0
-fn f64_trunc(x) {
-    var zero = f64_from(0);
-    if (f64_lt(x, zero) == 1) { return f64_ceil(x); }
-    return f64_floor(x);
-}
-
-# -- Fractional part --
-# fract(x) = x - floor(x)
-fn f64_fract(x) {
-    return f64_sub(x, f64_floor(x));
-}
+# f64_hypot, f64_trunc, f64_fract, f64_sign — now provided by stdlib math.cyr
+# (Cyrius 4.10.2+). Removed hand-rolled duplicates.
 
 # -- Round to nearest (half away from zero) --
 # round(x) = floor(x + 0.5)
+# Not yet in stdlib — keep hand-rolled.
 fn f64_round(x) {
     var half = f64_div(f64_from(1), f64_from(2));
     var zero = f64_from(0);
@@ -118,15 +80,6 @@ fn f64_round(x) {
         return f64_ceil(f64_sub(x, half));
     }
     return f64_floor(f64_add(x, half));
-}
-
-# -- Sign function --
-# sign(x) = -1 if x < 0, 0 if x == 0, 1 if x > 0
-fn f64_sign(x) {
-    var zero = f64_from(0);
-    if (f64_lt(x, zero) == 1) { return f64_neg(f64_from(1)); }
-    if (f64_gt(x, zero) == 1) { return f64_from(1); }
-    return zero;
 }
 
 # ================================================================
