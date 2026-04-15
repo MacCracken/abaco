@@ -27,21 +27,22 @@ jobs:
 
       - name: Install Cyrius toolchain
         run: |
+          set -e
           CYRIUS_VERSION="${CYRIUS_VERSION:-$(cat .cyrius-toolchain | tr -d '[:space:]')}"
           echo "Installing Cyrius $CYRIUS_VERSION"
-          curl -sLO "https://github.com/MacCracken/cyrius/releases/download/$CYRIUS_VERSION/cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
-          tar xzf "cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
+          TARBALL="cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
+          curl -sLfO "https://github.com/MacCracken/cyrius/releases/download/$CYRIUS_VERSION/$TARBALL"
+          tar xzf "$TARBALL"
           CYRIUS_DIR="cyrius-$CYRIUS_VERSION-x86_64-linux"
           mkdir -p "$HOME/.cyrius/bin" "$HOME/.cyrius/lib"
-          cp "$CYRIUS_DIR/bin/"* "$HOME/.cyrius/bin/" 2>/dev/null || true
-          cp -r "$CYRIUS_DIR/lib/"* "$HOME/.cyrius/lib/" 2>/dev/null || true
-          chmod +x "$HOME/.cyrius/bin/"* 2>/dev/null || true
+          cp "$CYRIUS_DIR/bin/"* "$HOME/.cyrius/bin/"
+          cp -r "$CYRIUS_DIR/lib/"* "$HOME/.cyrius/lib/"
+          chmod +x "$HOME/.cyrius/bin/"*
           echo "$HOME/.cyrius/bin" >> $GITHUB_PATH
           echo "CYRIUS_HOME=$HOME/.cyrius" >> $GITHUB_ENV
 
       - name: Build
         run: |
-          cyrius deps
           mkdir -p build
           cyrius build src/main.cyr build/abaco
           echo "abaco: $(wc -c < build/abaco) bytes"

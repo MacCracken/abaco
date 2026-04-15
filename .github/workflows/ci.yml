@@ -20,34 +20,89 @@ jobs:
 
       - name: Install Cyrius toolchain
         run: |
+          set -e
           CYRIUS_VERSION="${CYRIUS_VERSION:-$(cat .cyrius-toolchain 2>/dev/null | tr -d '[:space:]')}"
           CYRIUS_VERSION="${CYRIUS_VERSION:-4.8.5}"
           echo "Installing Cyrius $CYRIUS_VERSION"
-          curl -sLO "https://github.com/MacCracken/cyrius/releases/download/$CYRIUS_VERSION/cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
-          tar xzf "cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
+          TARBALL="cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
+          curl -sLfO "https://github.com/MacCracken/cyrius/releases/download/$CYRIUS_VERSION/$TARBALL"
+          tar xzf "$TARBALL"
           CYRIUS_DIR="cyrius-$CYRIUS_VERSION-x86_64-linux"
           mkdir -p "$HOME/.cyrius/bin" "$HOME/.cyrius/lib"
-          cp "$CYRIUS_DIR/bin/"* "$HOME/.cyrius/bin/" 2>/dev/null || true
-          cp -r "$CYRIUS_DIR/lib/"* "$HOME/.cyrius/lib/" 2>/dev/null || true
-          chmod +x "$HOME/.cyrius/bin/"* 2>/dev/null || true
+          cp "$CYRIUS_DIR/bin/"* "$HOME/.cyrius/bin/"
+          cp -r "$CYRIUS_DIR/lib/"* "$HOME/.cyrius/lib/"
+          chmod +x "$HOME/.cyrius/bin/"*
           echo "$HOME/.cyrius/bin" >> $GITHUB_PATH
           echo "CYRIUS_HOME=$HOME/.cyrius" >> $GITHUB_ENV
 
-      - name: Resolve dependencies
-        run: cyrius deps
+      - name: Verify install
+        run: |
+          which cyrius
+          cyrius --help | head -3 || true
+          ls "$HOME/.cyrius/lib/" | wc -l
+          test -f "$HOME/.cyrius/lib/math.cyr" || { echo "lib/math.cyr missing"; exit 1; }
+          test -f "$HOME/.cyrius/lib/u128.cyr" || { echo "lib/u128.cyr missing"; exit 1; }
 
-      - name: Build abaco binary
+      - name: Verify toolchain consistency
+        run: |
+          TC=$(cat .cyrius-toolchain | tr -d '[:space:]')
+          TOML=$(grep '^cyrius ' cyrius.toml | sed 's/.*"\(.*\)".*/\1/')
+          if [ "$TC" != "$TOML" ]; then
+            echo "Cyrius version mismatch: .cyrius-toolchain=$TC, cyrius.toml=$TOML"
+            exit 1
+          fi
+          echo "Cyrius toolchain: $TC"
+
+      - name: Build abaco
         run: |
           mkdir -p build
           cyrius build src/main.cyr build/abaco
           echo "abaco size: $(wc -c < build/abaco) bytes"
 
       - name: Run tests
-        run: cyrius test
+        run: |
+          # Explicit per-file loop — `cyrius test` auto-discovery is cwd-sensitive
+          # and we've seen it miss `tests/*.tcyr` in CI. Loop over our files
+          # directly; fail fast on the first non-zero exit.
+          set -e
+          FAIL=0
+          TOTAL_ASSERTS=0
+          for t in tests/test_*.tcyr; do
+            echo "::group::$t"
+            OUTPUT=$(cyrius test "$t" 2>&1)
+            echo "$OUTPUT"
+            if echo "$OUTPUT" | grep -q "failed"; then
+              COUNT=$(echo "$OUTPUT" | grep -oE '[0-9]+ failed' | head -1 | awk '{print $1}')
+              if [ "${COUNT:-0}" -gt 0 ]; then
+                FAIL=$((FAIL + 1))
+              fi
+            fi
+            ASSERTS=$(echo "$OUTPUT" | grep -oE '[0-9]+ passed' | head -1 | awk '{print $1}')
+            TOTAL_ASSERTS=$((TOTAL_ASSERTS + ${ASSERTS:-0}))
+            echo "::endgroup::"
+          done
+          echo "Total assertions across all files: $TOTAL_ASSERTS"
+          [ "$FAIL" -eq 0 ] || { echo "$FAIL test files had failures"; exit 1; }
+
+      - name: Run fuzz (smoke, 1000 iters)
+        run: |
+          set -e
+          for f in fuzz/fuzz_eval fuzz/fuzz_ntheory fuzz/fuzz_units; do
+            SRC="${f}.cyr"
+            BIN="build/$(basename $f)"
+            echo "::group::$f"
+            cyrius build "$SRC" "$BIN"
+            "$BIN" 1000
+            echo "::endgroup::"
+          done
 
       - name: Run benchmarks (non-fatal)
         run: |
-          cyrius bench | tee bench-results.txt || exit 0
+          for b in benches/bench.bcyr benches/bench_eval.bcyr benches/bench_units.bcyr; do
+            echo "::group::$b"
+            cyrius bench "$b" || true
+            echo "::endgroup::"
+          done | tee bench-results.txt
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -63,9 +118,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Check required docs
         run: |
-          for doc in README.md CHANGELOG.md VERSION LICENSE cyrius.toml; do
+          for doc in README.md CHANGELOG.md ROADMAP.md VERSION LICENSE cyrius.toml .cyrius-toolchain; do
             test -f "$doc" && echo "OK: $doc" || { echo "MISSING: $doc"; exit 1; }
           done
 
@@ -77,4 +133,4 @@ jobs:
             echo "Version mismatch: VERSION=$V_FILE, cyrius.toml=$V_TOML"
             exit 1
           fi
-          echo "Version: $V_FILE"
+          echo "abaco version: $V_FILE"
