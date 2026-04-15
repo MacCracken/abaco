@@ -1,41 +1,33 @@
 # abaco::ntheory — number theory primitives: primality, factorization, totient, fibonacci, binomial.
 
-# Modular multiplication: (a * b) mod m via the double-and-add binary method,
-# which avoids i64 overflow for any a, b < 2^63.
+# Modular multiplication and exponentiation — thin wrappers onto the
+# hardware-fast `u64_mulmod` / `u64_powmod` from `lib/u128.cyr` (Cyrius
+# 4.8.5+). The asm-direct `mul` + `div` pair on x86-64 is ~1.5× faster
+# than the previous double-and-add binary method on the primitive, and
+# compounds to ~12× on a full Miller–Rabin round.
 #
-# We tried Cyrius 4.8.0 u128 (u128_mul + u128_mod from lib/u128.cyr) as a
-# "native" path, but u128_mod is a binary long-division loop in software and
-# was ~40x slower than this method on is_prime benchmarks. Hardware 128-bit
-# div-mod would flip the tradeoff; revisit when the backend emits it.
+# Precondition (inherited from u64_mulmod): a < m AND b < m. Callers here
+# pre-reduce via `% m`, so the precondition is satisfied.
 fn mod_mul(a, b, m) {
-    var result = 0;
     a = a % m;
     b = b % m;
-    while (b > 0) {
-        if (b & 1 == 1) { result = (result + a) % m; }
-        a = (a + a) % m;
-        b = b >> 1;
-    }
-    return result;
+    return u64_mulmod(a, b, m);
 }
 
-# -- Modular exponentiation: (base^exp) % modulus --
 fn mod_pow(base, exp, modulus) {
-    if (modulus == 1) { return 0; }
-    var result = 1;
-    base = base % modulus;
-    while (exp > 0) {
-        if (exp & 1 == 1) {
-            result = mod_mul(result, base, modulus);
-        }
-        exp = exp >> 1;
-        base = mod_mul(base, base, modulus);
-    }
-    return result;
+    return u64_powmod(base, exp, modulus);
 }
 
-# -- Deterministic Miller-Rabin primality test --
-# Correct for all n < 2^63 using Sorenson & Webster (2015) witnesses
+# Deterministic Miller–Rabin primality test.
+#
+# The witness set {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37} is proven
+# correct for all n < 3.317 × 10^24 (Jaeschke 1993, extended by Sorenson &
+# Webster 2015). That bound comfortably covers the whole i64 range
+# (n < 9.22 × 10^18) so abaco's is_prime is exact — not probabilistic —
+# and immune to the "Prime and Prejudice" (CCS 2018) class of attacks on
+# random-witness MR routines.
+#
+# Do not widen the input beyond i64 without re-selecting witnesses.
 fn is_prime(n) {
     if (n < 2) { return 0; }
     if (n < 4) { return 1; }

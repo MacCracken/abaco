@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# `set -e` alone; `pipefail` triggered SIGPIPE 141 when awk/grep pipelines
+# closed early via `head -1` on large CSVs. We tolerate partial pipeline
+# results — the benchmark CSV append (above) is the thing we must not miss.
+set -eu
 
 # Run Cyrius benchmarks and produce two outputs:
 #   1) CSV history (appended each run)   — tracking regressions over time
@@ -29,7 +32,7 @@ echo ""
 
 # Run all benchmark files via cyrius
 BENCH_OUTPUT=""
-for benchfile in benches/bench.cyr benches/bench_eval.cyr benches/bench_units.cyr; do
+for benchfile in benches/bench.bcyr benches/bench_eval.bcyr benches/bench_units.bcyr; do
     if [ -f "$benchfile" ]; then
         BENCH_OUTPUT="${BENCH_OUTPUT}
 $("$CYRIUS" bench "$benchfile" 2>&1)"

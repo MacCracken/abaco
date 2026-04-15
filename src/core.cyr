@@ -1,36 +1,11 @@
 # abaco::core — Core types: Value, Unit, UnitCategory, conversion results.
 
-# -- ASCII case helpers (shared across units, ai, eval) --
-
-# Lowercase a cstring in-place on a freshly allocated copy.
-fn str_lower(s) {
-    var len = strlen(s);
-    var out = alloc(len + 1);
-    var i = 0;
-    while (i < len) {
-        var c = load8(s + i);
-        if (c >= 65) { if (c <= 90) { c = c + 32; } }
-        store8(out + i, c);
-        i = i + 1;
-    }
-    store8(out + len, 0);
-    return out;
-}
-
-# Uppercase a cstring in-place on a freshly allocated copy.
-fn str_upper(s) {
-    var len = strlen(s);
-    var out = alloc(len + 1);
-    var i = 0;
-    while (i < len) {
-        var c = load8(s + i);
-        if (c >= 97) { if (c <= 122) { c = c - 32; } }
-        store8(out + i, c);
-        i = i + 1;
-    }
-    store8(out + len, 0);
-    return out;
-}
+# ASCII case helpers — thin aliases onto stdlib (Cyrius 4.8.5+).
+# Kept under the short `str_lower` / `str_upper` names for backwards
+# compatibility with pre-4.8.5 abaco call sites; new code can call the
+# stdlib forms directly.
+fn str_lower(s) { return str_lower_cstr(s); }
+fn str_upper(s) { return str_upper_cstr(s); }
 
 
 # --- Value tags ---

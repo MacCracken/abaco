@@ -170,13 +170,24 @@ fn parse_number(input, start, len, out_end) {
                 else {
                     c = load8(input + i);
                     if (is_digit(c) == 0) { ego = 0; }
-                    else { exp_val = exp_val * 10 + (c - 48); i = i + 1; }
+                    else {
+                        exp_val = exp_val * 10 + (c - 48);
+                        # Clamp early so "1e9999999999..." can't overflow exp_val.
+                        if (exp_val > 400) { exp_val = 400; }
+                        i = i + 1;
+                    }
                 }
             }
-            # result *= 10^(exp_sign * exp_val)
+            # Audit MED-5: clamp the exponent at 308 (positive) / 400
+            # (digit-accumulation cap above). The f64 range hits +inf at
+            # ~1.8e308, so anything larger is +inf / 0 already; explicit
+            # clamping makes adversarial "1e9999999999..." inputs finish
+            # in bounded work instead of overflowing `exp_val` and
+            # producing nonsense.
+            if (exp_val > 308) { exp_val = 308; }
             var exp_f = f64_mul(f64_from(exp_sign), f64_from(exp_val));
             # 10^x = exp2(x * log2(10)) = exp2(x * 3.321928...)
-            var log2_10 = 0x400A934F0979A371;
+            var log2_10 = 0x400A_934F_0979_A371;
             var pow10 = f64_exp2(f64_mul(exp_f, log2_10));
             result = f64_mul(result, pow10);
         }
@@ -308,6 +319,11 @@ fn implicit_mul(toks, nt) {
 # Parser - recursive descent
 # ================================================================
 
+# Parser-recursion cap. `(((...)))` or `f(f(f(...)))` past this depth sets
+# ERR_PARSE rather than recursing further and risking a native stack overflow
+# (SandboxJS GHSA-8pfc-jjgw-6g26, CPython #32758 / #95185 class).
+# 256 levels is ~64 KB of C stack frames at ~256 bytes/frame — well below
+# any platform's default limit while still comfortable for human input.
 var MAX_DEPTH = 256;
 
 # Helper: check if current token matches type
@@ -521,7 +537,12 @@ fn parse_primary(e) {
         # Function call?
         if (eval_at(e, TOK_LPAREN) == 1) {
             eval_advance(e);
-            var args = alloc(64);
+            # Audit MED-6: cap argument arity. `args` is a fixed-size
+            # buffer; variadic stat fns (mean/median/stddev) are the only
+            # legitimate users of large-arity calls, and 32 is generous.
+            # Without this cap an adversarial `mean(0,0,0,...)` with 10^5
+            # commas would overflow the 32-slot buffer.
+            var args = alloc(32 * 8);
             var nargs = 0;
             if (eval_not_at(e, TOK_RPAREN) == 1) {
                 eval_set_depth(e, eval_depth(e) + 1);
@@ -530,6 +551,10 @@ fn parse_primary(e) {
                 nargs = nargs + 1;
                 while (eval_at(e, TOK_COMMA) == 1) {
                     eval_advance(e);
+                    if (nargs >= 32) {
+                        eval_set_err(e, ERR_PARSE);
+                        return f64_from(0);
+                    }
                     eval_set_depth(e, eval_depth(e) + 1);
                     store64(args + nargs * 8, parse_expr(e));
                     eval_set_depth(e, eval_depth(e) - 1);
@@ -647,39 +672,17 @@ fn call_function(e, name, args, nargs) {
         if (streq(name, "floor") == 1) { return f64_floor(a); }
         if (streq(name, "round") == 1) { return f64_round(a); }
         if (streq(name, "exp") == 1) { return f64_exp(a); }
-        # Inverse trig: asin, acos, atan via identity formulas
-        if (streq(name, "asin") == 1) {
-            # asin(x) = atan2(x, sqrt(1-x^2))
-            var sq = f64_sqrt(f64_sub(f64_from(1), f64_mul(a, a)));
-            return f64_div(f64_sin(a), f64_cos(a));
-        }
-        if (streq(name, "acos") == 1) {
-            # acos(x) = pi/2 - asin(x)
-            var sq = f64_sqrt(f64_sub(f64_from(1), f64_mul(a, a)));
-            return f64_sub(DSP_PI_2, f64_div(f64_sin(a), f64_cos(a)));
-        }
-        if (streq(name, "atan") == 1) {
-            # atan(x) = asin(x / sqrt(1+x^2))
-            return f64_div(f64_sin(a), f64_cos(a));
-        }
-        # Hyperbolic: sinh, cosh, tanh (stdlib math.cyr)
+        # Inverse trig — stdlib math.cyr (Cyrius 4.8.5+).
+        if (streq(name, "asin") == 1) { return f64_asin(a); }
+        if (streq(name, "acos") == 1) { return f64_acos(a); }
+        if (streq(name, "atan") == 1) { return f64_atan(a); }
+        # Hyperbolic + inverse hyperbolic — stdlib math.cyr.
         if (streq(name, "sinh") == 1) { return f64_sinh(a); }
         if (streq(name, "cosh") == 1) { return f64_cosh(a); }
         if (streq(name, "tanh") == 1) { return f64_tanh(a); }
-        # Inverse hyperbolic
-        if (streq(name, "asinh") == 1) {
-            # asinh(x) = ln(x + sqrt(x^2 + 1))
-            return f64_ln(f64_add(a, f64_sqrt(f64_add(f64_mul(a, a), f64_from(1)))));
-        }
-        if (streq(name, "acosh") == 1) {
-            # acosh(x) = ln(x + sqrt(x^2 - 1))
-            return f64_ln(f64_add(a, f64_sqrt(f64_sub(f64_mul(a, a), f64_from(1)))));
-        }
-        if (streq(name, "atanh") == 1) {
-            # atanh(x) = 0.5 * ln((1+x)/(1-x))
-            var one = f64_from(1);
-            return f64_mul(f64_div(one, f64_from(2)), f64_ln(f64_div(f64_add(one, a), f64_sub(one, a))));
-        }
+        if (streq(name, "asinh") == 1) { return f64_asinh(a); }
+        if (streq(name, "acosh") == 1) { return f64_acosh(a); }
+        if (streq(name, "atanh") == 1) { return f64_atanh(a); }
         if (streq(name, "trunc") == 1) { return f64_trunc(a); }
         if (streq(name, "fract") == 1) { return f64_fract(a); }
         if (streq(name, "sign") == 1) { return f64_sign(a); }
@@ -743,15 +746,10 @@ fn call_function(e, name, args, nargs) {
         if (streq(name, "max") == 1) { return f64_max(a, b); }
         if (streq(name, "pow") == 1) { return f64_pow(a, b); }
         if (streq(name, "atan2") == 1) {
-            # atan2 not available as builtin, approximate via atan(y/x) with quadrant fix
-            # For now use simple atan(y/x)
-            var zero = f64_from(0);
-            if (f64_eq(b, zero) == 1) {
-                if (f64_gt(a, zero) == 1) { return DSP_PI_2; }
-                if (f64_lt(a, zero) == 1) { return f64_neg(DSP_PI_2); }
-                return zero;
-            }
-            return f64_div(f64_sin(f64_div(a, b)), f64_cos(f64_div(a, b)));
+            # Quadrant-correct two-arg arctangent (stdlib math.cyr, 4.8.5+).
+            # Closes the pre-4.8.5 Q2/Q3 bug where we returned atan(y/x)
+            # without quadrant fix.
+            return f64_atan2(a, b);
         }
         if (streq(name, "gcd") == 1) {
             return f64_from(gcd_int(f64_to(f64_abs(a)), f64_to(f64_abs(b))));

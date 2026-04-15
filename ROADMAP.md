@@ -11,7 +11,10 @@
 - [x] BPM ↔ Hz via UnitRegistry (2026-04-14) — `registry.convert(120, "bpm", "Hz")`
 - [x] Semitones / cents / octaves (CAT_PITCH) via UnitRegistry (2026-04-14)
 - [x] Samples ↔ milliseconds (sample-rate-aware) — `samples_to_ms`, `ms_to_samples` in dsp (2026-04-14)
-- [ ] dBFS — log-scale unit, needs special handling (not linear `to_base` factor). Deferred.
+- [x] dBFS (2026-04-14) — `amplitude_to_dbfs` / `dbfs_to_amplitude` in dsp.
+      With a 1.0 reference amplitude (the float-audio norm) these are
+      identical to `amplitude_to_db` / `db_to_amplitude`; explicit aliases
+      make call sites self-documenting.
 
 ## Cyrius Port — unlocks hisab
 
@@ -70,25 +73,33 @@ Full report: [`docs/audit/2026-04-14.md`](docs/audit/2026-04-14.md).
       Closes CWE-917 in the NL parser.
 - [x] 5 regression tests in `test_ai.tcyr` (operator / paren injection,
       plaintext rejection, CRLF rejection, localhost acceptance).
+- [x] **MED-5** Scientific-exponent clamp at 308 in `parse_number`;
+      factorial(x > 170) already returns ERR_MATH (verified).
+- [x] **MED-6** Function-call arity cap at 32. Also fixed latent
+      **buffer-overflow** bug: the arg buffer was `alloc(64)` (only 8 slots)
+      with no bounds check — calls with > 8 args would have written past the
+      buffer. Bumped to 32 slots and bounded.
+- [x] **MED-7** Rate sanity check — `_ccy_rate_plausible` rejects NaN/inf,
+      zero/negative, or > 10^6 rates. Empty-after-filter responses rejected
+      outright as AI_ERR_CURRENCY.
+- [x] **LOW-9a** Boundary regression tests — parser depth at 200 (accepted)
+      and 512 (rejected via MAX_DEPTH); 33-arg call rejected; pathological
+      `1e9999999999` parses finitely; strong pseudoprimes 2047, 1373653,
+      25326001, 3215031751 + large primes 104729, 1000000007, 2147483647.
+- [x] **LOW-10** Doc-comment safety invariants — MAX_DEPTH rationale +
+      SandboxJS CVE ref; Miller–Rabin witness-set bound (3.317 × 10^24)
+      with Jaeschke/Sorenson–Webster citation; `CurrencyCache_fetch`
+      carries a full invariant block (HTTPS, CRLF guard, 64 KB cap,
+      `base_url` trust, rate sanity).
 
-### Open items from audit
+### Still open from audit
 
-- [ ] **MEDIUM-4** Depth-cap `json_parse` at ~64 — needs audit of
-      `lib/json.cyr` recursion shape first.
-- [ ] **MEDIUM-5** Reject absurd scientific-notation exponents
-      (`|exp| > 308`) in `parse_number`; make `factorial(x > 170)` return
-      an explicit domain error instead of `inf`.
-- [ ] **MEDIUM-6** Cap function-call arity at 32 in the argument-list loop
-      (defensive — prevents `alloc(huge)`).
-- [ ] **MEDIUM-7** Validate rate-server response — reject NaN/inf, rates ≤ 0
-      or > 10^6, missing `base`. Secondary poisoning defence.
+- [ ] **MED-4** Depth-cap `json_parse` at ~64 — needs audit of
+      `lib/json.cyr` recursion shape first (it's flat today, but verify).
 - [ ] **LOW-8** Audit `lib/hashmap.cyr` for per-process seed / SipHash-class
-      hash. File upstream if not already seeded.
-- [ ] **LOW-9** Regression tests — `MAX_DEPTH ± 1` in evaluator, known
-      Carmichael numbers in ntheory, truncated HTTP response with lying
-      `Content-Length`, unit hashmap under synthetic collisions.
-- [ ] **LOW-10** Doc-comment safety invariants — MR witness-set bound,
-      HTTP 64 KB cap, `base_url` trust assumption.
+      hash. Upstream concern — file against cyrius stdlib when picked up.
+- [ ] **LOW-9b** Additional regression tests — truncated HTTP response with
+      lying `Content-Length`, unit hashmap under synthetic collisions.
 
 ### Upstream stdlib fixes to recommend
 
@@ -102,15 +113,37 @@ Add to `cyrius/docs/issues/stdlib-math-recommendations-from-abaco.md`:
       without a stable API; once it has one, replace the plaintext
       `http_get` call in `CurrencyCache_fetch`.
 
-## Waiting on Cyrius 4.8.5
+## Cyrius 4.8.5 collapse — Completed 2026-04-14
 
-Once the P1/P2 stdlib items land
-(`cyrius/docs/issues/stdlib-math-recommendations-from-abaco.md`):
+Cyrius 4.8.5 shipped the stdlib math pack
+(`cyrius/docs/issues/stdlib-math-recommendations-from-abaco.md`).
+abaco collapses and measured wins:
 
-- [ ] **P1-2** Replace inverse trig stopgaps in `src/eval.cyr:645–658`
-      with `f64_asin` / `acos` / `atan` / `atan2` (fixes atan2 quadrant bug)
-- [ ] **P2-1** Replace inverse hyperbolic stopgaps with stdlib `f64_asinh` / `acosh` / `atanh`
-- [ ] **P2-2** Delete `_nl_parse_f64`, use stdlib `f64_parse`; unify with `parse_number`
-- [ ] **P2-3** Delete local `str_lower` / `str_upper` in `src/core.cyr`, use stdlib
-- [ ] **P2-4** Delete `DSP_ONE` / `DSP_HALF` / `DSP_PI` / `DSP_TAU` etc., use stdlib `F64_*` constants
-- [ ] **P3-2** `u64_powmod` replaces local `mod_pow`
+- [x] **P1-1** `mod_mul` / `mod_pow` now thin wrappers onto `u64_mulmod` /
+      `u64_powmod` (hardware-fast `mul; div` pair). **Measured: is_prime_small
+      17µs → 2µs (~8.5×), is_prime_large 102µs → 4µs (~25×), next_prime
+      25µs → 2µs (~12×).** Matches the 4.8.5 changelog "~12× on a full MR
+      round" claim.
+- [x] **P1-2** Inverse trig in `src/eval.cyr` → `f64_asin` / `f64_acos` /
+      `f64_atan` / `f64_atan2` from stdlib `lib/math.cyr`. **atan2 is now
+      quadrant-correct** (Q2/Q3 bug closed).
+- [x] **P2-1** Inverse hyperbolic → `f64_asinh` / `f64_acosh` / `f64_atanh`.
+- [x] **P2-3** Local `str_lower` / `str_upper` in `src/core.cyr` now thin
+      aliases onto stdlib `str_lower_cstr` / `str_upper_cstr`.
+- [x] **P2-4** DSP math constants (`DSP_TAU`, `DSP_PI`, `DSP_HALF`,
+      `DSP_ONE`, etc.) now thin aliases onto stdlib `F64_TAU` / `F64_PI` /
+      `F64_HALF` / `F64_ONE`. Domain-specific constants (A4, C0, semitone)
+      kept locally.
+- [x] **P3-2** `u64_powmod` replaces local `mod_pow` (same as P1-1).
+- [x] Cyrius version pin: `4.8.3` → `4.8.5`.
+
+### Deferred to 4.8.6
+- [ ] **P2-2** `f64_parse` — deferred by cyrius per its 4.8.5 release notes.
+      Our `_nl_parse_f64` stays until the stdlib variant lands with the
+      full IEEE 754 grammar (scientific notation, NaN/Inf tokens).
+
+### Bench script fix (2026-04-14)
+- [x] `scripts/bench-history.sh` no longer uses `set -o pipefail` — SIGPIPE
+      from `head -1` inside the CSV-parsing loop was silently killing the
+      markdown-regeneration step. Switched to `set -eu`; CSV-append is
+      protected independently.

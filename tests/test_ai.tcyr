@@ -294,6 +294,41 @@ fn test_security_fetch_rejects_crlf() {
     return 0;
 }
 
+fn test_security_rate_sanity_rejects_nan() {
+    var c = CurrencyCache_new("http://localhost:8088");
+    # Fabricate a body where one rate is the NaN bit pattern literal.
+    # Current parser doesn't read "NaN" tokens; simulate via too-huge number.
+    var body = "{\"base\":\"USD\",\"rates\":{\"EUR\":1e400,\"GBP\":0.79}}";
+    var err = _ccy_load_body(c, body, strlen(body));
+    # GBP is plausible, EUR is +inf — EUR gets dropped, GBP survives.
+    assert_eq(err, 0, "body accepted with at least one valid rate");
+    assert(streq(ccy_base(c), "USD") == 1, "base = USD");
+    var r = CurrencyCache_convert(c, f64_from(100), "USD", "EUR");
+    # EUR should have been dropped → convert fails.
+    assert_eq(r, 0, "EUR dropped by sanity check");
+    assert_eq(ai_last_err(), AI_ERR_CURRENCY, "err = currency");
+    return 0;
+}
+
+fn test_security_rate_sanity_rejects_negative() {
+    var c = CurrencyCache_new("http://localhost:8088");
+    var body = "{\"base\":\"USD\",\"rates\":{\"EUR\":-0.5,\"GBP\":0.79}}";
+    var err = _ccy_load_body(c, body, strlen(body));
+    assert_eq(err, 0, "body accepted");
+    var r = CurrencyCache_convert(c, f64_from(100), "USD", "EUR");
+    assert_eq(r, 0, "negative rate dropped");
+    return 0;
+}
+
+fn test_security_rate_sanity_all_bad() {
+    var c = CurrencyCache_new("http://localhost:8088");
+    # Every rate is implausible → the response is rejected entirely.
+    var body = "{\"base\":\"USD\",\"rates\":{\"EUR\":-1,\"GBP\":0}}";
+    var err = _ccy_load_body(c, body, strlen(body));
+    assert_eq(err, AI_ERR_CURRENCY, "all-bad response rejected");
+    return 0;
+}
+
 fn test_security_fetch_accepts_localhost() {
     # Plaintext to localhost is allowed for local hoosh testing.
     # We don't actually connect — just verify validation passes.
@@ -351,6 +386,9 @@ fn main() {
     test_security_fetch_rejects_plaintext();
     test_security_fetch_rejects_crlf();
     test_security_fetch_accepts_localhost();
+    test_security_rate_sanity_rejects_nan();
+    test_security_rate_sanity_rejects_negative();
+    test_security_rate_sanity_all_bad();
     assert_summary();
     return 0;
 }

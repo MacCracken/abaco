@@ -150,6 +150,79 @@ fn test_errors() {
     return 0;
 }
 
+# Audit LOW-9a: boundary regression — parser depth cap.
+fn test_depth_boundary() {
+    var ev = Evaluator_new();
+    # Build a deeply-nested paren expression: (((...0...)))
+    # 200 deep should comfortably succeed.
+    var depth = 200;
+    var expr = alloc(depth * 2 + 2);
+    var i = 0;
+    while (i < depth) { store8(expr + i, 40); i = i + 1; }   # '('
+    store8(expr + depth, 48);                                  # '0'
+    i = 0;
+    while (i < depth) { store8(expr + depth + 1 + i, 41); i = i + 1; }
+    store8(expr + depth * 2 + 1, 0);
+    Evaluator_eval(ev, expr);
+    assert_eq(eval_err(ev), ERR_NONE, "depth 200 accepted");
+
+    # 512-deep should hit the MAX_DEPTH=256 cap and error out cleanly.
+    depth = 512;
+    ev = Evaluator_new();
+    expr = alloc(depth * 2 + 2);
+    i = 0;
+    while (i < depth) { store8(expr + i, 40); i = i + 1; }
+    store8(expr + depth, 48);
+    i = 0;
+    while (i < depth) { store8(expr + depth + 1 + i, 41); i = i + 1; }
+    store8(expr + depth * 2 + 1, 0);
+    Evaluator_eval(ev, expr);
+    assert(eval_err(ev) != ERR_NONE, "depth 512 rejected");
+    return 0;
+}
+
+# Audit MED-6: arity-cap enforcement.
+fn test_arity_cap() {
+    var ev = Evaluator_new();
+    # mean(1,2,...,8) should work (under cap).
+    Evaluator_eval(ev, "mean(1,2,3,4,5,6,7,8)");
+    assert_eq(eval_err(ev), ERR_NONE, "mean with 8 args works");
+
+    # Synthesize a call with 33 args — must be rejected.
+    # "mean(1,1,1,...,1)" with 33 ones.
+    var expr = alloc(256);
+    var pos = 0;
+    memcpy(expr + pos, "mean(", 5); pos = pos + 5;
+    var a = 0;
+    while (a < 33) {
+        if (a > 0) { store8(expr + pos, 44); pos = pos + 1; }
+        store8(expr + pos, 49); pos = pos + 1;
+        a = a + 1;
+    }
+    store8(expr + pos, 41); pos = pos + 1;
+    store8(expr + pos, 0);
+    ev = Evaluator_new();
+    Evaluator_eval(ev, expr);
+    assert(eval_err(ev) != ERR_NONE, "33-arg call rejected");
+    return 0;
+}
+
+# Audit MED-5: scientific-exponent clamp.
+fn test_exponent_clamp() {
+    # 1e400 → clamped to 1e308 (huge but finite, or +inf if exceeded).
+    # We don't care about the exact bit pattern, only that the parser
+    # doesn't loop forever on a pathological literal.
+    var ev = Evaluator_new();
+    var r = Evaluator_eval(ev, "1e9999999999");
+    # Parser should complete and produce a finite-or-inf result, not
+    # hang or overflow exp_val into a negative value.
+    assert_eq(eval_err(ev), ERR_NONE, "pathological exponent parses");
+    # Normal scientific notation still works.
+    r = Evaluator_eval(ev, "1.5e3");
+    assert_eq(f64_to(r), 1500, "1.5e3 = 1500");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco eval tests ===");
@@ -165,6 +238,9 @@ fn main() {
     test_variables();
     test_percent();
     test_errors();
+    test_depth_boundary();
+    test_arity_cap();
+    test_exponent_clamp();
     assert_summary();
     return 0;
 }

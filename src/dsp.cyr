@@ -3,11 +3,15 @@
 
 # -- Constants (as f64 bit patterns) --
 # TAU = 2 * pi = 6.283185307179586
-var DSP_TAU          = 0x4019_21FB_5444_2D18;   # 2π
-var DSP_PI           = 0x4009_21FB_5444_2D18;   # π
-var DSP_PI_4         = 0x3FE9_21FB_5444_2D18;   # π/4
-var DSP_PI_2         = 0x3FF9_21FB_5444_2D18;   # π/2
-var DSP_FRAC_1_SQRT2 = 0x3FE6_A09E_667F_3BCD;   # 1/√2
+# Mathematical constants — alias onto stdlib `lib/math.cyr` (Cyrius 4.8.5+).
+# Kept under the `DSP_*` names so existing call sites don't churn; new code
+# can use the stdlib names directly.
+var DSP_TAU          = F64_TAU;
+var DSP_PI           = F64_PI;
+var DSP_PI_4         = F64_PI_4;
+var DSP_PI_2         = F64_PI_2;
+var DSP_FRAC_1_SQRT2 = F64_FRAC_1_SQRT2;
+# Domain-specific constants (not in stdlib).
 var DSP_A4_FREQ      = 0x407B_8000_0000_0000;   # 440.0 Hz
 var DSP_A4_MIDI      = 0x4051_4000_0000_0000;   # 69.0
 var DSP_SEMITONES    = 0x4028_0000_0000_0000;   # 12.0
@@ -150,6 +154,16 @@ fn db_to_amplitude(db) {
 fn db_gain_factor(db) {
     return f64_exp(f64_mul(db, DB_GAIN_EXP));
 }
+
+# dBFS (dB full-scale) — digital audio convention where 0 dBFS corresponds
+# to an amplitude of 1.0. Formally dBFS(a) = 20 * log10(|a| / 1.0), so the
+# conversion is identical to amplitude_to_db/db_to_amplitude when the
+# reference level is unity (the universal case for floating-point audio).
+# Exposing the pair as an explicit alias removes the need for every
+# caller to remember that "dBFS" and "dB relative to 1.0" are the same
+# thing in the float-audio world, and keeps call sites self-documenting.
+fn amplitude_to_dbfs(amp) { return amplitude_to_db(amp); }
+fn dbfs_to_amplitude(dbfs) { return db_to_amplitude(dbfs); }
 
 # ================================================================
 # MIDI <-> Frequency (12-TET, A4 = 440 Hz)
@@ -392,11 +406,11 @@ fn window_kaiser_fill(dst, size, beta) {
 # ================================================================
 
 # Module-level f64 constants for per-sample hot paths.
-var DSP_HALF     = 0x3FE0_0000_0000_0000;   # 0.5
-var DSP_ONE      = 0x3FF0_0000_0000_0000;   # 1.0
-var DSP_TWO      = 0x4000_0000_0000_0000;   # 2.0
-var DSP_TWO_HALF = 0x4004_0000_0000_0000;   # 2.5
-var DSP_ONE_HALF = 0x3FF8_0000_0000_0000;   # 1.5
+var DSP_HALF     = F64_HALF;
+var DSP_ONE      = F64_ONE;
+var DSP_TWO      = F64_TWO;
+var DSP_TWO_HALF = F64_TWO_HALF;
+var DSP_ONE_HALF = F64_ONE_HALF;
 
 # Cubic (Catmull-Rom) interpolation between b and c, using neighbors a and d.
 # t in [0, 1]. Smooth and passes through control points.

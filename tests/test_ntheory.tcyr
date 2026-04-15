@@ -56,6 +56,20 @@ fn test_is_prime() {
     assert(is_prime(2821) == 0, "2821 carmichael");
     assert(is_prime(6601) == 0, "6601 carmichael");
     assert(is_prime(8911) == 0, "8911 carmichael");
+
+    # Strong pseudoprimes to specific small bases (audit LOW-9a).
+    # Each is a composite that fools Miller–Rabin under one witness but is
+    # caught once the next witness joins the set. Abaco uses the 12-witness
+    # set, so all of these must classify as composite.
+    assert(is_prime(2047) == 0, "2047 strong psp base 2");
+    assert(is_prime(1373653) == 0, "1373653 spsp bases 2,3");
+    assert(is_prime(25326001) == 0, "25326001 spsp bases 2,3,5");
+    assert(is_prime(3215031751) == 0, "3215031751 spsp bases 2,3,5,7");
+
+    # Large known primes (past our small-prime fast-path).
+    assert(is_prime(104729) == 1, "10000th prime");
+    assert(is_prime(1000000007) == 1, "10^9 + 7 is prime");
+    assert(is_prime(2147483647) == 1, "Mersenne M31");
     return 0;
 }
 

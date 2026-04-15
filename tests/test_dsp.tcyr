@@ -305,6 +305,18 @@ fn test_chromagram() {
     return 0;
 }
 
+fn test_dbfs() {
+    assert_f64_near(amplitude_to_dbfs(f64_from(1)), f64_from(0), 10, "unity = 0 dBFS");
+    assert_f64_near(dbfs_to_amplitude(f64_from(0)), f64_from(1), 10, "0 dBFS = unity");
+    var half_dbfs = amplitude_to_dbfs(f64_div(f64_from(1), f64_from(2)));
+    var expect = f64_neg(f64_div(f64_from(602), f64_from(100)));
+    assert_f64_near(half_dbfs, expect, 100, "half = -6.02 dBFS");
+    var amp = f64_div(f64_from(3), f64_from(4));
+    var back = dbfs_to_amplitude(amplitude_to_dbfs(amp));
+    assert_f64_near(back, amp, 10, "dBFS round trip");
+    return 0;
+}
+
 fn test_audio_conv() {
     # 1 sample at 1000 Hz = 1 ms.
     assert_f64_near(samples_to_ms(f64_from(1), f64_from(1000)), f64_from(1), 5, "1 sample @ 1kHz = 1ms");
@@ -342,6 +354,7 @@ fn main() {
     test_interpolation();
     test_chromagram();
     test_audio_conv();
+    test_dbfs();
     assert_summary();
     return 0;
 }
