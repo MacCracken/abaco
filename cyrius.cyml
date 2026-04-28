@@ -1,0 +1,34 @@
+[package]
+name = "abaco"
+version = "${file:VERSION}"
+description = "Math engine — expression evaluation, unit conversion, DSP math"
+license = "GPL-3.0-only"
+repository = "https://github.com/MacCracken/abaco"
+language = "cyrius"
+cyrius = "5.7.23"
+
+[build]
+entry = "src/main.cyr"
+output = "build/abaco"
+
+[deps]
+stdlib = [
+    "string",
+    "fmt",
+    "alloc",
+    "vec",
+    "str",
+    "syscalls",
+    "tagged",
+    "hashmap",
+    "assert",
+    "fnptr",
+    "bench",
+    "args",
+    "math",
+    "io",
+    "net",
+    "http",
+    "json",
+    "u128",
+]

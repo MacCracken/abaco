@@ -5,6 +5,59 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] — 2026-04-28
+
+Cyrius 4.10.2 → 5.7.23 upgrade and project modernization. No source
+changes — abaco's `src/` builds clean against 5.7.23. 442 test asserts
+pass; `tests/test_simd.tcyr` is quarantined (see Known issues).
+
+### Changed
+
+- **Cyrius bumped 4.10.2 → 5.7.23.** All `lib/` stdlib files refreshed
+  via `cyrius deps`.
+- **Manifest renamed `cyrius.toml` → `cyrius.cyml`** and modernized:
+  - `version` now interpolates from the `VERSION` file via
+    `${file:VERSION}` (single source of truth).
+  - Added `repository = "https://github.com/MacCracken/abaco"`.
+  - `output` is now `build/abaco` to match the standard layout.
+  - `[deps].stdlib` is now multi-line for diff-friendliness.
+- **CI/release workflows modernized** to match the yukti/daimon shape:
+  - Toolchain version is read directly from `cyrius.cyml` — no more
+    parallel `.cyrius-toolchain` pin to keep in sync.
+  - New steps: `cyrius deps`, `cyrius vet`, advisory `cyrius lint`,
+    DCE-enabled build, ELF verification, best-effort aarch64
+    cross-build, security pattern scan, doc-presence check.
+  - Release workflow accepts both `1.2.3` and `v1.2.3` tag styles,
+    archives source + per-arch binaries with `SHA256SUMS`, and pulls
+    the per-version body straight from `CHANGELOG.md`.
+
+### Removed
+
+- `.cyrius-toolchain` — superseded by reading the version from
+  `cyrius.cyml` (`grep -oP '(?<=^cyrius = ")[^"]+' cyrius.cyml`).
+- 40 stale `lib/*.cyr` files that were never referenced from `src/`
+  (leftovers from earlier dep experiments: `audio`, `chrono`,
+  `linalg`, `mabda`, `patra`, `regex`, `sakshi`, `sigil`, `thread`,
+  `toml`, `ws`, `yukti`, etc.). `cyrius deps` now produces a `lib/`
+  that exactly matches `[deps].stdlib`.
+
+### Known issues
+
+- **`tests/test_simd.tcyr` quarantined.** The `f64v_*` SIMD
+  intrinsics (`f64v_add` / `f64v_sub` / `f64v_mul` / `f64v_div` /
+  `f64v_sqrt` / `f64v_abs` / `f64v_fmadd`) SIGSEGV at runtime under
+  Cyrius 5.7.23. This is a pre-existing compiler regression — the
+  test last passed on 4.8.5; the prior CI loop only checked for
+  the literal string `failed` in test output, so the crash went
+  unnoticed across the 4.8.5 → 4.10.2 bump. The new CI's strict
+  exit-code check exposes it. `src/dsp.cyr`'s `batch_*` thin
+  wrappers (`batch_add` / `batch_sub` / `batch_mul` / `batch_div`
+  / `batch_sqrt` / `batch_abs` / `batch_mac` / `batch_fmadd`) are
+  affected at runtime too — DCE strips them in release builds
+  today, but any caller that lands will hit the same crash. CI
+  and release workflows skip `test_simd` until the intrinsics are
+  fixed upstream.
+
 ## [2.1.0] — 2026-04-15
 
 Cyrius 4.10.2 upgrade — stdlib now provides primitives that were
