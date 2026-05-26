@@ -6,44 +6,39 @@ type: state
 
 # Documentation Health — abaco
 
-> **Last refresh**: 2026-05-26 (2.2.1 — Cyrius 5.7.23 → 6.0.1 upgrade + first
-> slot of the 2.2.x modernization arc. Doc tree brought current to the
-> patra/sigil first-party shape: CLAUDE.md rewritten Cyrius-native, root docs
-> de-Rusted, `cyrius.toml` → `cyrius.cyml` references swept, and the
-> `docs/development/{roadmap,state}.md` + `docs/sources.md` surfaces scaffolded.)
+> **Last refresh**: 2026-05-26 (2.2.2 — documentation-depth + light-hardening
+> slot. Added `docs/architecture/` (4 invariants + README), `docs/adr/`
+> (3 ADRs + template + README), and `docs/guides/consuming-abaco.md`; completed
+> the `docs/sources.md` citation audit; refreshed the docs index and the
+> `mcp-tools.md` read-through; re-ran the benchmark baseline under 6.0.1.
+> Prior refresh: 2026-05-26 (2.2.1 scaffold — see footer.)
 > | **Refresh cadence**: opportunistic — update the affected row whenever a doc
 > is touched, not on a timer.
 >
 > **Scope**: This repo only (`abaco`) — the entire `docs/` tree plus root-level
-> docs (README, CHANGELOG, CLAUDE.md, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT,
-> ROADMAP, VERSION). Stdlib deps are vendored (`lib/`, gitignored) and documented
-> upstream in cyrius — not audited here.
+> docs. Vendored stdlib (`lib/`, gitignored) is documented upstream in cyrius,
+> not here.
 
 This is a **ledger**, not a one-time audit. Rewrite-in-place as docs change.
 
 ---
 
-## At a glance — 2026-05-26 inventory (2.2.1)
+## At a glance — 2026-05-26 inventory (2.2.2)
 
-**17 markdown docs** (+3 this cycle: `docs/development/roadmap.md`,
-`docs/development/state.md`, `docs/sources.md`; +1 self: this file).
+**30 markdown docs** (+13 since 2.2.1: `docs/architecture/` ×5, `docs/adr/` ×5,
+`docs/guides/consuming-abaco.md`, plus the 2.2.1-era `doc-health.md` and the two
+`docs/development/` files now settled).
 
 | Bucket | Count | What it means |
 |---|---|---|
-| ✅ **Fresh / touched this cycle** | 11 | README, CHANGELOG, CLAUDE.md, CONTRIBUTING, SECURITY, VERSION, ROADMAP (re-scoped to completed-archive), docs/architecture, docs/development.md, + the 3 new surfaces (roadmap/state/sources) |
-| 🟡 **Stale — refresh in place** | 2 | `bench-latest.md` (pre-6.0.1 numbers); `docs/README.md` (index predates the `docs/development/` + `sources.md` additions) |
-| 🟠 **Read-through outstanding** | 1 | `docs/mcp-tools.md` — last touched 2026-03-16; verify the tool surface still matches `src/ai.cyr` |
-| 🔵 **Evergreen / dated artifact** | 3 | `CODE_OF_CONDUCT.md`, `LICENSE`, `docs/audit/2026-04-14.md` (timestamped audit — supersede, don't edit) |
+| ✅ **Fresh / touched this cycle** | 26 | All root docs except CoC/LICENSE; every `docs/` file except the dated audit; all 11 new architecture/ADR/guide docs |
+| 🟡 **Stale — refresh in place** | 0 | bench-latest.md refreshed under 6.0.1 this slot; README index refreshed |
+| 🟠 **Read-through outstanding** | 0 | `docs/mcp-tools.md` read-through done — verified against `src/ai.cyr`/`eval`/`units` |
+| 🔵 **Evergreen / dated artifact** | 4 | `CODE_OF_CONDUCT.md`, `LICENSE`, `docs/adr/template.md`, `docs/audit/2026-04-14.md` |
 | 📦 **Archive — frozen by design** | 0 | None yet |
 | ❓ **Open strategic question** | 0 | None |
 
 Numbers roll up from the per-tier tables below.
-
-**Why now**: doc-health convention adopted from
-[`agnosticos/docs/doc-health.md`](https://github.com/MacCracken/agnosticos/blob/main/docs/doc-health.md)
-during the 2.2.1 modernization. Abaco's CHANGELOG is canonical and `state.md`
-now refreshes every release, but the *aggregate* doc currency had no surface —
-this file is that surface.
 
 ---
 
@@ -51,16 +46,16 @@ this file is that surface.
 
 | File | Last touched | Status | Action |
 |---|---|---|---|
-| `README.md` | 2026-05-26 | ✅ Fresh | De-Rusted: Cyrius pin reference, `cyrius deps`/`distlib` quick-start, consumer block now uses `dist/abaco.cyr`. |
-| `CHANGELOG.md` | 2026-05-26 | ✅ Fresh | **Source of truth.** Through 2.2.1. Refreshed every release. |
-| `CLAUDE.md` | 2026-05-26 | ✅ Fresh | **Rewritten Cyrius-native** this cycle (was Rust-era: cargo/clippy/tracing). Durable rules only; volatile state delegated to `docs/development/state.md`. |
-| `CONTRIBUTING.md` | 2026-05-26 | ✅ Fresh | Prereqs now reference the `cyrius.cyml` pin + `cyrius deps`; module-add checklist mentions `[lib] modules`. |
-| `SECURITY.md` | 2026-05-26 | ✅ Fresh | Supported-versions table refreshed to 2.2.x / Cyrius 6.0.x. |
-| `CODE_OF_CONDUCT.md` | 2026-03-22 | 🔵 Evergreen | Standard CoC; no drift surface. |
+| `README.md` | 2026-05-26 | ✅ Fresh | De-Rusted in 2.2.1 (Cyrius pin, `cyrius deps`/`distlib`, `dist/abaco.cyr` consumer block). |
+| `CHANGELOG.md` | 2026-05-26 | ✅ Fresh | **Source of truth.** Through 2.2.1; 2.2.2 entry lands at slot close. |
+| `CLAUDE.md` | 2026-05-26 | ✅ Fresh | Cyrius-native; durable rules only, state delegated to `development/state.md`. |
+| `CONTRIBUTING.md` | 2026-05-26 | ✅ Fresh | Prereqs reference the `cyrius.cyml` pin + `cyrius deps`; `[lib] modules` note. |
+| `SECURITY.md` | 2026-05-26 | ✅ Fresh | Supported-versions table at 2.2.x / Cyrius 6.0.x. |
+| `CODE_OF_CONDUCT.md` | 2026-03-22 | 🔵 Evergreen | Standard CoC. |
 | `LICENSE` | — | 🔵 Evergreen | GPL-3.0-only. |
-| `VERSION` | 2026-05-26 | ✅ Fresh | Single source of truth — `2.2.1`. `cyrius.cyml` derives via `${file:VERSION}`. |
-| `ROADMAP.md` | 2026-05-26 | ✅ Fresh | Re-scoped: forward pointer to `docs/development/roadmap.md` at top; body is the completed-work record. |
-| `bench-latest.md` | (pre-6.0.1) | 🟡 Stale | Snapshot predates the 6.0.1 upgrade. Refresh at the 2.2.2 baseline (full 3-point trend at 2.2.3). |
+| `VERSION` | 2026-05-26 | ✅ Fresh | Single source of truth. |
+| `ROADMAP.md` | 2026-05-26 | ✅ Fresh | Completed-work record + forward pointer to `development/roadmap.md`. |
+| `bench-latest.md` | 2026-05-26 | ✅ Fresh | **Refreshed under 6.0.1 this slot** (early arc baseline; `is_prime_small` 2µs→1µs). Full 3-point trend at 2.2.3. |
 
 ---
 
@@ -68,37 +63,75 @@ this file is that surface.
 
 | File | Last touched | Status | Action |
 |---|---|---|---|
-| `docs/README.md` | 2026-04-14 | 🟡 Stale | Docs index — predates `docs/development/` + `docs/sources.md` + this file. Add the new entries in 2.2.2 (docs depth). |
-| `docs/architecture.md` | 2026-05-26 | ✅ Fresh | Consumer-dependency note updated to `dist/abaco.cyr` via `cyrius.cyml`. |
-| `docs/development.md` | 2026-05-26 | ✅ Fresh | Prereqs + upgrade flow rewritten around the `cyrius.cyml` pin and `cyrius deps`; manifest tree shows `cyrius.cyml`. |
-| `docs/mcp-tools.md` | 2026-03-16 | 🟠 Read-through | Verify the documented MCP tool surface still matches `src/ai.cyr`. Oldest doc in the tree. |
-| `docs/sources.md` | 2026-05-26 | ✅ Fresh | **NEW.** Citations for ntheory / DSP / units / eval algorithms + constants. Completeness audit pinned to 2.2.2. |
+| `docs/README.md` | 2026-05-26 | ✅ Fresh | **Index refreshed this slot** — now lists architecture/, adr/, guides/, sources, doc-health, development/. |
+| `docs/architecture.md` | 2026-05-26 | ✅ Fresh | Module layout + data flow; consumer-dep note uses `dist/abaco.cyr`. |
+| `docs/development.md` | 2026-05-26 | ✅ Fresh | Build/test/bench/release loop on the `cyrius.cyml` pin + `cyrius deps`. |
+| `docs/mcp-tools.md` | 2026-05-26 | ✅ Fresh | **Read-through done this slot** — 5 tools mapped to their backing functions in `ai`/`eval`/`units`; implementation-status note added. |
+| `docs/sources.md` | 2026-05-26 | ✅ Fresh | **Completeness audit done this slot** — added PolyBLEP, constant-power pan, envelope time constant. |
+| `docs/doc-health.md` | 2026-05-26 | ✅ Fresh | This ledger. |
 
 ---
 
-## Tier 3 — Development (`docs/development/`)
+## Tier 3 — Architecture invariants (`docs/architecture/`)
+
+> **New this slot (2.2.2).** Non-obvious constraints you can't derive from one
+> function. Append-only numbering.
+
+| File | Last touched | Status |
+|---|---|---|
+| `README.md` | 2026-05-26 | ✅ Fresh — index |
+| `001-token-storage-layout.md` | 2026-05-26 | ✅ Fresh |
+| `002-expression-depth-bound.md` | 2026-05-26 | ✅ Fresh |
+| `003-unit-registry-hashing.md` | 2026-05-26 | ✅ Fresh |
+| `004-miller-rabin-witness-bound.md` | 2026-05-26 | ✅ Fresh |
+
+---
+
+## Tier 4 — ADRs (`docs/adr/`)
+
+> **New this slot (2.2.2).** Decisions document *why*, not status — re-read, not
+> rotated. Never renumber.
+
+| File | Last touched | Status |
+|---|---|---|
+| `README.md` | 2026-05-26 | ✅ Fresh — index |
+| `template.md` | 2026-05-26 | 🔵 Evergreen — ADR shape |
+| `0001-dist-bundle-distribution.md` | 2026-05-26 | ✅ Accepted |
+| `0002-eval-pow-precision-fast-path.md` | 2026-05-26 | ✅ Accepted |
+| `0003-deterministic-miller-rabin.md` | 2026-05-26 | ✅ Accepted |
+
+---
+
+## Tier 5 — Guides (`docs/guides/`)
+
+| File | Last touched | Status |
+|---|---|---|
+| `consuming-abaco.md` | 2026-05-26 | ✅ Fresh — **new this slot**; consumer-side `dist/abaco.cyr` wiring + API surface map |
+
+---
+
+## Tier 6 — Development (`docs/development/`)
 
 > `roadmap.md` (forward plan) and `state.md` (live snapshot) are the canonical
 > operational surface. CLAUDE.md delegates volatile state to `state.md`.
 
 | File | Last touched | Status | Action |
 |---|---|---|---|
-| `roadmap.md` | 2026-05-26 | ✅ Fresh | **NEW.** Forward 2.2.x modernization arc + 2.3.x ecosystem rollout. |
-| `state.md` | 2026-05-26 | ✅ Fresh | **NEW. Rotates every release.** Versions, artifact sizes, 452-assert test breakdown, consumers. |
+| `roadmap.md` | 2026-05-26 | ✅ Fresh | 2.2.x arc (2.2.2 in progress); 2.3.x ecosystem rollout. |
+| `state.md` | 2026-05-26 | ✅ Fresh | **Rotates every release.** Bump assert count + sizes at 2.2.2 close. |
 
 ---
 
-## Tier 4 — Audits (`docs/audit/`)
+## Tier 7 — Audits (`docs/audit/`)
 
-Periodic, timestamped reports — supersede with a new dated doc, don't edit in place.
+Periodic, timestamped — supersede with a new dated doc, don't edit in place.
 
 | File | Last touched | Status |
 |---|---|---|
 | `2026-04-14.md` | 2026-04-14 | 🔵 Dated artifact |
 
-Open items from this audit (MED-4 json depth cap, LOW-8 hashmap seed, LOW-9b
-regression tests) are tracked in `docs/development/roadmap.md`: LOW-9b lands in
-2.2.2 (light hardening); the heavier MED-4 / LOW-8 items and the fresh full
+Open items: LOW-9b regression tests landed in **2.2.2** (truncated-body +
+hashmap-collision tests). The heavier MED-4 / LOW-8 items and a fresh full
 security audit land in **2.2.3** (P(-1) hardening).
 
 ---
@@ -132,17 +165,19 @@ Cadence is **opportunistic** (touched when other docs are touched), not periodic
 
 Scheduled doc decisions, surfaced so they aren't forgotten when the trigger arrives.
 
-| # | Commitment | Trigger | Notes |
+| # | Commitment | Trigger | Status |
 |---|---|---|---|
-| 1 | `docs/sources.md` completeness audit — every formula/constant cross-checked against a citation | 2.2.2 | Initial pass shipped 2.2.1; covers the main algorithms. |
-| 2 | Benchmark surface refresh — re-run under 6.0.1, refresh `bench-latest.md` + CSV | 2.2.2 baseline / 2.2.3 trend | `bench-latest.md` currently pre-6.0.1. |
-| 3 | `docs/README.md` index refresh — add `development/`, `sources.md`, `doc-health.md` rows | 2.2.2 | Keeps the index aligned with the tree. |
-| 4 | `docs/mcp-tools.md` read-through vs `src/ai.cyr` | 2.2.2 (docs depth) | Oldest doc; verify tool surface. |
-| 5 | Full security re-audit → new `docs/audit/YYYY-MM-DD-audit.md` | 2.2.3 (P(-1) hardening) | Closes the heavier open items from 2026-04-14. |
+| 1 | `docs/sources.md` completeness audit | 2.2.2 | ✅ Done 2026-05-26 |
+| 2 | Benchmark surface refresh under 6.0.1 | 2.2.2 baseline / 2.2.3 trend | ◑ Baseline done; 3-point trend pending 2.2.3 |
+| 3 | `docs/README.md` index refresh | 2.2.2 | ✅ Done 2026-05-26 |
+| 4 | `docs/mcp-tools.md` read-through vs `src/ai.cyr` | 2.2.2 | ✅ Done 2026-05-26 |
+| 5 | Full security re-audit → new `docs/audit/YYYY-MM-DD-audit.md` | 2.2.3 (P(-1) hardening) | ⏳ Pending |
 
 ---
 
-*Initial scaffold: 2026-05-26 (2.2.1). First inventory caught: CLAUDE.md
-Rust-era drift (full rewrite), 6× `cyrius.toml` references across root + docs,
-stale Cyrius `4.8.x` prereqs, and a 2.0.x SECURITY.md support table. Refresh in
-place when docs are touched.*
+*Initial scaffold: 2026-05-26 (2.2.1) — caught CLAUDE.md Rust-era drift, 6×
+`cyrius.toml` references, stale Cyrius `4.8.x` prereqs, a 2.0.x SECURITY.md
+table. First depth pass: 2026-05-26 (2.2.2) — added architecture/ + adr/ +
+guides/, completed the sources citation audit, cleared the lone read-through
+(mcp-tools) and the two stale rows (bench-latest, docs/README). Refresh in place
+when docs are touched.*

@@ -212,6 +212,37 @@ fn test_ccy_parse_body() {
     return 0;
 }
 
+fn test_ccy_truncated_body() {
+    # LOW-9b regression: a truncated body / lying Content-Length must be
+    # rejected cleanly (AI_ERR_CURRENCY) — never fabricate a rate, never read
+    # past the caller-supplied `len`. All extractors are len-bounded.
+    var body = "{\"base\":\"USD\",\"rates\":{\"EUR\":0.92,\"GBP\":0.79}}";
+    var full = strlen(body);
+
+    # Baseline: honest length parses.
+    var c0 = CurrencyCache_new("http://localhost:8088");
+    assert_eq(_ccy_load_body(c0, body, full), 0, "full body ok");
+
+    # Lying length cuts off the rates object before its closing brace —
+    # _jf_get_object can't balance braces within len, so the load rejects.
+    var c1 = CurrencyCache_new("http://localhost:8088");
+    assert_eq(_ccy_load_body(c1, body, full - 4), AI_ERR_CURRENCY, "truncated rates rejected");
+
+    # Length ends before the "rates" key appears at all.
+    var c2 = CurrencyCache_new("http://localhost:8088");
+    assert_eq(_ccy_load_body(c2, body, 14), AI_ERR_CURRENCY, "len before rates rejected");
+
+    # Zero-length (empty transport).
+    var c3 = CurrencyCache_new("http://localhost:8088");
+    assert_eq(_ccy_load_body(c3, body, 0), AI_ERR_CURRENCY, "zero-len rejected");
+
+    # Bounded read: with len ending mid-value, _jf_get_string stops at len
+    # ("US") instead of scanning ahead to the real closing quote ("USD").
+    var partial = _jf_get_string(body, 11, "base");
+    assert(streq(partial, "US") == 1, "_jf_get_string bounded by len (no over-read)");
+    return 0;
+}
+
 fn test_history_json_roundtrip() {
     var h = CalcHistory_new(100);
     CalcHistory_push(h, "2 + 3", "5", "2026-04-14T00:00:00Z");
@@ -378,6 +409,7 @@ fn main() {
     test_history_clear();
     test_currency_convert();
     test_ccy_parse_body();
+    test_ccy_truncated_body();
     test_history_json_roundtrip();
     test_history_json_escapes();
     test_history_empty_json();

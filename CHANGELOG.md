@@ -5,6 +5,49 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.2] — 2026-05-26
+
+Second slot of the 2.2.x modernization arc: **documentation depth + light
+hardening**. No source changes — `src/` is byte-identical to 2.2.1 (the bundle
+differs only by version stamp); this slot adds tests, docs, and a fresh
+benchmark baseline. Suite green at **470 asserts, 0 failures** (was 452).
+
+### Added
+
+- **`docs/architecture/`** — non-obvious invariants that can't be derived from a
+  single function: token storage layout, expression depth bound (`MAX_DEPTH`),
+  unit-registry two-map hashing + lookup order, Miller–Rabin witness validity
+  bound. (README + 4 numbered notes.)
+- **`docs/adr/`** — architecture decision records (+ template): dist-bundle
+  distribution (0001), `eval_pow` vs stdlib `f64_pow` precision fast path
+  (0002), deterministic Miller–Rabin over a fixed witness set (0003).
+- **`docs/guides/consuming-abaco.md`** — how hisab/dhvani/Abacus wire
+  `dist/abaco.cyr` as a dependency, with an API surface map.
+- **LOW-9b regression tests** (closes the open 2026-04-14 audit item):
+  - `test_ai::test_ccy_truncated_body` — a truncated body / lying
+    Content-Length is rejected cleanly (`AI_ERR_CURRENCY`), and `_jf_get_string`
+    is shown len-bounded (no over-read past the declared length). +5 asserts.
+  - `test_units::test_hashmap_collisions` — a 200-entry round-trip exercises the
+    cstr-keyed registry map well past its 16-slot cap (guaranteed collisions +
+    grows); every key must read back. +13 asserts (with integrity check).
+  - `test_units::test_registry_integrity` — per-category lookup + conversion
+    integrity across the registry surface.
+
+### Changed
+
+- **`docs/sources.md` completeness audit** — every algorithm, formula, and
+  constant cross-checked against a citation; added PolyBLEP (Välimäki &
+  Huovilainen 2007), the constant-power pan/crossfade law, and the exponential
+  envelope time constant.
+- **`docs/README.md`** index refreshed (architecture/, adr/, guides/, sources,
+  doc-health, development/); **`docs/mcp-tools.md`** read-through vs `src/ai.cyr`
+  — the 5 tools mapped to their backing functions, implementation status (engine
+  vs consumer-side server) clarified.
+- **Benchmark baseline refreshed under 6.0.1** (`bench-latest.md` +
+  `bench-history.csv`) as the early arc baseline; `is_prime_small` 2µs → 1µs.
+  The full 3-point trend lands in 2.2.3.
+- `docs/doc-health.md` refreshed: 30 docs, 0 stale, 0 read-through outstanding.
+
 ## [2.2.1] — 2026-05-26
 
 Cyrius 5.7.23 → 6.0.1 upgrade and first slot of the 2.2.x modernization

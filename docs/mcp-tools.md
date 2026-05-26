@@ -2,6 +2,20 @@
 
 Abaco exposes 5 MCP tools for integration with AGNOS agents via daimon.
 
+> **Implementation status** (read-through 2026-05-26, 2.2.1): abaco ships the
+> *engine* — these tools are thin JSON-RPC wrappers a consumer (daimon /
+> agnoshi) places over abaco's public functions. abaco itself does not run an
+> MCP server loop. Each tool below is backed by an existing function, verified
+> against `src/ai.cyr` / `src/eval.cyr` / `src/units.cyr`:
+>
+> | Tool | Backing function(s) |
+> |------|--------------------|
+> | `abaco_eval` | `Evaluator_eval` (`eval`) |
+> | `abaco_convert` | `UnitRegistry_convert` (`units`) |
+> | `abaco_currency` | `CurrencyCache_fetch` + `CurrencyCache_convert` (`ai`) |
+> | `abaco_history` | `CalcHistory_get` / `CalcHistory_to_json` (`ai`) |
+> | `abaco_units` | `UnitRegistry_list` (`units`) |
+
 ## abaco_eval
 
 Evaluate a mathematical expression.

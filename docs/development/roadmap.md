@@ -25,19 +25,19 @@ docs. The minor (2.3.0) opens once the arc closes.
 - [x] CLAUDE.md rewritten Cyrius-native; `docs/development/{roadmap,state}.md`
       + `docs/sources.md` scaffolded
 
-### 2.2.2 — Documentation depth + light hardening
+### 2.2.2 — Documentation depth + light hardening ✅ (2026-05-26)
 
-- [ ] `docs/architecture/` — non-obvious invariants (token storage layout,
+- [x] `docs/architecture/` — non-obvious invariants (token storage layout,
       MAX_DEPTH rationale, unit-registry hashing, Miller–Rabin witness bound)
-- [ ] `docs/adr/` — record the decisions earned here: dist-bundle distribution,
+- [x] `docs/adr/` — record the decisions earned here: dist-bundle distribution,
       `eval_pow` vs stdlib `f64_pow`, deterministic-MR-vs-probabilistic
-- [ ] `docs/guides/consuming-abaco.md` — how hisab/dhvani/Abacus wire
+- [x] `docs/guides/consuming-abaco.md` — how hisab/dhvani/Abacus wire
       `dist/abaco.cyr` as a dep
-- [ ] `docs/sources.md` completeness audit — every formula/constant cited
-- [ ] `docs/README.md` index refresh; `docs/mcp-tools.md` read-through vs `src/ai.cyr`
-- [ ] LOW-9b regression tests — truncated HTTP w/ lying `Content-Length`,
+- [x] `docs/sources.md` completeness audit — every formula/constant cited
+- [x] `docs/README.md` index refresh; `docs/mcp-tools.md` read-through vs `src/ai.cyr`
+- [x] LOW-9b regression tests — truncated HTTP w/ lying `Content-Length`,
       unit-hashmap synthetic collisions
-- [ ] Benchmark CSV refresh under 6.0.1 — early arc baseline
+- [x] Benchmark CSV refresh under 6.0.1 — early arc baseline
 
 ### 2.2.3 — P(-1) hardening + convention alignment
 

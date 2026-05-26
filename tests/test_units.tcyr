@@ -14,6 +14,55 @@ include "lib/assert.cyr"
 include "src/core.cyr"
 include "src/units.cyr"
 
+# LOW-9b regression: every registry lookup resolves through a cstr-keyed
+# hashmap (open addressing, content hash, 16-slot initial cap). Stress it well
+# past capacity so collisions + grows are guaranteed, then read every key back.
+# A dropped or corrupted entry — the failure mode the audit flagged — surfaces
+# here as a mismatch.
+fn test_hashmap_collisions() {
+    var m = map_new();
+    var keys = vec_new();
+    var n = 200;
+    var i = 0;
+    while (i < n) {
+        var kbuf = alloc(16);
+        store8(kbuf, 117);                # 'u'
+        var dlen = fmt_int_buf(i, kbuf + 1);
+        store8(kbuf + 1 + dlen, 0);
+        vec_push(keys, kbuf);
+        map_set(m, kbuf, i * 7 + 1);      # value never 0 (avoids miss sentinel)
+        i = i + 1;
+    }
+    assert_eq(map_size(m), 200, "200 distinct keys stored");
+    i = 0;
+    var ok = 1;
+    while (i < n) {
+        if (map_get(m, vec_get(keys, i)) != i * 7 + 1) { ok = 0; }
+        i = i + 1;
+    }
+    assert_eq(ok, 1, "all 200 keys retrievable under collisions + grow");
+    assert_eq(map_has(m, "u9999"), 0, "absent key misses (no false collision)");
+    return 0;
+}
+
+# Registry integrity: a representative unit per category resolves, and a
+# conversion still computes across that surface. A collision silently
+# shadowing a unit/alias would show up as a 0 find or a wrong factor.
+fn test_registry_integrity(r) {
+    assert(UnitRegistry_find(r, "mile") != 0, "len mile (name)");
+    assert(UnitRegistry_find(r, "mi") != 0, "len mi (symbol)");
+    assert(UnitRegistry_find(r, "kilogram") != 0, "mass kilogram");
+    assert(UnitRegistry_find(r, "lb") != 0, "mass lb");
+    assert(UnitRegistry_find(r, "min") != 0, "time min");
+    assert(UnitRegistry_find(r, "C") != 0, "temp C");
+    assert(UnitRegistry_find(r, "kB") != 0, "data kB");
+    assert(UnitRegistry_find(r, "Hz") != 0, "freq Hz");
+    assert(UnitRegistry_find(r, "cent") != 0, "pitch cent");
+    var v = UnitRegistry_convert(r, f64_from(2), "mi", "m");
+    assert_eq(f64_to(v), 3218, "2 mi = 3218 m (collision-free factor)");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco units tests ===");
@@ -56,6 +105,8 @@ fn main() {
     assert_eq(f64_to(result), 1, "100 cents = 1 semi");
     assert(UnitRegistry_find(r, "bpm") != 0, "find bpm");
     assert(UnitRegistry_find(r, "semitones") != 0, "find semitones alias");
+    test_registry_integrity(r);
+    test_hashmap_collisions();
     assert_summary();
     return 0;
 }

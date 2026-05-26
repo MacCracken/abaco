@@ -5,9 +5,9 @@ abaco. Required for a math crate: a reviewer should be able to trace any
 result back to its origin and verify the implementation against the published
 source. No magic numbers.
 
-> Initial pass (2.2.1). A completeness audit — every formula and constant
-> cross-checked against a citation — is scheduled for 2.2.2
-> (see [`development/roadmap.md`](development/roadmap.md)).
+> **Completeness audit: done 2026-05-26 (2.2.2).** Every algorithm, formula, and
+> constant in `src/` was cross-checked against a citation below. The audit added
+> the synthesis/envelope entries (PolyBLEP, constant-power pan, time constant).
 
 ## Number theory — `src/ntheory.cyr`
 
@@ -55,6 +55,24 @@ source. No magic numbers.
   - Catmull, E. & Rom, R. (1974). "A class of local interpolating splines."
     In *Computer Aided Geometric Design*, 317–326. doi:10.1016/B978-0-12-079050-0.50020-5
 - **Samples ↔ milliseconds** — sample-rate-aware: `ms = 1000 · n / fs`.
+
+## DSP — synthesis & envelopes (`src/dsp.cyr`)
+
+- **PolyBLEP (polynomial band-limited step)** — anti-aliasing correction for
+  oscillator discontinuities (`poly_blep(t, dt)`).
+  - Välimäki, V. & Huovilainen, A. (2007). "Antialiasing Oscillators in
+    Subtractive Synthesis." *IEEE Signal Processing Magazine*, 24(2), 116–125.
+    doi:10.1109/MSP.2007.323276
+- **Constant-power pan / equal-power crossfade** — the −3 dB sine/cosine law:
+  `gain_L = cos(θ)`, `gain_R = sin(θ)` with `θ = (pan+1)·π/4`, preserving total
+  power across the sweep (`constant_power_pan`, `equal_power_crossfade`).
+  - Standard mixing-console pan law; see Roads, C. *The Computer Music Tutorial*
+    (1996), ch. on spatialization.
+- **Exponential envelope time constant** — `coeff = exp(-1 / (τ · fs))`, the
+  one-pole smoothing coefficient for a given time constant τ (`time_constant`).
+  - Standard one-pole/RC analogue: `y[n] = coeff·y[n-1] + (1-coeff)·x[n]`.
+- **Modified Bessel function I₀** — `_bessel_i0`, used to weight the Kaiser
+  window (cited under Window functions above; Kaiser 1974).
 
 ## Units — `src/units.cyr`
 

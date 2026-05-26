@@ -4,13 +4,13 @@
 > [`../../CLAUDE.md`](../../CLAUDE.md); forward plan in [`roadmap.md`](roadmap.md);
 > per-tag history in [`../../CHANGELOG.md`](../../CHANGELOG.md).
 
-**Last updated:** 2026-05-26 (2.2.1)
+**Last updated:** 2026-05-26 (2.2.2)
 
 ## Versions
 
 | What | Value |
 |------|-------|
-| abaco | **2.2.1** |
+| abaco | **2.2.2** |
 | Cyrius toolchain pin | **6.0.1** |
 | License | GPL-3.0-only |
 
@@ -23,17 +23,17 @@
 
 ## Tests
 
-**452 asserts, 0 failures** across 7 `.tcyr` files:
+**470 asserts, 0 failures** across 7 `.tcyr` files:
 
 | Suite | Asserts |
 |-------|---------|
-| `test_ai` | 89 |
+| `test_ai` | 94 |
 | `test_dsp` | 95 |
 | `test_eval` | 103 |
 | `test_integration` | 27 |
 | `test_ntheory` | 107 |
 | `test_simd` | 10 |
-| `test_units` | 21 |
+| `test_units` | 34 |
 
 - Fuzz harnesses: 3 (`fuzz_eval`, `fuzz_ntheory`, `fuzz_units`) — smoke-clean
 - Benchmarks: 3 (`bench`, `bench_eval`, `bench_units`)
@@ -55,6 +55,6 @@ smoke entry, excluded from the bundle.
 
 ## In flight
 
-- 2.2.x modernization arc — see [`roadmap.md`](roadmap.md). 2.2.1 released;
-  next: 2.2.2 (documentation depth + light hardening), then 2.2.3 (heavier
-  hardening/audit + convention alignment), 2.2.4 (closeout before 2.3.0).
+- 2.2.x modernization arc — see [`roadmap.md`](roadmap.md). 2.2.1 + 2.2.2
+  released; next: 2.2.3 (heavier hardening/audit + convention alignment), then
+  2.2.4 (closeout before 2.3.0).
