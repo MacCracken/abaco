@@ -243,6 +243,21 @@ fn test_ccy_truncated_body() {
     return 0;
 }
 
+fn test_ccy_deep_nesting_rejected() {
+    # MED-4 regression: a rates object nested past CCY_MAX_JSON_DEPTH (8) must be
+    # rejected before json_parse recurses — a compromised endpoint could
+    # otherwise exhaust the native stack. Depth here is 9 ('rates' + 8 inner).
+    var deep = "{\"base\":\"USD\",\"rates\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":0.5}}}}}}}}}";
+    var c = CurrencyCache_new("http://localhost:8088");
+    assert_eq(_ccy_load_body(c, deep, strlen(deep)), AI_ERR_CURRENCY, "deep nesting rejected");
+
+    # A flat (depth-1) rates object at the same key still parses fine.
+    var flat = "{\"base\":\"USD\",\"rates\":{\"EUR\":0.92}}";
+    var c2 = CurrencyCache_new("http://localhost:8088");
+    assert_eq(_ccy_load_body(c2, flat, strlen(flat)), 0, "flat rates still ok");
+    return 0;
+}
+
 fn test_history_json_roundtrip() {
     var h = CalcHistory_new(100);
     CalcHistory_push(h, "2 + 3", "5", "2026-04-14T00:00:00Z");
@@ -410,6 +425,7 @@ fn main() {
     test_currency_convert();
     test_ccy_parse_body();
     test_ccy_truncated_body();
+    test_ccy_deep_nesting_rejected();
     test_history_json_roundtrip();
     test_history_json_escapes();
     test_history_empty_json();

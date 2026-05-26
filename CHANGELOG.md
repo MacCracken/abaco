@@ -5,6 +5,51 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.3] — 2026-05-26
+
+Third slot of the 2.2.x arc: **P(-1) hardening + convention alignment**. A fresh
+security audit under 6.0.1 closes the two deferred items from the 2026-04-14
+audit. Suite green at **472 asserts, 0 failures** (was 470).
+
+### Security
+
+- **MED-4 — `json_parse` stack-exhaustion guard (fixed).** `lib/json.cyr`'s
+  `json_parse` recurses once per nesting level with no depth cap, and abaco
+  feeds it the `rates` object from a currency endpoint. A deeply-nested payload
+  from a compromised / MITM'd server could exhaust the native stack before any
+  value is read. Added `_ccy_json_depth_ok` — bounds nesting at
+  `CCY_MAX_JSON_DEPTH = 8` before `json_parse` runs (legitimate fiat-rate maps
+  are depth-1). Regression: `test_ccy_deep_nesting_rejected`. Defense-in-depth
+  over the existing HTTPS guard. (+2 asserts.)
+- **LOW-8 — hashmap HashDoS (documented; upstream).** `lib/hashmap.cyr` uses an
+  unseeded content hash (CWE-407). abaco's residual risk is **LOW** — registry
+  keys are fixed/trusted, currency keys arrive only over validated HTTPS, and
+  expression variable names are consumer-supplied. No abaco-side change; a
+  seeded/SipHash-class hash is recommended for the cyrius stdlib.
+- Full report: [`docs/audit/2026-05-26-audit.md`](docs/audit/2026-05-26-audit.md).
+  The 2026-04-14 mitigations (HIGH-1/2/3, MED-5/6/7, LOW-9a/10) were re-verified
+  under 6.0.1. No new HIGH/CRITICAL findings; `src/` has no fixed-size stack
+  buffers and no raw syscalls.
+
+### Changed
+
+- **Fuzz harnesses renamed `fuzz/fuzz_*.cyr` → `fuzz/fuzz_*.fcyr`** (the
+  patra/sigil `.fcyr` extension); `fuzz/run.sh` simplified to a `*.fcyr` loop and
+  CI updated to glob `fuzz/*.fcyr`.
+- `src/ai.cyr` — added the MED-4 depth guard (the bundle grows accordingly).
+
+### Added
+
+- `docs/audit/2026-05-26-audit.md` — the P(-1) hardening audit report.
+- `docs/benchmarks.md` — 3-point trend (baseline → 4.8.5-optimized → 6.0.1)
+  proving no regression held across the arc; `is_prime_small` 17µs → 2µs → 1µs.
+- [ADR 0004](docs/adr/0004-error-handling-defer-sakshi.md) — error handling stays
+  enums-by-value; **sakshi adoption deferred on heft-vs-need** (user-ratified): a
+  transitive dep every consumer must vendor, with no concrete need in abaco
+  today. Recorded as an explicit, non-conforming exception with concrete
+  re-examine triggers — a consumer surfacing a specific need, or sakshi being
+  folded into the stdlib. Same evaluation: flat `tests/*.tcyr` layout kept.
+
 ## [2.2.2] — 2026-05-26
 
 Second slot of the 2.2.x modernization arc: **documentation depth + light

@@ -94,9 +94,9 @@ jobs:
 
       - name: Fuzz (smoke)
         run: |
-          for f in fuzz/fuzz_*.cyr; do
+          for f in fuzz/*.fcyr; do
             [ -f "$f" ] || continue
-            name=$(basename "$f" .cyr)
+            name=$(basename "$f" .fcyr)
             echo "::group::$name"
             CYRIUS_DCE=1 cyrius build "$f" "build/$name"
             timeout 10 "build/$name" 1000 || { echo "FUZZ CRASH: $name"; exit 1; }

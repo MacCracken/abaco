@@ -17,14 +17,14 @@ endpoint; consumers that don't call `fetch` never open a socket.
 | NaN / Infinity | Silent propagation | `sanitize_sample` scrubs inputs in DSP; eval detects and returns error |
 | Unit lookup | Malformed query | Hashmap-based, constant work per lookup; unknown → `UERR_UNKNOWN`, never panics |
 | AI currency fetch | Malicious response body | Nested JSON extractor bounds-checks every offset; malformed response → `AI_ERR_CURRENCY`, no crash (covered by `fuzz_eval` / explicit tests) |
-| Natural-language parse | Adversarial input | `fuzz_eval.cyr` runs 10k+ random-byte inputs through `nl_parse` and `Evaluator_eval`; zero crashes observed |
+| Natural-language parse | Adversarial input | `fuzz_eval.fcyr` runs 10k+ random-byte inputs through `nl_parse` and `Evaluator_eval`; zero crashes observed |
 | ntheory primality | Timing side-channel | `mod_mul` / `mod_pow` are data-independent in control flow; Miller–Rabin loop iterates a fixed witness set |
 
 ## Fuzz coverage
 
-- `fuzz/fuzz_eval.cyr`    — random expression strings → `Evaluator_eval` + `Evaluator_eval_partial`
-- `fuzz/fuzz_ntheory.cyr` — random i64 → `is_prime`, `factor`, `totient`, `next_prime`; cross-checks `is_prime` against trial division for n < 10⁶
-- `fuzz/fuzz_units.cyr`   — random cstrings → `UnitRegistry_find`, `UnitRegistry_convert`
+- `fuzz/fuzz_eval.fcyr`    — random expression strings → `Evaluator_eval` + `Evaluator_eval_partial`
+- `fuzz/fuzz_ntheory.fcyr` — random i64 → `is_prime`, `factor`, `totient`, `next_prime`; cross-checks `is_prime` against trial division for n < 10⁶
+- `fuzz/fuzz_units.fcyr`   — random cstrings → `UnitRegistry_find`, `UnitRegistry_convert`
 
 Run with `./fuzz/run.sh [iters]`. Each harness has passed 50k+
 iterations with no crashes or invariant violations.

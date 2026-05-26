@@ -810,6 +810,33 @@ fn _ccy_rate_plausible(bits) {
     return 1;
 }
 
+# MED-4 guard: lib/json.cyr's json_parse recurses once per nesting level with
+# no depth cap, so a deeply-nested rates object (e.g. {"a":{"a":{...}}}) from a
+# compromised / MITM'd endpoint could exhaust the native stack before a single
+# value is read. Legitimate fiat-rate maps are flat (depth 1). Bound the nesting
+# here, before json_parse ever sees the buffer. The scan counts raw braces /
+# brackets (it does not skip string contents) — that only ever rejects *more*
+# aggressively, the safe direction for a DoS guard, and the cap of 8 leaves
+# ample headroom over the depth-1 real shape.
+var CCY_MAX_JSON_DEPTH = 8;
+fn _ccy_json_depth_ok(s) {
+    var data = str_data(s);
+    var n = str_len(s);
+    var depth = 0;
+    var maxd = 0;
+    var i = 0;
+    while (i < n) {
+        var ch = load8(data + i);
+        if (ch == 123) { depth = depth + 1; if (depth > maxd) { maxd = depth; } }
+        elif (ch == 91) { depth = depth + 1; if (depth > maxd) { maxd = depth; } }
+        elif (ch == 125) { depth = depth - 1; }
+        elif (ch == 93) { depth = depth - 1; }
+        i = i + 1;
+    }
+    if (maxd > CCY_MAX_JSON_DEPTH) { return 0; }
+    return 1;
+}
+
 # Parse body into the cache: expected shape {"base":"USD","rates":{"EUR":0.92,...}}.
 # Returns 0 on success, AI_ERR_* on failure.
 fn _ccy_load_body(c, body, len) {
@@ -817,6 +844,8 @@ fn _ccy_load_body(c, body, len) {
     if (base == 0) { return AI_ERR_CURRENCY; }
     var rates_obj = _jf_get_object(body, len, "rates");
     if (rates_obj == 0) { return AI_ERR_CURRENCY; }
+    # MED-4: reject pathologically nested rates before the recursive parser.
+    if (_ccy_json_depth_ok(rates_obj) == 0) { return AI_ERR_CURRENCY; }
     var pairs = json_parse(rates_obj);
     var rates = map_new();
     var i = 0;

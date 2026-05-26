@@ -38,7 +38,7 @@ cyrius deps                                  # vendor the pinned stdlib into lib
 CYRIUS_DCE=1 cyrius build src/main.cyr build/abaco   # smoke build (DCE)
 for t in tests/test_*.tcyr; do cyrius test "$t"; done  # full test suite
 for b in benches/*.bcyr; do cyrius bench "$b"; done    # benchmarks
-for f in fuzz/fuzz_*.cyr; do cyrius build "$f" build/$(basename "$f" .cyr); done  # fuzz
+for f in fuzz/*.fcyr; do cyrius build "$f" build/$(basename "$f" .fcyr); done  # fuzz
 cyrius fmt src/*.cyr --check                 # format check
 cyrius lint src/*.cyr                         # static analysis
 cyrius distlib                                # regenerate dist/abaco.cyr

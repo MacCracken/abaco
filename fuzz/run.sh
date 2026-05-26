@@ -8,17 +8,12 @@ CYRIUS="${CYRIUS_HOME:-$HOME/.cyrius}/bin/cyrius"
 
 mkdir -p build
 
-echo "=== fuzz_eval ($ITERS iters) ==="
-"$CYRIUS" build fuzz/fuzz_eval.cyr build/fuzz_eval 2>&1 | tail -2
-./build/fuzz_eval "$ITERS"
-
-echo "=== fuzz_ntheory ($ITERS iters) ==="
-"$CYRIUS" build fuzz/fuzz_ntheory.cyr build/fuzz_ntheory 2>&1 | tail -2
-./build/fuzz_ntheory "$ITERS"
-
-echo "=== fuzz_units ($ITERS iters) ==="
-"$CYRIUS" build fuzz/fuzz_units.cyr build/fuzz_units 2>&1 | tail -2
-./build/fuzz_units "$ITERS"
+for f in fuzz/*.fcyr; do
+    name=$(basename "$f" .fcyr)
+    echo "=== $name ($ITERS iters) ==="
+    CYRIUS_DCE=1 "$CYRIUS" build "$f" "build/$name" 2>&1 | tail -2
+    "./build/$name" "$ITERS"
+done
 
 echo ""
 echo "all fuzzers passed"

@@ -39,24 +39,24 @@ docs. The minor (2.3.0) opens once the arc closes.
       unit-hashmap synthetic collisions
 - [x] Benchmark CSV refresh under 6.0.1 — early arc baseline
 
-### 2.2.3 — P(-1) hardening + convention alignment
+### 2.2.3 — P(-1) hardening + convention alignment ✅ (2026-05-26)
 
 Bigger hardening / audit:
 
-- [ ] Fresh full security audit under 6.0.1 → `docs/audit/YYYY-MM-DD-audit.md`
-- [ ] Close the heavier open items from the 2026-04-14 audit:
-      MED-4 (`json_parse` depth cap — pending a `lib/json.cyr` recursion-shape
-      audit), LOW-8 (`lib/hashmap.cyr` per-process seed / SipHash-class hash —
-      file upstream against the cyrius stdlib)
-- [ ] 3-point benchmark trend (baseline → optimized → current) — prove no
-      regression held across the arc
+- [x] Fresh full security audit under 6.0.1 → [`docs/audit/2026-05-26-audit.md`](../audit/2026-05-26-audit.md)
+- [x] Close the heavier open items from the 2026-04-14 audit:
+      **MED-4** (`json_parse` depth cap) — fixed via the `CCY_MAX_JSON_DEPTH`
+      boundary guard + regression test; **LOW-8** (`lib/hashmap.cyr` seed /
+      SipHash) — abaco residual risk LOW (keys trusted), recommended upstream
+- [x] 3-point benchmark trend (baseline → optimized → current) →
+      [`docs/benchmarks.md`](../benchmarks.md) — no regression held across the arc
 
 Convention alignment:
 
-- [ ] Fuzz harnesses `fuzz_*.cyr` → `fuzz/*.fcyr` (patra/sigil extension)
-- [ ] Evaluate `tests/` → `tests/tcyr/` layout
-- [ ] Evaluate **sakshi** for structured errors/logging (replaces the ad-hoc
-      error-code enums where it improves the audit trail)
+- [x] Fuzz harnesses `fuzz_*.cyr` → `fuzz/*.fcyr` (patra/sigil extension)
+- [x] Evaluate `tests/` → `tests/tcyr/` layout — **keep flat** (standards-sanctioned)
+- [x] Evaluate **sakshi** — **defer on heft-vs-need** (user-ratified,
+      [ADR 0004](../adr/0004-error-handling-defer-sakshi.md); concrete re-examine triggers)
 
 ### 2.2.4 — Closeout before 2.3.0
 
