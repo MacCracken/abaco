@@ -2,11 +2,9 @@ name: Release
 
 on:
   push:
-    # Accept both `v1.2.3` and `1.2.3` tag styles. Version-verify enforces
-    # semver shape + match against VERSION file.
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
-      - '[0-9]+.[0-9]+.[0-9]+'
+    # Plain semver tags only (no `v` prefix) — `git tag $(cat VERSION)`.
+    # Version-verify enforces the match against the VERSION file.
+    tags: ["[0-9]+.[0-9]+.[0-9]+*"]
 
 permissions:
   contents: write
@@ -16,8 +14,8 @@ jobs:
     name: CI Gate
     uses: ./.github/workflows/ci.yml
 
-  build:
-    name: Build Release
+  release:
+    name: Build & Release
     needs: [ci]
     runs-on: ubuntu-latest
     steps:
@@ -26,105 +24,71 @@ jobs:
       - name: Verify version
         run: |
           FILE_VERSION=$(cat VERSION | tr -d '[:space:]')
-          TAG="${GITHUB_REF_NAME#v}"
-          echo "$TAG" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || {
-            echo "tag ($TAG) is not semver x.y.z"; exit 1; }
-          [ "$FILE_VERSION" = "$TAG" ] || {
-            echo "VERSION ($FILE_VERSION) != tag ($TAG)"; exit 1; }
-          echo "Version verified: $TAG (cyrius.cyml pulls from VERSION via \${file:VERSION})"
+          CYML_RAW=$(grep '^version = ' cyrius.cyml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          # ${file:VERSION} template means cyrius.cyml derives its version
+          # from the VERSION file — VERSION is the single source of truth.
+          if [ "$CYML_RAW" = "\${file:VERSION}" ]; then
+            CYML_VERSION="$FILE_VERSION"
+          else
+            CYML_VERSION="$CYML_RAW"
+          fi
+          TAG="${GITHUB_REF_NAME}"
+          [ "$FILE_VERSION" = "$TAG" ] || { echo "VERSION ($FILE_VERSION) != tag ($TAG)"; exit 1; }
+          [ "$CYML_VERSION" = "$TAG" ] || { echo "cyrius.cyml ($CYML_RAW) != tag ($TAG)"; exit 1; }
+          echo "Version verified: $TAG"
 
       - name: Install Cyrius toolchain
         run: |
-          CYRIUS_VERSION="${CYRIUS_VERSION:-$(grep -oP '(?<=^cyrius = ")[^"]+' cyrius.cyml)}"
+          set -e
+          CYRIUS_VERSION="$(grep '^cyrius = ' cyrius.cyml | head -1 | sed 's/cyrius = "\(.*\)"/\1/')"
           echo "Installing Cyrius $CYRIUS_VERSION"
-          curl -sLO "https://github.com/MacCracken/cyrius/releases/download/$CYRIUS_VERSION/cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
-          tar xzf "cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
-          CYRIUS_DIR="cyrius-$CYRIUS_VERSION-x86_64-linux"
-          mkdir -p "$HOME/.cyrius/bin" "$HOME/.cyrius/lib"
-          cp "$CYRIUS_DIR/bin/"* "$HOME/.cyrius/bin/" 2>/dev/null || true
-          cp -r "$CYRIUS_DIR/lib/"* "$HOME/.cyrius/lib/" 2>/dev/null || true
-          chmod +x "$HOME/.cyrius/bin/"* 2>/dev/null || true
-          echo "$HOME/.cyrius/bin" >> $GITHUB_PATH
-          echo "CYRIUS_HOME=$HOME/.cyrius" >> $GITHUB_ENV
+          curl -sSf https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | \
+            CYRIUS_VERSION="$CYRIUS_VERSION" sh
+          echo "$HOME/.cyrius/bin" >> "$GITHUB_PATH"
 
       - name: Resolve deps
         run: cyrius deps
 
-      - name: Verify dep hashes
-        run: |
-          if [ -f cyrius.lock ]; then
-            cyrius deps --verify
-          else
-            echo "::notice::no git deps — cyrius.lock not present (expected)"
-          fi
-
-      - name: Build (DCE)
+      - name: Build smoke (DCE)
         run: |
           mkdir -p build
           CYRIUS_DCE=1 cyrius build src/main.cyr build/abaco
           echo "abaco: $(wc -c < build/abaco) bytes"
 
-      - name: Cross-build aarch64 (best-effort)
-        run: |
-          if [ -x "$HOME/.cyrius/bin/cc5_aarch64" ]; then
-            CYRIUS_DCE=1 cyrius build --aarch64 src/main.cyr build/abaco-aarch64
-            echo "abaco-aarch64: $(wc -c < build/abaco-aarch64) bytes"
-          else
-            echo "::warning::cc5_aarch64 not in toolchain — aarch64 binary skipped"
-          fi
+      - name: Regenerate bundle
+        # `cyrius distlib` reads [lib] modules from cyrius.cyml and writes
+        # the self-contained consumer bundle dist/abaco.cyr.
+        run: cyrius distlib
 
       - name: Test
-        # test_simd quarantined; see ci.yml for the SIMD-intrinsic note.
         run: |
           for t in tests/test_*.tcyr; do
             [ -f "$t" ] || continue
-            [ "$(basename "$t" .tcyr)" = "test_simd" ] && continue
             cyrius test "$t"
           done
 
-      - name: Clean toolchain artifacts
-        run: rm -f cyrius-*.tar.gz
-
       - name: Archive
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          TAG="${GITHUB_REF_NAME}"
           git archive --format=tar.gz --prefix="abaco-${TAG}/" -o "abaco-${TAG}-src.tar.gz" HEAD
-          if [ -f build/abaco ]; then
-            cp build/abaco "abaco-${TAG}-x86_64-linux"
-          fi
-          if [ -f build/abaco-aarch64 ]; then
-            cp build/abaco-aarch64 "abaco-${TAG}-aarch64-linux"
-          fi
-          sha256sum abaco-*.tar.gz abaco-*-linux 2>/dev/null > SHA256SUMS
+          cp dist/abaco.cyr "abaco-${TAG}.cyr"
+          [ -f build/abaco ] && cp build/abaco "abaco-${TAG}-x86_64-linux"
+          sha256sum abaco-*.tar.gz abaco-*.cyr abaco-*-linux 2>/dev/null > SHA256SUMS
+          cat SHA256SUMS
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-artifacts
-          path: |
-            abaco-*.tar.gz
-            abaco-*-linux
-            SHA256SUMS
-
-  release:
-    name: Create GitHub Release
-    needs: [build]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: release-artifacts
-      - name: Changelog
+      - name: Extract changelog
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          awk "/^## \\[${TAG}\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" \
+          awk "/^## \\[${GITHUB_REF_NAME}\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" \
             CHANGELOG.md > /tmp/body.md
+          [ -s /tmp/body.md ] || echo "No changelog entry for ${GITHUB_REF_NAME}." > /tmp/body.md
+
       - uses: softprops/action-gh-release@v2
         with:
           name: "abaco ${{ github.ref_name }}"
           body_path: /tmp/body.md
-          prerelease: ${{ startsWith(github.ref_name, '0.') || startsWith(github.ref_name, 'v0.') }}
+          prerelease: ${{ startsWith(github.ref_name, '0.') }}
           files: |
-            abaco-*.tar.gz
+            abaco-*-src.tar.gz
+            abaco-*.cyr
             abaco-*-linux
             SHA256SUMS

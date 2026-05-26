@@ -1,0 +1,93 @@
+# Abaco — Sources
+
+Academic and domain citations for every algorithm, formula, and constant in
+abaco. Required for a math crate: a reviewer should be able to trace any
+result back to its origin and verify the implementation against the published
+source. No magic numbers.
+
+> Initial pass (2.2.1). A completeness audit — every formula and constant
+> cross-checked against a citation — is scheduled for 2.2.2
+> (see [`development/roadmap.md`](development/roadmap.md)).
+
+## Number theory — `src/ntheory.cyr`
+
+- **Deterministic Miller–Rabin primality** with witness set
+  {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37}. Proven correct for all
+  *n* < 3.317 × 10²⁴, which covers the entire i64 range exactly (not
+  probabilistic).
+  - Jaeschke, G. (1993). "On strong pseudoprimes to several bases."
+    *Mathematics of Computation*, 61(204), 915–926. doi:10.1090/S0025-5718-1993-1192971-8
+  - Sorenson, J. & Webster, J. (2015). "Strong pseudoprimes to twelve prime
+    bases." *Mathematics of Computation*, 86(304), 985–1003. doi:10.1090/mcom/3134
+  - Avoids the random-witness weakness of Albrecht et al. (2018),
+    "Prime and Prejudice: Primality Testing Under Adversarial Conditions"
+    (ACM CCS 2018) — abaco's witness set is fixed and exact.
+- **Modular exponentiation / multiplication** — right-to-left binary method,
+  delegated to stdlib `u64_powmod` / `u64_mulmod`.
+  - Knuth, D. E. *The Art of Computer Programming, Vol. 2: Seminumerical
+    Algorithms* (3rd ed.), §4.6.3.
+- **Euler's totient φ(n)** via prime-factor product form.
+  - Hardy, G. H. & Wright, E. M. *An Introduction to the Theory of Numbers*
+    (6th ed.), Theorem 62.
+- **Trial-division factorization** — classical; trial divisors 2 then odd
+  *d* up to √n.
+
+## DSP — `src/dsp.cyr`
+
+- **12-tone equal temperament (12-TET), MIDI ↔ frequency.**
+  `freq = 440 · 2^((m−69)/12)`. A4 = 440 Hz (ISO 16:1975); MIDI note 69 = A4.
+- **C0 reference** = 16.3516 Hz (MIDI note 12), used for pitch-class /
+  octave computation: `round(12 · log2(freq / C0))`.
+- **Decibel** — `20 · log10(amplitude ratio)` (field/amplitude quantity);
+  dBFS uses a 1.0 full-scale reference (float-audio norm).
+- **Window functions.** Coefficients per the standard survey:
+  - Harris, F. J. (1978). "On the Use of Windows for Harmonic Analysis with
+    the Discrete Fourier Transform." *Proc. IEEE*, 66(1), 51–83. doi:10.1109/PROC.1978.10837
+  - Hann / Hamming (a₀ = 0.54, a₁ = 0.46); Blackman (0.42, 0.5, 0.08);
+    Kaiser window via the zeroth-order modified Bessel function I₀(β).
+  - Kaiser, J. F. (1974). "Nonrecursive digital filter design using the
+    I₀-sinh window function." *Proc. IEEE ISCAS*, 20–23.
+- **Windowed-sinc interpolation kernel.**
+  - Shannon, C. E. (1949). "Communication in the Presence of Noise."
+    *Proc. IRE*, 37(1), 10–21 (Whittaker–Shannon interpolation).
+- **Cubic (Catmull–Rom) interpolation** between control points b and c using
+  neighbors a, d.
+  - Catmull, E. & Rom, R. (1974). "A class of local interpolating splines."
+    In *Computer Aided Geometric Design*, 317–326. doi:10.1016/B978-0-12-079050-0.50020-5
+- **Samples ↔ milliseconds** — sample-rate-aware: `ms = 1000 · n / fs`.
+
+## Units — `src/units.cyr`
+
+- **SI definitions and exact conversion factors.**
+  - BIPM. *The International System of Units (SI)*, 9th ed. (2019).
+  - NIST Special Publication 811 (2008), "Guide for the Use of the
+    International System of Units (SI)" — exact factors (e.g. 1 in = 0.0254 m,
+    1 mile = 1609.344 m, 1 nautical mile = 1852 m, 1 lb = 0.453592 kg).
+- **Pitch units (semitone / cent / octave).** A cent is 1/1200 of an octave:
+  `cents = 1200 · log2(f₂/f₁)`.
+  - Ellis, A. J. (1885). Appendix XX to Helmholtz, *On the Sensations of Tone*.
+- **BPM ↔ Hz** — `Hz = BPM / 60`.
+
+## Expression evaluation — `src/eval.cyr`
+
+- **Recursive-descent parsing** with operator precedence (standard technique).
+  - Aho, Lam, Sethi, Ullman. *Compilers: Principles, Techniques, and Tools*
+    (2nd ed.), §4.4 (predictive parsing).
+- **Parser depth bound (`MAX_DEPTH`)** — guards against stack-exhaustion DoS
+  from deeply nested input, in the spirit of the SandboxJS recursion-limit
+  class of fixes. Documented inline in `eval.cyr`.
+- **IEEE 754 number parsing** with scientific notation; exponent clamped at
+  308 (f64 overflows to +inf near 1.8 × 10³⁰⁸) so adversarial `1e999…`
+  inputs terminate in bounded work.
+  - IEEE 754-2019, *Standard for Floating-Point Arithmetic*.
+
+## Constants
+
+| Constant | Value | Source |
+|----------|-------|--------|
+| A4 frequency | 440.0 Hz | ISO 16:1975 |
+| C0 frequency | 16.3516 Hz | 12-TET, MIDI note 12 |
+| Semitones/octave | 12 | 12-TET |
+| Cents/octave | 1200 | Ellis (1885) |
+| MR witness bound | 3.317 × 10²⁴ | Sorenson & Webster (2015) |
+| log2(10) | 3.321928… | for `10^x = exp2(x·log2 10)` |

@@ -1,64 +1,136 @@
 # Abaco — Claude Code Instructions
 
+> This file is **preferences, process, and procedures** — durable rules that
+> change rarely. Volatile state (current version, binary sizes, test counts,
+> in-flight work, consumers) lives in
+> [`docs/development/state.md`](docs/development/state.md), bumped every release.
+> Do not inline state here — inlined state rots within a minor.
+
+---
+
 ## Project Identity
 
-**Abaco** (Italian/Spanish: abacus) — Math engine — expression evaluation, unit conversion, DSP math
+**Abaco** (Italian/Spanish: *abacus*) — Math engine: expression evaluation,
+unit conversion, number theory, and DSP math.
 
-- **Type**: Flat library crate
+- **Type**: Shared library crate (Cyrius)
 - **License**: GPL-3.0-only
-- **Version**: 2.1.0
+- **Language**: Cyrius — toolchain pinned in `cyrius.cyml [package].cyrius`
+- **Version**: `VERSION` at the repo root is the source of truth — do not inline it here
+- **Standards**: [First-Party Standards](https://github.com/MacCracken/agnosticos/blob/main/docs/development/first-party/first-party-standards.md)
+
+## Goal
+
+Own the shared math stack. Expression evaluation, unit conversion, number
+theory, and DSP primitives in a single `include` — so consumers never
+re-roll `powf` / `log10` / window functions / primality inline.
 
 ## Consumers
 
-abacus (calculator app), dhvani (audio DSP), hisab (expressions)
+hisab (expressions), dhvani (audio DSP), and the Abacus desktop app — all
+import the bundle via `[deps.abaco] modules = ["dist/abaco.cyr"]`. Live list:
+[`docs/development/state.md`](docs/development/state.md).
 
-## Development Process
+## Quick Start
 
-### P(-1): Scaffold Hardening (before any new features)
+```bash
+cyrius deps                                  # vendor the pinned stdlib into lib/
+CYRIUS_DCE=1 cyrius build src/main.cyr build/abaco   # smoke build (DCE)
+for t in tests/test_*.tcyr; do cyrius test "$t"; done  # full test suite
+for b in benches/*.bcyr; do cyrius bench "$b"; done    # benchmarks
+for f in fuzz/fuzz_*.cyr; do cyrius build "$f" build/$(basename "$f" .cyr); done  # fuzz
+cyrius fmt src/*.cyr --check                 # format check
+cyrius lint src/*.cyr                         # static analysis
+cyrius distlib                                # regenerate dist/abaco.cyr
+./scripts/bench-history.sh                    # benchmark CSV trail
+```
 
-1. Test + benchmark sweep of existing code
-2. Cleanliness check: `cargo fmt --check`, `cargo clippy --all-features --all-targets -- -D warnings`, `cargo audit`, `cargo deny check`
-3. Get baseline benchmarks (`./scripts/bench-history.sh`)
-4. Initial refactor + audit (performance, memory, security, edge cases)
-5. Cleanliness check — must be clean after audit
-6. Additional tests/benchmarks from observations
-7. Post-audit benchmarks — prove the wins
-8. Repeat audit if heavy
+`src/main.cyr` is a smoke entry (builds `build/abaco`). The library surface
+lives in the modules under `[lib]` and is shipped as `dist/abaco.cyr`.
 
-### Development Loop (continuous)
+## Key Principles
 
-1. Work phase — new features, roadmap items, bug fixes
-2. Cleanliness check: `cargo fmt --check`, `cargo clippy --all-features --all-targets -- -D warnings`, `cargo audit`, `cargo deny check`
-3. Test + benchmark additions for new code
-4. Run benchmarks (`./scripts/bench-history.sh`)
-5. Audit phase — review performance, memory, security, throughput, correctness
-6. Cleanliness check — must be clean after audit
-7. Deeper tests/benchmarks from audit observations
-8. Run benchmarks again — prove the wins
-9. If audit heavy → return to step 5
-10. Documentation — update CHANGELOG, roadmap, docs
-11. Return to step 1
+- **Correctness is the optimum** — a wrong DSP filter or a flaky primality
+  test is worse than none. Every algorithm cites its source.
+- **Own the stack.** If an AGNOS crate wraps a domain, depend on it. Lean on
+  stdlib `lib/math.cyr` / `lib/u128.cyr` for transcendentals and modular
+  arithmetic rather than hand-rolling.
+- **No magic.** Every formula, constant, and witness set is documented and
+  traceable to a paper — see [`docs/sources.md`](docs/sources.md).
+- Test after EVERY change, not after the feature is "done".
+- ONE change at a time — never bundle unrelated changes.
+- Fuzz every parser path (tokenizer, NL parser, unit registry) — edge cases
+  get invariants, not just assertions.
+- **Never skip benchmarks** — numbers or it didn't happen. The CSV history is
+  the proof; 3-point trends catch regressions.
+- Source files only need project includes — stdlib auto-resolves from
+  `cyrius.cyml [deps].stdlib`. Don't add `include "lib/..."` to `src/*.cyr`.
 
-### Key Principles
+## Rules (Hard Constraints)
 
-- **Never skip benchmarks.** Numbers don't lie. The CSV history is the proof.
-- **Tests + benchmarks are the way.** Minimum 80%+ coverage target.
-- **Own the stack.** If an AGNOS crate wraps an external lib, depend on the AGNOS crate.
-- **No magic.** Every operation is measurable, auditable, traceable.
-- **`#[non_exhaustive]`** on all public enums.
-- **`#[must_use]`** on all pure functions.
-- **`#[inline]`** on hot-path functions.
-- **`write!` over `format!`** — avoid temporary allocations.
-- **Cow over clone** — borrow when you can, allocate only when you must.
-- **Vec arena over HashMap** — when indices are known, direct access beats hashing.
-- **Feature-gate optional deps** — consumers pull only what they need.
-- **tracing on all operations** — structured logging for audit trail.
+- **Do not commit or push** — the user handles all git operations (commit, push, tag).
+- **NEVER use `gh` CLI** — use `curl` to the GitHub API only.
+- Do not add unnecessary dependencies — keep it lean.
+- Do not `panic()` or leave syscall errors unhandled in library code — errors
+  flow through return values (`Ok`/`Err` from `lib/result.cyr`).
+- Do not skip tests / fuzz / benchmark verification before claiming a change works.
+- Do not trust external data (file content, network input, user args) without
+  validation — the currency-cache HTTP path enforces HTTPS + CRLF guards.
+- Do not commit `lib/` (regenerated by `cyrius deps`) or `build/`.
+  `dist/abaco.cyr` **is** committed — it's the consumer bundle.
+- Do not hardcode the toolchain version in CI YAML — the `cyrius = "X.Y.Z"`
+  pin in `cyrius.cyml` is the only source of truth.
 
-## DO NOT
-- **Do not commit or push** — the user handles all git operations (commit, push, tag)
+## Cyrius Conventions
 
-- **NEVER use `gh` CLI** — use `curl` to GitHub API only
-- Do not add unnecessary dependencies — keep it lean
-- Do not `unwrap()` or `panic!()` in library code
-- Do not skip benchmarks before claiming performance improvements
-- Do not commit `target/` or `Cargo.lock` (library crates only)
+- All struct fields are 8 bytes (`i64`), accessed via `load64` / `store64`.
+- Bound every buffer: `var buf[N]` is N **bytes**, not N entries; max access < N.
+- No negative literals — write `(0 - N)`, not `-N`.
+- `return;` without a value is invalid — always `return 0;`.
+- f64 is the only float type (no f32). DSP math is f64 throughout.
+- Enum values for constants — don't burn initialized-global slots.
+
+## Process
+
+### P(-1): Hardening (before features, and at every minor / arc cut)
+
+1. **Cleanliness** — `cyrius fmt --check`, `cyrius lint`, `cyrius vet`; all tests pass.
+2. **Benchmark baseline** — `./scripts/bench-history.sh`; save CSV for comparison.
+3. **Internal + external review** — performance, memory, security, edge cases, CVE patterns.
+4. **Security audit** — input handling, syscall usage, buffer sizes, pointer
+   validation. File findings in `docs/audit/YYYY-MM-DD-audit.md`.
+5. **Additional tests / benchmarks** from findings; cite new algorithms in `docs/sources.md`.
+6. **Post-review benchmarks** — prove the wins against step 2.
+7. **Repeat if heavy.**
+
+### Work Loop (continuous)
+
+1. Work phase — features, roadmap items, bug fixes.
+2. Cleanliness — `cyrius fmt --check`, `cyrius lint`, `cyrius vet`.
+3. Test + benchmark additions for new code.
+4. Run benchmarks (`./scripts/bench-history.sh`).
+5. Audit — performance, memory, security, correctness, edge cases.
+6. Cleanliness again — must be clean after the audit.
+7. Deeper tests / benchmarks from audit observations; prove wins.
+8. Documentation — CHANGELOG, `docs/development/{roadmap,state}.md`, `docs/sources.md`.
+9. Return to step 1.
+
+## CI / Release
+
+- **Toolchain pin** lives only in `cyrius.cyml [package].cyrius`; CI and release
+  read it via `install.sh`. No `.cyrius-toolchain` file, no version strings in YAML.
+- Every `cyrius build` in CI / release runs with `CYRIUS_DCE=1`.
+- CI gates: `fmt --check`, `lint`, `vet`, smoke build + ELF check, `dist/abaco.cyr`
+  freshness, full `.tcyr` suite, fuzz smoke, bench (non-fatal), security scan, docs.
+- Release: version-verify (`VERSION == cyrius.cyml == git tag`) → CI gate → DCE
+  build → `cyrius distlib` → artifacts (source tarball, `dist/abaco.cyr`,
+  smoke binary, `SHA256SUMS`). Tag filter is plain semver `X.Y.Z`.
+
+## Docs
+
+- [`CHANGELOG.md`](CHANGELOG.md) — per-tag chronology (source of truth for changes).
+- [`docs/development/roadmap.md`](docs/development/roadmap.md) — forward plan (2.2.x arc, future).
+- [`docs/development/state.md`](docs/development/state.md) — live state, refreshed every release.
+- [`docs/sources.md`](docs/sources.md) — academic/domain citations (required for this crate).
+- [`docs/audit/`](docs/audit/) — security audit reports (`YYYY-MM-DD-audit.md`).
+- [`ROADMAP.md`](ROADMAP.md) — completed-work history (forward plan is under `docs/development/`).

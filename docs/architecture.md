@@ -136,4 +136,4 @@ not have.
 
 Abaco exposes a stable API that consumers depend on. It does not
 reach upward into any consumer. New consumers add themselves by
-including abaco modules through their `cyrius.toml`.
+depending on the `dist/abaco.cyr` bundle through their `cyrius.cyml`.

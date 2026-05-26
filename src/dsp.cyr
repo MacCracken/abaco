@@ -371,7 +371,9 @@ fn f64_cubic(a, b, c, d, t) {
     var t2 = f64_mul(t, t);
     var t3 = f64_mul(t2, t);
     var c1 = f64_mul(DSP_HALF, f64_sub(c, a));
-    var c2 = f64_add(f64_sub(f64_sub(a, f64_mul(DSP_TWO_HALF, b)), f64_mul(f64_neg(DSP_TWO), c)), f64_mul(f64_neg(DSP_HALF), d));
+    # c2 = a - 2.5b + 2c - 0.5d  (split to stay under the 120-col lint limit)
+    var c2_abc = f64_sub(f64_sub(a, f64_mul(DSP_TWO_HALF, b)), f64_mul(f64_neg(DSP_TWO), c));
+    var c2 = f64_add(c2_abc, f64_mul(f64_neg(DSP_HALF), d));
     var c3 = f64_add(f64_mul(DSP_HALF, f64_sub(d, a)), f64_mul(DSP_ONE_HALF, f64_sub(b, c)));
     return f64_add(b, f64_add(f64_mul(c1, t), f64_add(f64_mul(c2, t2), f64_mul(c3, t3))));
 }

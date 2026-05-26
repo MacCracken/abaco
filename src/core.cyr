@@ -7,7 +7,6 @@
 fn str_lower(s) { return str_lower_cstr(s); }
 fn str_upper(s) { return str_upper_cstr(s); }
 
-
 # --- Value tags ---
 # Value is a tagged struct: { tag, data1, data2 }
 #   INTEGER:  tag=0, data1=i64 value,           data2=unused

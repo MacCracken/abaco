@@ -1,7 +1,10 @@
-# Build
-/target/
+# Build output
 /build/
-rust-old/target/
+
+# Resolved deps — `cyrius deps` vendors the pinned stdlib snapshot into
+# lib/ from cyrius.cyml [deps].stdlib. It's a build artifact, not source;
+# never commit it. (dist/abaco.cyr IS committed — it's the consumer bundle.)
+/lib/
 
 # Editor / IDE
 *.swp
@@ -20,17 +23,11 @@ Thumbs.db
 /core
 /core.[0-9]*
 
-# Coverage
-lcov.info
-tarpaulin-report.html
-coverage/
-
-# Benchmarks
-criterion/
-
 # Secrets
 .env
 .env.*
+*.pem
+*.key
 
 # Claude Code
 .claude/

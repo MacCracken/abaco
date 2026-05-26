@@ -33,7 +33,8 @@ iterations with no crashes or invariant violations.
 
 | Version | Supported |
 |---------|-----------|
-| 2.0.x   | Yes (Cyrius port) |
+| 2.2.x   | Yes (current — Cyrius 6.0.x) |
+| 2.0.x – 2.1.x | Security fixes only |
 | 1.x     | No (Rust crate, unmaintained) |
 
 ## Reporting vulnerabilities

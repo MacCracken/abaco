@@ -2,13 +2,14 @@
 
 ## Prerequisites
 
-- Cyrius `4.8.x` installed at `$CYRIUS_HOME` (default `~/.cyrius`)
+- The Cyrius toolchain installed at `$CYRIUS_HOME` (default `~/.cyrius`),
+  at the version pinned in `cyrius.cyml` (`[package].cyrius`, currently `6.0.1`)
 - `~/.cyrius/bin/cyrius` on `PATH`
-- The vendored stdlib in `lib/` is refreshed via `cyrius update`
+- The vendored stdlib in `lib/` (gitignored) is populated via `cyrius deps`
 
-Abaco's `cyrius.toml` pins the minimum Cyrius version. Upgrading
-Cyrius? `cyrius update` pulls the latest vendored stdlib modules into
-`lib/` and `cyrius build` picks them up automatically.
+Abaco's `cyrius.cyml` pins the toolchain version. Upgrading Cyrius? Bump the
+`cyrius = "X.Y.Z"` pin, then `cyrius deps` re-vendors the version-matched
+stdlib snapshot into `lib/` and `cyrius build` picks it up automatically.
 
 ## Build
 
@@ -130,7 +131,7 @@ them to the GitHub release.
 
 ```
 abaco/
-├── cyrius.toml           # package manifest + stdlib deps
+├── cyrius.cyml           # package manifest + stdlib deps + [lib] bundle
 ├── VERSION               # single source of truth
 ├── src/                  # library modules (core, ntheory, dsp,
 │                         # eval, units, ai, main)

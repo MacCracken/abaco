@@ -14,8 +14,9 @@
 
 ## Prerequisites
 
-- Cyrius `4.8.x` on `PATH` (`which cyrius` should resolve)
-- `~/.cyrius/lib/` populated (install via `cyrius pulsar`)
+- The Cyrius toolchain on `PATH` at the version pinned in `cyrius.cyml`
+  (`[package].cyrius`, currently `6.0.1`) — `which cyrius` should resolve
+- Run `cyrius deps` to vendor the pinned stdlib into `lib/`
 
 No Cargo, no Rust, no Python — the entire toolchain is Cyrius.
 
@@ -29,7 +30,8 @@ No Cargo, no Rust, no Python — the entire toolchain is Cyrius.
    public fn.
 4. Add benchmarks in `benches/bench.bcyr` if the module has hot paths.
 5. If new stdlib deps are needed, add them to `[deps] stdlib = [...]`
-   in `cyrius.toml`.
+   in `cyrius.cyml`. If the module is part of the library surface, add it
+   to `[lib] modules` too so it lands in `dist/abaco.cyr`.
 6. Update the `Modules` table in `README.md` and the module list in
    `docs/architecture.md`.
 

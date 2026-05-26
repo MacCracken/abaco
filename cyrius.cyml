@@ -5,11 +5,31 @@ description = "Math engine — expression evaluation, unit conversion, DSP math"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/abaco"
 language = "cyrius"
-cyrius = "5.7.23"
+cyrius = "6.0.1"
 
 [build]
 entry = "src/main.cyr"
 output = "build/abaco"
+
+# `cyrius distlib` reads [lib] modules to build dist/abaco.cyr — the
+# self-contained library bundle consumers import (hisab, dhvani, and the
+# Abacus desktop app via `[deps.abaco] modules = ["dist/abaco.cyr"]`).
+# Order matches src/main.cyr's include order; each module may reference
+# symbols defined earlier. main.cyr is excluded on purpose: it carries the
+# smoke `main()` + `sys_exit`, not library surface.
+#
+# Keep `modules` under [lib], NOT [build] — 5.7.x+ treats [build].modules
+# as an auto-prepend list and would inline every src file before the entry,
+# producing duplicate-fn warnings (the lesson sigil/agnosys logged).
+[lib]
+modules = [
+    "src/core.cyr",
+    "src/ntheory.cyr",
+    "src/dsp.cyr",
+    "src/eval.cyr",
+    "src/units.cyr",
+    "src/ai.cyr",
+]
 
 [deps]
 stdlib = [

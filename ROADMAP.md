@@ -1,5 +1,10 @@
 # Abaco Roadmap
 
+> **Forward plan** (2.2.x modernization arc and beyond) lives in
+> [`docs/development/roadmap.md`](docs/development/roadmap.md); live metrics in
+> [`docs/development/state.md`](docs/development/state.md). This file is the
+> completed-work record below.
+
 ## DSP Module Expansion
 
 - [x] Window functions — Hann, Hamming, Blackman, Kaiser (2026-04-14)

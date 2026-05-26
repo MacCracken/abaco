@@ -1,5 +1,5 @@
 # abaco — math engine entry point.
-# Library modules are included below; stdlib deps resolve via cyrius.toml.
+# Library modules are included below; stdlib deps resolve via cyrius.cyml.
 
 include "src/core.cyr"
 include "src/ntheory.cyr"

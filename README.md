@@ -25,13 +25,17 @@ math engine you can wrap any way you like, this is it.
 
 ## Quick start
 
-Requires Cyrius `4.8.x`.
+Requires the Cyrius toolchain pinned in `cyrius.cyml` (currently `6.0.1`).
 
 ```bash
-# Build the library (currently ships as a module set; link into your
-# program via `include "src/*.cyr"` and a cyrius.toml with the same
-# stdlib deps).
+# Vendor the pinned stdlib into lib/ (a gitignored build artifact)
+cyrius deps
+
+# Build the smoke binary
 cyrius build src/main.cyr build/abaco
+
+# Regenerate the consumer bundle dist/abaco.cyr
+cyrius distlib
 
 # Run the demo
 cyrius run programs/basic.cyr
@@ -49,16 +53,15 @@ cyrius bench benches/bench.bcyr
 ## Consuming abaco from your own Cyrius project
 
 ```
-# your-project/cyrius.toml
+# your-project/cyrius.cyml
 [deps]
 stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged",
-          "hashmap", "fnptr", "math", "io", "net", "http", "json"]
+          "hashmap", "fnptr", "math", "io", "net", "http", "json", "u128"]
 
 [deps.abaco]
-path = "../abaco"
-tag  = "2.0.0"
-modules = ["src/core.cyr", "src/ntheory.cyr", "src/dsp.cyr",
-           "src/eval.cyr", "src/units.cyr", "src/ai.cyr"]
+git = "https://github.com/MacCracken/abaco.git"
+tag = "2.2.1"
+modules = ["dist/abaco.cyr"]   # self-contained library bundle
 ```
 
 Then use the public API directly:

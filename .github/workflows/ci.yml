@@ -20,44 +20,41 @@ jobs:
 
       - name: Install Cyrius toolchain
         run: |
-          CYRIUS_VERSION="${CYRIUS_VERSION:-$(grep -oP '(?<=^cyrius = ")[^"]+' cyrius.cyml)}"
+          set -e
+          # Single source of truth: the [package].cyrius pin in cyrius.cyml.
+          CYRIUS_VERSION="$(grep '^cyrius = ' cyrius.cyml | head -1 | sed 's/cyrius = "\(.*\)"/\1/')"
           echo "Installing Cyrius $CYRIUS_VERSION"
-          curl -sLO "https://github.com/MacCracken/cyrius/releases/download/$CYRIUS_VERSION/cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
-          tar xzf "cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
-          CYRIUS_DIR="cyrius-$CYRIUS_VERSION-x86_64-linux"
-          mkdir -p "$HOME/.cyrius/bin" "$HOME/.cyrius/lib"
-          cp "$CYRIUS_DIR/bin/"* "$HOME/.cyrius/bin/" 2>/dev/null || true
-          cp -r "$CYRIUS_DIR/lib/"* "$HOME/.cyrius/lib/" 2>/dev/null || true
-          chmod +x "$HOME/.cyrius/bin/"* 2>/dev/null || true
-          echo "$HOME/.cyrius/bin" >> $GITHUB_PATH
-          echo "CYRIUS_HOME=$HOME/.cyrius" >> $GITHUB_ENV
+          curl -sSf https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | \
+            CYRIUS_VERSION="$CYRIUS_VERSION" sh
+          echo "$HOME/.cyrius/bin" >> "$GITHUB_PATH"
 
-      - name: Resolve dependencies
+      - name: Resolve deps
+        # Vendors the version-pinned stdlib into ./lib from [deps].stdlib.
+        # lib/ is gitignored — it's a build artifact, not source.
         run: cyrius deps
 
-      - name: Verify dep hashes
-        # abaco has no git deps today, so cyrius.lock isn't generated.
-        # Once a git dep is added, the lockfile will appear and this
-        # step will start enforcing.
+      - name: Format check
         run: |
-          if [ -f cyrius.lock ]; then
-            cyrius deps --verify
-          else
-            echo "::notice::no git deps — cyrius.lock not present (expected)"
-          fi
+          for f in src/*.cyr; do
+            cyrius fmt "$f" --check || { echo "::error::fmt drift in $f — run 'cyrius fmt'"; exit 1; }
+          done
+
+      - name: Lint
+        # src is warning-clean as of 2.2.1; any new warning fails the gate.
+        run: |
+          fail=0
+          for f in src/*.cyr; do
+            out=$(cyrius lint "$f" 2>&1 || true)
+            if echo "$out" | grep -qE '^\s*warn '; then
+              echo "$out"; echo "::error::lint warnings in $f"; fail=1
+            fi
+          done
+          [ $fail -eq 0 ] || exit 1
 
       - name: Vet
         run: cyrius vet src/main.cyr
 
-      - name: Lint (advisory)
-        continue-on-error: true
-        run: |
-          for f in src/*.cyr programs/*.cyr tests/*.tcyr benches/*.bcyr fuzz/*.cyr; do
-            [ -f "$f" ] || continue
-            cyrius lint "$f"
-          done
-
-      - name: Build (DCE)
+      - name: Build smoke (DCE)
         run: |
           mkdir -p build
           CYRIUS_DCE=1 cyrius build src/main.cyr build/abaco
@@ -66,39 +63,29 @@ jobs:
       - name: Verify ELF
         run: xxd -l 4 build/abaco | grep -q "7f45 4c46"
 
-      - name: Cross-build aarch64
+      - name: Verify dist bundle is current
+        # dist/abaco.cyr is the committed consumer bundle (hisab, dhvani,
+        # Abacus import it via `[deps.abaco] modules = ["dist/abaco.cyr"]`).
+        # Regenerate and fail if the checked-in copy drifted from src/.
         run: |
-          if [ ! -x "$HOME/.cyrius/bin/cc5_aarch64" ]; then
-            echo "::warning::cc5_aarch64 not shipped with Cyrius $CYRIUS_VERSION — skipping"
-            exit 0
-          fi
-          CYRIUS_DCE=1 cyrius build --aarch64 src/main.cyr build/abaco-aarch64
-          file build/abaco-aarch64 | grep -q "aarch64" || {
-            echo "ERROR: abaco-aarch64 is not aarch64 ELF"; exit 1; }
-          echo "abaco-aarch64: $(wc -c < build/abaco-aarch64) bytes"
+          cyrius distlib
+          git diff --exit-code dist/abaco.cyr || {
+            echo "::error::dist/abaco.cyr is stale — run 'cyrius distlib' and commit"; exit 1; }
 
       - name: Test
-        # test_simd is quarantined: f64v_* SIMD intrinsics SIGSEGV under
-        # Cyrius 5.7.23 (pre-existing compiler regression — last passed
-        # on 4.8.5). Re-enable once the intrinsics are fixed upstream.
+        # Full suite, all tests gated (SIMD un-quarantined in 2.2.1 — the
+        # f64v_* intrinsics that SIGSEGV'd under 5.7.23 are fixed in 6.0.1).
         run: |
           fail=0
           total=0
           for t in tests/test_*.tcyr; do
             [ -f "$t" ] || continue
             name=$(basename "$t" .tcyr)
-            if [ "$name" = "test_simd" ]; then
-              echo "::warning::skipping $name (SIMD intrinsic regression)"
-              continue
-            fi
             echo "::group::$name"
-            out=$(cyrius test "$t" 2>&1); status=$?
+            out=$(cyrius test "$t" 2>&1); rc=$?
             echo "$out"
             echo "::endgroup::"
-            if [ $status -ne 0 ]; then
-              echo "FAIL: $name"
-              fail=1
-            fi
+            if [ $rc -ne 0 ]; then echo "FAIL: $name"; fail=1; fi
             n=$(echo "$out" | grep -oE '[0-9]+ passed' | head -1 | awk '{print $1}')
             total=$((total + ${n:-0}))
           done
@@ -122,7 +109,7 @@ jobs:
           for b in benches/*.bcyr; do
             [ -f "$b" ] || continue
             echo "::group::$b"
-            cyrius bench "$b" || true
+            CYRIUS_DCE=1 cyrius bench "$b" || true
             echo "::endgroup::"
           done | tee bench-results.txt
 
@@ -132,6 +119,7 @@ jobs:
           name: abaco-${{ github.sha }}
           path: |
             build/abaco
+            dist/abaco.cyr
             bench-results.txt
           if-no-files-found: warn
 
@@ -189,7 +177,13 @@ jobs:
 
       - name: Verify version consistency
         run: |
-          VERSION=$(cat VERSION | tr -d '[:space:]')
-          echo "VERSION file: $VERSION"
-          grep -q "$VERSION" CHANGELOG.md || { echo "FAIL: version not in CHANGELOG.md"; exit 1; }
-          echo "Version consistent (cyrius.cyml pulls VERSION via \${file:VERSION})"
+          FILE_VERSION=$(cat VERSION | tr -d '[:space:]')
+          echo "VERSION file: $FILE_VERSION"
+          # cyrius.cyml derives its version from VERSION via ${file:VERSION},
+          # so the file is the single source of truth. Confirm the pin
+          # template is intact and the version appears in the changelog.
+          grep -qF 'version = "${file:VERSION}"' cyrius.cyml \
+            || { echo "FAIL: cyrius.cyml version is not \${file:VERSION}"; exit 1; }
+          grep -q "$FILE_VERSION" CHANGELOG.md \
+            || { echo "FAIL: version $FILE_VERSION not in CHANGELOG.md"; exit 1; }
+          echo "Version consistent: $FILE_VERSION"

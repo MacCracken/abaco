@@ -85,9 +85,9 @@ fn test_next_prime() {
 
 fn test_prev_prime() {
     var r = prev_prime(2);
-    assert(tag(r) == ERR, "prev_prime(2) is Err");
+    assert(is_err_result(r), "prev_prime(2) is Err");
     r = prev_prime(3);
-    assert(tag(r) == OK, "prev_prime(3) is Ok");
+    assert(is_ok(r), "prev_prime(3) is Ok");
     assert_eq(payload(r), 2, "prev_prime(3) == 2");
     r = prev_prime(10);
     assert_eq(payload(r), 7, "prev_prime(10) == 7");

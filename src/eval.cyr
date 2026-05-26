@@ -429,8 +429,11 @@ fn parse_term(e) {
     return left;
 }
 
-# f64 power: a^b = exp2(b * log2(a))
-fn f64_pow(base, exp) {
+# f64 power: a^b = exp2(b * log2(a)). Named `eval_pow` (not the stdlib
+# `f64_pow` in lib/math.cyr) because it adds an integer-exponent fast path
+# — repeated multiplication for exact results on whole powers, so `2^10`
+# returns 1024 exactly rather than a log/exp round-trip approximation.
+fn eval_pow(base, exp) {
     var zero = f64_from(0);
     if (f64_eq(exp, zero) == 1) { return f64_from(1); }
     if (f64_eq(base, zero) == 1) { return zero; }
@@ -482,7 +485,7 @@ fn parse_power(e) {
     if (eval_at(e, TOK_POWER) == 1) {
         eval_advance(e);
         var exp = parse_power(e);
-        return f64_pow(base, exp);
+        return eval_pow(base, exp);
     }
     return base;
 }
@@ -692,7 +695,7 @@ fn call_function(e, name, args, nargs) {
         if (streq(name, "factorial") == 1) {
             var n = f64_to(a);
             if (n < 0) { eval_set_err(e, ERR_MATH); return f64_from(0); }
-        if (n > 170) { eval_set_err(e, ERR_MATH); return f64_from(0); }
+            if (n > 170) { eval_set_err(e, ERR_MATH); return f64_from(0); }
             var result = f64_from(1);
             var fi = 1;
             while (fi <= n) { result = f64_mul(result, f64_from(fi)); fi = fi + 1; }
@@ -738,7 +741,7 @@ fn call_function(e, name, args, nargs) {
     if (nargs == 2) {
         if (streq(name, "min") == 1) { return f64_min(a, b); }
         if (streq(name, "max") == 1) { return f64_max(a, b); }
-        if (streq(name, "pow") == 1) { return f64_pow(a, b); }
+        if (streq(name, "pow") == 1) { return eval_pow(a, b); }
         if (streq(name, "atan2") == 1) {
             # Quadrant-correct two-arg arctangent (stdlib math.cyr, 4.8.5+).
             # Closes the pre-4.8.5 Q2/Q3 bug where we returned atan(y/x)
@@ -782,8 +785,8 @@ fn Evaluator_eval(e, expr) {
     if (nt == 0) { eval_set_err(e, ERR_INVALID); return f64_from(0); }
     var result = parse_expr(e);
     if (eval_err(e) == ERR_NONE) { if (eval_pos(e) < eval_ntoks(e)) {
-        eval_set_err(e, ERR_PARSE);
-    } }
+            eval_set_err(e, ERR_PARSE);
+        } }
     return result;
 }
 
