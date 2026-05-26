@@ -55,5 +55,6 @@ smoke entry, excluded from the bundle.
 
 ## In flight
 
-- 2.2.x modernization arc — see [`roadmap.md`](roadmap.md). 2.2.1 shipped;
-  next: 2.2.2 (documentation depth).
+- 2.2.x modernization arc — see [`roadmap.md`](roadmap.md). 2.2.1 released;
+  next: 2.2.2 (documentation depth + light hardening), then 2.2.3 (heavier
+  hardening/audit + convention alignment), 2.2.4 (closeout before 2.3.0).

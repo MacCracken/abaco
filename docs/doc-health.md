@@ -60,7 +60,7 @@ this file is that surface.
 | `LICENSE` | — | 🔵 Evergreen | GPL-3.0-only. |
 | `VERSION` | 2026-05-26 | ✅ Fresh | Single source of truth — `2.2.1`. `cyrius.cyml` derives via `${file:VERSION}`. |
 | `ROADMAP.md` | 2026-05-26 | ✅ Fresh | Re-scoped: forward pointer to `docs/development/roadmap.md` at top; body is the completed-work record. |
-| `bench-latest.md` | (pre-6.0.1) | 🟡 Stale | Snapshot predates the 6.0.1 upgrade. Refresh at the 2.2.3 benchmark CSV pass. |
+| `bench-latest.md` | (pre-6.0.1) | 🟡 Stale | Snapshot predates the 6.0.1 upgrade. Refresh at the 2.2.2 baseline (full 3-point trend at 2.2.3). |
 
 ---
 
@@ -68,7 +68,7 @@ this file is that surface.
 
 | File | Last touched | Status | Action |
 |---|---|---|---|
-| `docs/README.md` | 2026-04-14 | 🟡 Stale | Docs index — predates `docs/development/` + `docs/sources.md` + this file. Add the new entries at next doc touch. |
+| `docs/README.md` | 2026-04-14 | 🟡 Stale | Docs index — predates `docs/development/` + `docs/sources.md` + this file. Add the new entries in 2.2.2 (docs depth). |
 | `docs/architecture.md` | 2026-05-26 | ✅ Fresh | Consumer-dependency note updated to `dist/abaco.cyr` via `cyrius.cyml`. |
 | `docs/development.md` | 2026-05-26 | ✅ Fresh | Prereqs + upgrade flow rewritten around the `cyrius.cyml` pin and `cyrius deps`; manifest tree shows `cyrius.cyml`. |
 | `docs/mcp-tools.md` | 2026-03-16 | 🟠 Read-through | Verify the documented MCP tool surface still matches `src/ai.cyr`. Oldest doc in the tree. |
@@ -97,8 +97,9 @@ Periodic, timestamped reports — supersede with a new dated doc, don't edit in 
 | `2026-04-14.md` | 2026-04-14 | 🔵 Dated artifact |
 
 Open items from this audit (MED-4 json depth cap, LOW-8 hashmap seed, LOW-9b
-regression tests) are tracked in `docs/development/roadmap.md` under 2.2.3. The
-next full audit is pinned **before the 2.3.0 cut** (closeout boundary).
+regression tests) are tracked in `docs/development/roadmap.md`: LOW-9b lands in
+2.2.2 (light hardening); the heavier MED-4 / LOW-8 items and the fresh full
+security audit land in **2.2.3** (P(-1) hardening).
 
 ---
 
@@ -134,10 +135,10 @@ Scheduled doc decisions, surfaced so they aren't forgotten when the trigger arri
 | # | Commitment | Trigger | Notes |
 |---|---|---|---|
 | 1 | `docs/sources.md` completeness audit — every formula/constant cross-checked against a citation | 2.2.2 | Initial pass shipped 2.2.1; covers the main algorithms. |
-| 2 | Benchmark surface refresh — re-run under 6.0.1, refresh `bench-latest.md` + CSV (3-point trend) | 2.2.3 | `bench-latest.md` currently pre-6.0.1. |
-| 3 | `docs/README.md` index refresh — add `development/`, `sources.md`, `doc-health.md` rows | next doc touch | Keeps the index aligned with the tree. |
+| 2 | Benchmark surface refresh — re-run under 6.0.1, refresh `bench-latest.md` + CSV | 2.2.2 baseline / 2.2.3 trend | `bench-latest.md` currently pre-6.0.1. |
+| 3 | `docs/README.md` index refresh — add `development/`, `sources.md`, `doc-health.md` rows | 2.2.2 | Keeps the index aligned with the tree. |
 | 4 | `docs/mcp-tools.md` read-through vs `src/ai.cyr` | 2.2.2 (docs depth) | Oldest doc; verify tool surface. |
-| 5 | Full security re-audit → new `docs/audit/YYYY-MM-DD-audit.md` | before 2.3.0 cut | Closes the open items from 2026-04-14. |
+| 5 | Full security re-audit → new `docs/audit/YYYY-MM-DD-audit.md` | 2.2.3 (P(-1) hardening) | Closes the heavier open items from 2026-04-14. |
 
 ---
 

@@ -25,7 +25,7 @@ docs. The minor (2.3.0) opens once the arc closes.
 - [x] CLAUDE.md rewritten Cyrius-native; `docs/development/{roadmap,state}.md`
       + `docs/sources.md` scaffolded
 
-### 2.2.2 — Documentation depth
+### 2.2.2 — Documentation depth + light hardening
 
 - [ ] `docs/architecture/` — non-obvious invariants (token storage layout,
       MAX_DEPTH rationale, unit-registry hashing, Miller–Rabin witness bound)
@@ -34,27 +34,35 @@ docs. The minor (2.3.0) opens once the arc closes.
 - [ ] `docs/guides/consuming-abaco.md` — how hisab/dhvani/Abacus wire
       `dist/abaco.cyr` as a dep
 - [ ] `docs/sources.md` completeness audit — every formula/constant cited
+- [ ] `docs/README.md` index refresh; `docs/mcp-tools.md` read-through vs `src/ai.cyr`
+- [ ] LOW-9b regression tests — truncated HTTP w/ lying `Content-Length`,
+      unit-hashmap synthetic collisions
+- [ ] Benchmark CSV refresh under 6.0.1 — early arc baseline
 
-### 2.2.3 — P(-1) hardening pass
+### 2.2.3 — P(-1) hardening + convention alignment
 
-- [ ] Fresh security audit under 6.0.1 → `docs/audit/YYYY-MM-DD-audit.md`
-- [ ] Close open items from the 2026-04-14 audit:
-      MED-4 (`json_parse` depth cap), LOW-8 (`lib/hashmap.cyr` seed/SipHash —
-      file upstream), LOW-9b (truncated-HTTP + hashmap-collision regression tests)
-- [ ] Benchmark CSV refresh under 6.0.1 — 3-point baseline→optimized→current trend
+Bigger hardening / audit:
 
-### 2.2.4 — Convention alignment
+- [ ] Fresh full security audit under 6.0.1 → `docs/audit/YYYY-MM-DD-audit.md`
+- [ ] Close the heavier open items from the 2026-04-14 audit:
+      MED-4 (`json_parse` depth cap — pending a `lib/json.cyr` recursion-shape
+      audit), LOW-8 (`lib/hashmap.cyr` per-process seed / SipHash-class hash —
+      file upstream against the cyrius stdlib)
+- [ ] 3-point benchmark trend (baseline → optimized → current) — prove no
+      regression held across the arc
+
+Convention alignment:
 
 - [ ] Fuzz harnesses `fuzz_*.cyr` → `fuzz/*.fcyr` (patra/sigil extension)
 - [ ] Evaluate `tests/` → `tests/tcyr/` layout
 - [ ] Evaluate **sakshi** for structured errors/logging (replaces the ad-hoc
       error-code enums where it improves the audit trail)
 
-### 2.2.5 — Closeout before 2.3.0
+### 2.2.4 — Closeout before 2.3.0
 
 - [ ] Full suite green; dead-code floor recorded
 - [ ] Downstream check — hisab, dhvani, Abacus all build against the bundle
-- [ ] Doc sync (CHANGELOG, roadmap, state, sources); version-verify
+- [ ] Doc sync (CHANGELOG, roadmap, state, sources, doc-health); version-verify
 
 ## 2.3.x+ — Ecosystem rollout & feature work (post-arc)
 
