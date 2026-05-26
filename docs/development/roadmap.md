@@ -58,17 +58,26 @@ Convention alignment:
 - [x] Evaluate **sakshi** — **defer on heft-vs-need** (user-ratified,
       [ADR 0004](../adr/0004-error-handling-defer-sakshi.md); concrete re-examine triggers)
 
-### 2.2.4 — Closeout before 2.3.0
+### 2.2.4 — Closeout before 2.3.0 ✅ (2026-05-26) — **arc closed**
 
-- [ ] Full suite green; dead-code floor recorded
-- [ ] Downstream check — hisab, dhvani, Abacus all build against the bundle
-- [ ] Doc sync (CHANGELOG, roadmap, state, sources, doc-health); version-verify
+- [x] Full suite green (472 asserts); dead-code floor recorded; `_nl_split` removed
+- [x] Downstream check — `dist/abaco.cyr` proven consumable via a synthetic
+      consumer (eval + units + ntheory). Finding: no live consumer is wired yet
+      (hisab is a sibling lib, not a consumer); wiring is the 2.3.x work below
+- [x] Clean-from-scratch DCE build + security re-scan; doc sync; version-verify
 
-## 2.3.x+ — Ecosystem rollout & feature work (post-arc)
+**The 2.2.x modernization arc is complete.** abaco is on Cyrius 6.0.1, matches
+the patra/sigil reference shape (bundle, CI/release, docs tree), and is fully
+hardened/audited. 2.3.0 opens the ecosystem-rollout minor.
 
+## 2.3.x — Ecosystem rollout & feature work
+
+- [ ] Wire the first real consumers to `dist/abaco.cyr` (Abacus, dhvani)
 - [ ] Audit consumers for duplicated math that should use `abaco::dsp` —
       dhvani (first target), shruti, jalwa, tarang
 - [ ] Standardize AGNOS projects on abaco for shared math
+- [ ] Trim the semi-public uncalled helpers flagged in the 2.2.4 dead-code audit
+      (`mod_mul`, `reg_alias_exact`, `eval_has_more`) — API change fits a minor
 - [ ] DSP expansion as consumer needs surface (filters, additional windows)
 - [ ] `lib/tls.cyr` integration for the currency cache once the stdlib TLS API
       stabilizes (replaces the plaintext `http_get` path)

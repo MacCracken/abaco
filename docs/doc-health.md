@@ -6,11 +6,11 @@ type: state
 
 # Documentation Health — abaco
 
-> **Last refresh**: 2026-05-26 (2.2.3 — P(-1) hardening + convention alignment.
-> Added `docs/audit/2026-05-26-audit.md` (MED-4 fixed, LOW-8 upstream),
-> `docs/benchmarks.md` (3-point trend), and ADR 0004 (defer-sakshi, user-
-> ratified); fuzz harnesses renamed to `.fcyr` (refs swept in SECURITY.md /
-> CLAUDE.md / CI). Prior: 2026-05-26 (2.2.2 docs-depth; 2.2.1 scaffold — footer).
+> **Last refresh**: 2026-05-26 (2.2.4 — **2.2.x arc closeout**. Doc sync only:
+> corrected the consumer claims in `state.md` / `CLAUDE.md` (abaco has no live
+> bundle consumer; hisab is a sibling lib, not a consumer; Abacus/dhvani are
+> planned) and recorded the dead-code floor. No new docs. Prior: 2026-05-26
+> (2.2.3 hardening; 2.2.2 docs-depth; 2.2.1 scaffold — footer).
 > | **Refresh cadence**: opportunistic — update the affected row whenever a doc
 > is touched, not on a timer.
 >
@@ -185,4 +185,6 @@ guides/, completed the sources citation audit, cleared the lone read-through
 (mcp-tools) and the two stale rows (bench-latest, docs/README). Hardening pass:
 2026-05-26 (2.2.3) — added the security audit report, benchmarks 3-point trend,
 and ADR 0004 (user-ratified sakshi defer); fuzz `.fcyr` rename refs swept.
+Arc closeout: 2026-05-26 (2.2.4) — corrected consumer claims (hisab is a sibling,
+not a consumer; no live consumer wired yet), recorded the dead-code floor.
 Refresh in place when docs are touched.*

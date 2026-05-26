@@ -27,8 +27,10 @@ re-roll `powf` / `log10` / window functions / primality inline.
 
 ## Consumers
 
-hisab (expressions), dhvani (audio DSP), and the Abacus desktop app — all
-import the bundle via `[deps.abaco] modules = ["dist/abaco.cyr"]`. Live list:
+**Intended** (no live consumer wired yet — ecosystem rollout is 2.3.x): the
+Abacus desktop app and dhvani (audio DSP), via
+`[deps.abaco] modules = ["dist/abaco.cyr"]`. Note: **hisab is a sibling
+higher-math library, not a consumer** (distinct domain). Live status:
 [`docs/development/state.md`](docs/development/state.md).
 
 ## Quick Start

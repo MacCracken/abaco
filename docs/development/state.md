@@ -4,13 +4,13 @@
 > [`../../CLAUDE.md`](../../CLAUDE.md); forward plan in [`roadmap.md`](roadmap.md);
 > per-tag history in [`../../CHANGELOG.md`](../../CHANGELOG.md).
 
-**Last updated:** 2026-05-26 (2.2.3)
+**Last updated:** 2026-05-26 (2.2.4 — 2.2.x arc closeout)
 
 ## Versions
 
 | What | Value |
 |------|-------|
-| abaco | **2.2.3** |
+| abaco | **2.2.4** |
 | Cyrius toolchain pin | **6.0.1** |
 | License | GPL-3.0-only |
 
@@ -47,13 +47,20 @@ smoke entry, excluded from the bundle.
 
 ## Consumers
 
+**No live bundle consumer today.** The `dist/abaco.cyr` contract is verified
+consumable (2.2.4 closeout), but wiring real consumers is the 2.3.x ecosystem
+rollout. Intended:
+
 | Consumer | Domain | Status |
 |----------|--------|--------|
-| hisab | Expressions | uses abaco math |
-| dhvani | Audio DSP | source of most ported DSP; rollout audit pending (roadmap 2.3.x) |
-| Abacus | Desktop calculator app | will import `dist/abaco.cyr` as a lib |
+| Abacus | Desktop calculator app | planned — will import `dist/abaco.cyr` (user-confirmed) |
+| dhvani | Audio DSP | planned — abaco's DSP was ported *from* dhvani; rollout audit pending |
+
+**Not a consumer:** hisab is a *sibling* higher-math library (linear algebra,
+geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
 
 ## In flight
 
-- 2.2.x modernization arc — see [`roadmap.md`](roadmap.md). 2.2.1–2.2.3
-  released; next: 2.2.4 (closeout before 2.3.0).
+- **2.2.x modernization arc CLOSED** (2.2.1–2.2.4 released) — see
+  [`roadmap.md`](roadmap.md). Next: **2.3.0** opens the ecosystem-rollout minor
+  (wire dhvani/Abacus to the bundle; audit consumers for duplicated math).

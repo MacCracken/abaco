@@ -45,36 +45,6 @@ fn pq_s2(p) { return load64(p + 24); }
 # NlParser — pure string parsing. No state.
 # ================================================================
 
-# Split a cstring on a single-byte delimiter into a vec of cstrings.
-# Skips empty segments.
-fn _nl_split(s, delim) {
-    var parts = vec_new();
-    var len = strlen(s);
-    var start = 0;
-    var i = 0;
-    while (i < len) {
-        if (load8(s + i) == delim) {
-            if (i > start) {
-                var n = i - start;
-                var buf = alloc(n + 1);
-                memcpy(buf, s + start, n);
-                store8(buf + n, 0);
-                vec_push(parts, buf);
-            }
-            start = i + 1;
-        }
-        i = i + 1;
-    }
-    if (len > start) {
-        var n = len - start;
-        var buf = alloc(n + 1);
-        memcpy(buf, s + start, n);
-        store8(buf + n, 0);
-        vec_push(parts, buf);
-    }
-    return parts;
-}
-
 # Split on whitespace runs. Returns a vec of cstrings.
 fn _nl_split_ws(s) {
     var parts = vec_new();

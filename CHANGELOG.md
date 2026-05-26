@@ -5,6 +5,50 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.4] — 2026-05-26
+
+**Closeout of the 2.2.x modernization arc** (last patch before 2.3.0). A
+full closeout pass — clean build, full suite, dead-code audit, downstream
+consumability check, security re-scan, doc sync, version verify. Suite green at
+**472 asserts, 0 failures**; clean-from-scratch DCE build passes.
+
+### Verified
+
+- **Downstream consumability** — built a synthetic consumer that depends on
+  abaco purely via `[deps.abaco] modules = ["dist/abaco.cyr"]` + the stdlib list
+  (no manual includes), exercising `Evaluator_eval`, `UnitRegistry_convert`, and
+  `is_prime`. Confirms the bundle contract ([ADR 0001](docs/adr/0001-dist-bundle-distribution.md))
+  is genuinely consumable end-to-end.
+- **Clean build** — `rm -rf build && cyrius deps && CYRIUS_DCE=1 cyrius build`
+  passes; smoke binary 246,968 B.
+- **Security re-scan** — no `exec`/`fork`/`sys_system`, no hardcoded system
+  paths, no large stack buffers (CI parity).
+
+### Changed
+
+- **Dead-code audit.** Removed the unused private helper `_nl_split` in
+  `src/ai.cyr` (superseded by `_nl_split_ws`). Floor: the smoke `main()`
+  exercises no library surface, so DCE NOPs the whole library (709 fns /
+  ~185 KB) — this is expected for a library and not a source-cleanliness
+  signal. Of the public surface, ~40 functions (`Value_*`, `ConversionResult_*`,
+  `batch_*`, `CalcHistory_save/load_from_file`, …) are exercised by consumers
+  rather than abaco's own tests — retained as product surface. A small set of
+  semi-public-but-uncalled helpers (`mod_mul`, `reg_alias_exact`,
+  `eval_has_more`) is flagged for a possible trim at the **2.3.0** boundary,
+  where an API change is appropriate; kept here to avoid a breaking change in a
+  patch (DCE strips them from binaries regardless).
+- **Consumer docs corrected.** abaco has **no live bundle consumer today**.
+  hisab is a *sibling* higher-math library (linear algebra / geometry /
+  calculus) with a distinct domain — it does not depend on abaco. The intended
+  consumers (the Abacus desktop app; dhvani, from which abaco's DSP was ported)
+  are an ecosystem-rollout item tracked for 2.3.x. `state.md` / `CLAUDE.md`
+  updated to say *planned* rather than current.
+
+### Notes
+
+- No functional source change beyond the `_nl_split` removal; `dist/abaco.cyr`
+  differs from 2.2.3 only by that removal + the version stamp.
+
 ## [2.2.3] — 2026-05-26
 
 Third slot of the 2.2.x arc: **P(-1) hardening + convention alignment**. A fresh
