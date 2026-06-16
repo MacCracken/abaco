@@ -4,24 +4,25 @@
 > [`../../CLAUDE.md`](../../CLAUDE.md); forward plan in [`roadmap.md`](roadmap.md);
 > per-tag history in [`../../CHANGELOG.md`](../../CHANGELOG.md).
 
-**Last updated:** 2026-06-15 (2.2.5 — Cyrius 6.2.11 toolchain bump + stdlib re-batch)
+**Last updated:** 2026-06-15 (2.3.0 — opens the ecosystem-rollout minor; deferred API cleanups landed)
 
 ## Versions
 
 | What | Value |
 |------|-------|
-| abaco | **2.2.5** |
+| abaco | **2.3.0** |
 | Cyrius toolchain pin | **6.2.11** |
 | License | GPL-3.0-only |
 
 ## Stdlib (6.2.x batching)
 
 The 6.2.x stdlib re-batched several modules; abaco's `[deps].stdlib` list
-adjusted accordingly (symbols unchanged — resolved via the bundles):
+adjusted accordingly. As of 2.3.0 abaco calls the **canonical `bayan_*` API
+directly** — no longer the deprecated back-compat aliases:
 
-| Was (6.0.x) | Now (6.2.x) | Symbols abaco uses |
-|-------------|-------------|--------------------|
-| `json`, `u128` | `bayan` (batched bundle) | `json_{parse,key,value}`, `u64_mulmod/powmod` (via bayan back-compat aliases) |
+| Was (6.0.x) | Now (6.2.x) | Canonical symbols abaco uses |
+|-------------|-------------|------------------------------|
+| `json`, `u128` | `bayan` (batched bundle) | `bayan_json_{parse,key,value}`, `bayan_u64_powmod` |
 | extended `math` | `ganita` (math bundle) | `f64_{a,}sinh/cosh/tanh`, `f64_asin/acos`, `f64_atan2`, `fibonacci`, `binomial` |
 | `math` (slim) | `math` | basics: `f64_sin/cos/sqrt/log`, `f64_pow`, constants |
 
@@ -29,8 +30,8 @@ adjusted accordingly (symbols unchanged — resolved via the bundles):
 
 | Artifact | Size | Notes |
 |----------|------|-------|
-| `build/abaco` | ~356 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF. Grew from ~247 KB: the batched `bayan`/`ganita` bundles carry more code that DCE NOPs but leaves resident |
-| `dist/abaco.cyr` | ~112 KB (~3.2k lines) | Committed consumer bundle. 6.2.x distlib is profile-based: `cyrius distlib abaco` → `dist/abaco-abaco.cyr`, renamed to `dist/abaco.cyr` |
+| `build/abaco` | ~355 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF. ~356 KB at 2.2.5 (the batched `bayan`/`ganita` bundles carry more code that DCE NOPs but leaves resident) |
+| `dist/abaco.cyr` | ~112 KB (~3.16k lines) | Committed consumer bundle. 6.2.x distlib is profile-based: `cyrius distlib abaco` → `dist/abaco-abaco.cyr`, renamed to `dist/abaco.cyr` |
 
 ## Tests
 
@@ -72,14 +73,16 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
 
 ## In flight
 
-- **2.2.x modernization arc CLOSED** (2.2.1–2.2.4 released) — see
-  [`roadmap.md`](roadmap.md). **2.2.5** is a post-closeout maintenance patch:
-  Cyrius 6.2.11 toolchain bump + stdlib re-batch (`json`/`u128` → `bayan`,
-  extended math → `ganita`), no functional change. Next: **2.3.0** opens the
-  ecosystem-rollout minor (wire dhvani/Abacus to the bundle; audit consumers for
-  duplicated math).
+- **2.2.x modernization arc CLOSED** (2.2.1–2.2.4); **2.2.5** tracked the
+  Cyrius 6.2.11 toolchain bump + stdlib re-batch. **2.3.0** (this release) opens
+  the ecosystem-rollout minor and lands the two deferred API cleanups:
+  - ✅ Migrated off the deprecated `bayan` back-compat aliases to canonical
+    `bayan_*` (`bayan_u64_powmod`, `bayan_json_{parse,key,value}`).
+  - ✅ Trimmed the semi-public uncalled helpers `mod_mul`, `reg_alias_exact`,
+    `eval_has_more` (the 2.2.4 dead-code audit flag).
 
-- **Deferred to 2.3.0:** migrate off the deprecated `bayan` back-compat aliases
-  (`json_*`, `u64_mulmod/powmod`) to the canonical `bayan_*` names. The shims
-  exist only for the downstream migration window and will be removed once
-  consumers re-pin — appropriate at the 2.3.0 boundary, not a patch.
+- **2.3.x still open** (external — needs consumer repos, not actionable from
+  abaco alone): wire the first real consumers (Abacus, dhvani) to
+  `dist/abaco.cyr`; audit consumers for duplicated math that should use
+  `abaco::dsp`; `lib/tls.cyr` for the currency cache once the stdlib TLS API
+  stabilizes. See [`roadmap.md`](roadmap.md).

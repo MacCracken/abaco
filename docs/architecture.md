@@ -11,7 +11,7 @@ abaco
 ├── src/core.cyr      — Value, Unit, UnitCategory, Currency,
 │                       ConversionResult, str_lower / str_upper
 ├── src/ntheory.cyr   — is_prime, next/prev_prime, factor, totient,
-│                       fibonacci, binomial, mod_mul, mod_pow
+│                       fibonacci, binomial, mod_pow
 ├── src/dsp.cyr       — Windows, interpolation, dB, MIDI, chromagram,
 │                       SIMD batch ops, samples↔ms, BPM↔Hz
 ├── src/eval.cyr      — Tokenizer + recursive-descent parser,

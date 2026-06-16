@@ -23,10 +23,16 @@ Two options:
 
 ## Decision
 
-Option (b). `cyrius.cyml` gains a `[lib] modules` list (the six library modules
+Option (b). `cyrius.cyml` gains a library-modules list (the six library modules
 in `src/main.cyr` include order, `main.cyr` excluded), and `cyrius distlib`
 concatenates them into `dist/abaco.cyr`, which **is committed**. Consumers
 depend via:
+
+> **Mechanism update (2.2.5, Cyrius 6.2.x):** distlib became profile-based — the
+> flat `[lib]` form was dropped for `[lib.abaco]`, and `cyrius distlib abaco`
+> writes `dist/abaco-abaco.cyr` (`<pkg>-<profile>.cyr`, no override), renamed to
+> the committed consumer path `dist/abaco.cyr`. The decision (one committed
+> bundle as the stable contract) is unchanged.
 
 ```toml
 [deps.abaco]

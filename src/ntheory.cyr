@@ -1,22 +1,13 @@
 # abaco::ntheory — number theory primitives: primality, factorization, totient, fibonacci, binomial.
 
-# Modular multiplication and exponentiation — thin wrappers onto the
-# hardware-fast `u64_mulmod` / `u64_powmod` (Cyrius 4.8.5+; since the 6.2.x
-# stdlib batching these live in `lib/bayan.cyr`, formerly `lib/u128.cyr`).
-# The asm-direct `mul` + `div` pair on x86-64 is ~1.5× faster
-# than the previous double-and-add binary method on the primitive, and
-# compounds to ~12× on a full Miller–Rabin round.
-#
-# Precondition (inherited from u64_mulmod): a < m AND b < m. Callers here
-# pre-reduce via `% m`, so the precondition is satisfied.
-fn mod_mul(a, b, m) {
-    a = a % m;
-    b = b % m;
-    return u64_mulmod(a, b, m);
-}
-
+# Modular exponentiation — a thin wrapper onto the hardware-fast
+# `bayan_u64_powmod` (Cyrius 4.8.5+; the 6.2.x stdlib batching moved it into
+# `lib/bayan.cyr`, formerly the standalone `lib/u128.cyr`). The asm-direct
+# `mul` + `div` pair on x86-64 is ~1.5× faster than the previous double-and-add
+# binary method on the primitive, and compounds to ~12× on a full
+# Miller–Rabin round.
 fn mod_pow(base, exp, modulus) {
-    return u64_powmod(base, exp, modulus);
+    return bayan_u64_powmod(base, exp, modulus);
 }
 
 # Deterministic Miller–Rabin primality test.

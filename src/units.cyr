@@ -68,17 +68,6 @@ fn reg_alias(r, alias, target_sym) {
     return 0;
 }
 
-# Like reg_alias but also registers the alias exactly in the by-symbol
-# map (case-sensitive). Useful for symbol-level aliases.
-fn reg_alias_exact(r, alias, target_sym) {
-    if (map_has(load64(r + 8), target_sym) == 1) {
-        var u = map_get(load64(r + 8), target_sym);
-        map_set(load64(r + 8), alias, u);
-        map_set(load64(r + 16), str_lower(alias), u);
-    }
-    return 0;
-}
-
 # Does the cstring contain any uppercase ASCII byte?
 fn _has_upper(s) {
     var len = strlen(s);

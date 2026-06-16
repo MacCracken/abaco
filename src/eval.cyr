@@ -337,11 +337,6 @@ fn eval_not_at(e, typ) {
     if (tok_type(eval_toks(e), eval_pos(e)) != typ) { return 1; }
     return 0;
 }
-fn eval_has_more(e) {
-    if (eval_pos(e) < eval_ntoks(e)) { return 1; }
-    return 0;
-}
-
 # Constants — alias onto stdlib math.cyr (Cyrius 4.10.2+).
 var CONST_PI = F64_PI;
 var CONST_E = F64_E;

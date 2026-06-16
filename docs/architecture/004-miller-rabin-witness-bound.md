@@ -10,7 +10,7 @@ probabilistic — but only within a proven range.
   So for any `i64`, the test gives the exact answer with zero error probability.
 
 **The hard constraint**: the witness set's correctness is a *range* guarantee.
-If `is_prime` (or `mod_pow` / `mod_mul`) is ever widened past `i64` — to `u64`
+If `is_prime` (or `mod_pow`) is ever widened past `i64` — to `u64`
 beyond 9.22 × 10¹⁸, to `u128`, to bignum — the current witnesses are **no longer
 sufficient** and the test silently becomes probabilistic. Widening the input
 type requires re-selecting (and re-citing) a witness set valid for the new

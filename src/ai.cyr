@@ -780,11 +780,12 @@ fn _ccy_rate_plausible(bits) {
     return 1;
 }
 
-# MED-4 guard: json_parse (lib/bayan.cyr, formerly lib/json.cyr) recurses once per nesting level with
-# no depth cap, so a deeply-nested rates object (e.g. {"a":{"a":{...}}}) from a
-# compromised / MITM'd endpoint could exhaust the native stack before a single
-# value is read. Legitimate fiat-rate maps are flat (depth 1). Bound the nesting
-# here, before json_parse ever sees the buffer. The scan counts raw braces /
+# MED-4 guard: bayan_json_parse (lib/bayan.cyr, formerly lib/json.cyr) recurses
+# once per nesting level with no depth cap, so a deeply-nested rates object
+# (e.g. {"a":{"a":{...}}}) from a compromised / MITM'd endpoint could exhaust
+# the native stack before a single value is read. Legitimate fiat-rate maps are
+# flat (depth 1). Bound the nesting here, before bayan_json_parse ever sees the
+# buffer. The scan counts raw braces /
 # brackets (it does not skip string contents) — that only ever rejects *more*
 # aggressively, the safe direction for a DoS guard, and the cap of 8 leaves
 # ample headroom over the depth-1 real shape.
@@ -816,15 +817,15 @@ fn _ccy_load_body(c, body, len) {
     if (rates_obj == 0) { return AI_ERR_CURRENCY; }
     # MED-4: reject pathologically nested rates before the recursive parser.
     if (_ccy_json_depth_ok(rates_obj) == 0) { return AI_ERR_CURRENCY; }
-    var pairs = json_parse(rates_obj);
+    var pairs = bayan_json_parse(rates_obj);
     var rates = map_new();
     var i = 0;
     var kept = 0;
     while (i < vec_len(pairs)) {
         var p = vec_get(pairs, i);
-        # json_parse returns key and value as Str — convert to cstring, parse f64.
-        var kstr = json_key(p);
-        var vstr = json_value(p);
+        # bayan_json_parse returns key and value as Str — convert to cstring, parse f64.
+        var kstr = bayan_json_key(p);
+        var vstr = bayan_json_value(p);
         var kbuf = alloc(str_len(kstr) + 1);
         memcpy(kbuf, str_data(kstr), str_len(kstr));
         store8(kbuf + str_len(kstr), 0);

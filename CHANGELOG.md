@@ -5,6 +5,35 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] — 2026-06-15
+
+**Opens the 2.3.x ecosystem-rollout minor with the deferred API cleanups.** The
+two source/API changes held back from patch releases (an API change fits a
+minor, not a patch) land here. Suite green at **472 asserts, 0 failures**; fuzz
+3/3; fmt/lint/vet clean; clean-from-scratch DCE build passes; benchmarks hold
+no regression.
+
+### Changed
+
+- **Migrated off the deprecated `bayan` back-compat aliases** to the canonical
+  `bayan_*` API (deferred from 2.2.5). `mod_pow` now calls `bayan_u64_powmod`;
+  the currency-cache JSON path calls `bayan_json_parse` / `bayan_json_key` /
+  `bayan_json_value`. abaco no longer routes through bayan's deprecated shim
+  layer, so it is unaffected when those aliases are eventually removed upstream.
+
+### Removed
+
+- **Trimmed three semi-public uncalled helpers** flagged in the 2.2.4 dead-code
+  audit (deferred to the 2.3.0 boundary where an API change is appropriate):
+  - `mod_mul` (`src/ntheory.cyr`) — superseded; `is_prime` uses `mod_pow` only.
+    Removing it drops abaco's last use of `bayan_u64_mulmod`.
+  - `reg_alias_exact` (`src/units.cyr`) — the live alias path is `reg_alias`.
+  - `eval_has_more` (`src/eval.cyr`) — the parser uses `eval_at` / `eval_not_at`.
+
+  These were never exercised by abaco's tests and were DCE-stripped from
+  binaries already; the removal is a source-surface cleanup. Technically a
+  public-symbol removal, hence the minor bump.
+
 ## [2.2.5] — 2026-06-15
 
 **Cyrius 6.2.11 toolchain bump + stdlib re-batch.** A maintenance patch tracking

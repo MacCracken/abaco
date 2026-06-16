@@ -245,7 +245,7 @@ fn test_ccy_truncated_body() {
 
 fn test_ccy_deep_nesting_rejected() {
     # MED-4 regression: a rates object nested past CCY_MAX_JSON_DEPTH (8) must be
-    # rejected before json_parse recurses — a compromised endpoint could
+    # rejected before bayan_json_parse recurses — a compromised endpoint could
     # otherwise exhaust the native stack. Depth here is 9 ('rates' + 8 inner).
     var deep = "{\"base\":\"USD\",\"rates\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":0.5}}}}}}}}}";
     var c = CurrencyCache_new("http://localhost:8088");

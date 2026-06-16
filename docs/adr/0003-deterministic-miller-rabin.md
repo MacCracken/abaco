@@ -28,7 +28,8 @@ is **exact, not probabilistic**, and immune to the adversarial class above.
 
 - Reproducible and attack-resistant; no RNG dependency.
 - Worst case is 12 modular-exponentiation rounds, each fast via stdlib
-  `u64_powmod` (hardware `mul`/`div`).
+  `bayan_u64_powmod` (hardware `mul`/`div`; `lib/bayan.cyr`, formerly the
+  standalone `lib/u128.cyr`'s `u64_powmod`).
 - **Hard constraint**: the witness set is valid only up to the proven bound. Do
   not widen `is_prime` past `i64` without re-selecting witnesses for the larger
   range. See [`../architecture/004-miller-rabin-witness-bound.md`](../architecture/004-miller-rabin-witness-bound.md).

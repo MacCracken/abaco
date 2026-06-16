@@ -72,12 +72,23 @@ hardened/audited. 2.3.0 opens the ecosystem-rollout minor.
 
 ## 2.3.x — Ecosystem rollout & feature work
 
+### 2.3.0 — Open the minor; deferred API cleanups ✅ (2026-06-15)
+
+The two source/API changes an API-change-minor allows (held back from the
+2.2.x patches) landed:
+
+- [x] Migrated off the deprecated `bayan` back-compat aliases to canonical
+      `bayan_*` (`bayan_u64_powmod`, `bayan_json_{parse,key,value}`) — abaco no
+      longer depends on the shim layer (deferred from 2.2.5)
+- [x] Trimmed the semi-public uncalled helpers flagged in the 2.2.4 dead-code
+      audit (`mod_mul`, `reg_alias_exact`, `eval_has_more`)
+
+### Still open
+
 - [ ] Wire the first real consumers to `dist/abaco.cyr` (Abacus, dhvani)
 - [ ] Audit consumers for duplicated math that should use `abaco::dsp` —
       dhvani (first target), shruti, jalwa, tarang
 - [ ] Standardize AGNOS projects on abaco for shared math
-- [ ] Trim the semi-public uncalled helpers flagged in the 2.2.4 dead-code audit
-      (`mod_mul`, `reg_alias_exact`, `eval_has_more`) — API change fits a minor
 - [ ] DSP expansion as consumer needs surface (filters, additional windows)
 - [ ] `lib/tls.cyr` integration for the currency cache once the stdlib TLS API
       stabilizes (replaces the plaintext `http_get` path)
