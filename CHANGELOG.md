@@ -5,6 +5,42 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.5] — 2026-06-15
+
+**Cyrius 6.2.11 toolchain bump + stdlib re-batch.** A maintenance patch tracking
+the toolchain's stdlib reorganization. No functional change to abaco's surface —
+suite green at **472 asserts, 0 failures**; fuzz 3/3; fmt/lint/vet clean.
+
+### Changed
+
+- **Toolchain pin 6.0.1 → 6.2.11** (`cyrius.cyml [package].cyrius`).
+- **Stdlib re-batch in `[deps].stdlib`.** The 6.2.x stdlib merged several
+  modules; abaco's dependency list follows. Source symbols are unchanged —
+  they resolve through the new bundles:
+  - `json` + `u128` → **`bayan`** (batched bundle: base64/csv/u128/bigint/toml/
+    cyml/json). `json_{parse,key,value}` and `u64_mulmod/powmod` resolve via
+    bayan's back-compat aliases.
+  - Extended math (`f64_{a,}sinh/cosh/tanh`, `f64_asin/acos`, `f64_atan2`,
+    `fibonacci`, `binomial`) moved out of `math` into **`ganita`** — added to
+    the deps list. The slim `math` retains the basics (`f64_sin/cos/sqrt/log`,
+    `f64_pow`, constants).
+- **`distlib` is profile-based.** 6.2.x dropped the flat `[lib]` form; the
+  manifest now uses `[lib.abaco]` and `cyrius distlib abaco` writes
+  `dist/abaco-abaco.cyr`, renamed to the consumer path `dist/abaco.cyr`. CI and
+  release workflows updated to match.
+- **Test includes.** `tests/test_{ai,integration}.tcyr` pointed their dead
+  `include "lib/json.cyr"` at `lib/bayan.cyr`.
+- **Smoke binary `build/abaco`** grew ~247 KB → ~356 KB: the batched
+  `bayan`/`ganita` bundles carry more code that DCE NOPs but leaves resident
+  (expected for a library smoke entry; consumers DCE per their own surface).
+
+### Deferred (2.3.0)
+
+- Migrate off the deprecated `bayan` back-compat aliases to the canonical
+  `bayan_*` API. The shims exist only for the downstream migration window and
+  will be removed once consumers re-pin — appropriate at the 2.3.0 boundary,
+  not a patch.
+
 ## [2.2.4] — 2026-05-26
 
 **Closeout of the 2.2.x modernization arc** (last patch before 2.3.0). A

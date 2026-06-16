@@ -43,7 +43,7 @@ for b in benches/*.bcyr; do cyrius bench "$b"; done    # benchmarks
 for f in fuzz/*.fcyr; do cyrius build "$f" build/$(basename "$f" .fcyr); done  # fuzz
 cyrius fmt src/*.cyr --check                 # format check
 cyrius lint src/*.cyr                         # static analysis
-cyrius distlib                                # regenerate dist/abaco.cyr
+cyrius distlib abaco && mv dist/abaco-abaco.cyr dist/abaco.cyr  # regenerate dist/abaco.cyr
 ./scripts/bench-history.sh                    # benchmark CSV trail
 ```
 
@@ -55,8 +55,10 @@ lives in the modules under `[lib]` and is shipped as `dist/abaco.cyr`.
 - **Correctness is the optimum** — a wrong DSP filter or a flaky primality
   test is worse than none. Every algorithm cites its source.
 - **Own the stack.** If an AGNOS crate wraps a domain, depend on it. Lean on
-  stdlib `lib/math.cyr` / `lib/u128.cyr` for transcendentals and modular
-  arithmetic rather than hand-rolling.
+  stdlib `lib/math.cyr` / `lib/ganita.cyr` for transcendentals and
+  `lib/bayan.cyr` for wide-integer modular arithmetic rather than hand-rolling.
+  (6.2.x stdlib batching: extended math moved `math` → `ganita`; `json` + `u128`
+  folded into `bayan`.)
 - **No magic.** Every formula, constant, and witness set is documented and
   traceable to a paper — see [`docs/sources.md`](docs/sources.md).
 - Test after EVERY change, not after the feature is "done".
@@ -125,8 +127,9 @@ lives in the modules under `[lib]` and is shipped as `dist/abaco.cyr`.
 - CI gates: `fmt --check`, `lint`, `vet`, smoke build + ELF check, `dist/abaco.cyr`
   freshness, full `.tcyr` suite, fuzz smoke, bench (non-fatal), security scan, docs.
 - Release: version-verify (`VERSION == cyrius.cyml == git tag`) → CI gate → DCE
-  build → `cyrius distlib` → artifacts (source tarball, `dist/abaco.cyr`,
-  smoke binary, `SHA256SUMS`). Tag filter is plain semver `X.Y.Z`.
+  build → `cyrius distlib abaco` (then rename `dist/abaco-abaco.cyr` →
+  `dist/abaco.cyr`) → artifacts (source tarball, `dist/abaco.cyr`, smoke binary,
+  `SHA256SUMS`). Tag filter is plain semver `X.Y.Z`.
 
 ## Docs
 

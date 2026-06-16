@@ -64,13 +64,15 @@ jobs:
         run: xxd -l 4 build/abaco | grep -q "7f45 4c46"
 
       - name: Verify dist bundle is current
-        # dist/abaco.cyr is the committed consumer bundle (hisab, dhvani,
-        # Abacus import it via `[deps.abaco] modules = ["dist/abaco.cyr"]`).
-        # Regenerate and fail if the checked-in copy drifted from src/.
+        # dist/abaco.cyr is the committed consumer bundle (dhvani, Abacus
+        # import it via `[deps.abaco] modules = ["dist/abaco.cyr"]`).
+        # 6.2.x distlib is profile-based and writes dist/abaco-abaco.cyr;
+        # rename to the consumer path, then fail if the checked-in copy drifted.
         run: |
-          cyrius distlib
+          cyrius distlib abaco
+          mv dist/abaco-abaco.cyr dist/abaco.cyr
           git diff --exit-code dist/abaco.cyr || {
-            echo "::error::dist/abaco.cyr is stale — run 'cyrius distlib' and commit"; exit 1; }
+            echo "::error::dist/abaco.cyr is stale — run 'cyrius distlib abaco && mv dist/abaco-abaco.cyr dist/abaco.cyr' and commit"; exit 1; }
 
       - name: Test
         # Full suite, all tests gated (SIMD un-quarantined in 2.2.1 — the

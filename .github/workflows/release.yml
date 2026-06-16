@@ -56,9 +56,11 @@ jobs:
           echo "abaco: $(wc -c < build/abaco) bytes"
 
       - name: Regenerate bundle
-        # `cyrius distlib` reads [lib] modules from cyrius.cyml and writes
-        # the self-contained consumer bundle dist/abaco.cyr.
-        run: cyrius distlib
+        # 6.2.x distlib reads the [lib.abaco] profile and writes
+        # dist/abaco-abaco.cyr; rename to the consumer path dist/abaco.cyr.
+        run: |
+          cyrius distlib abaco
+          mv dist/abaco-abaco.cyr dist/abaco.cyr
 
       - name: Test
         run: |

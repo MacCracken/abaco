@@ -780,7 +780,7 @@ fn _ccy_rate_plausible(bits) {
     return 1;
 }
 
-# MED-4 guard: lib/json.cyr's json_parse recurses once per nesting level with
+# MED-4 guard: json_parse (lib/bayan.cyr, formerly lib/json.cyr) recurses once per nesting level with
 # no depth cap, so a deeply-nested rates object (e.g. {"a":{"a":{...}}}) from a
 # compromised / MITM'd endpoint could exhaust the native stack before a single
 # value is read. Legitimate fiat-rate maps are flat (depth 1). Bound the nesting

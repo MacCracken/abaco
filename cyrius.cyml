@@ -5,23 +5,27 @@ description = "Math engine — expression evaluation, unit conversion, DSP math"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/abaco"
 language = "cyrius"
-cyrius = "6.0.1"
+cyrius = "6.2.11"
 
 [build]
 entry = "src/main.cyr"
 output = "build/abaco"
 
-# `cyrius distlib` reads [lib] modules to build dist/abaco.cyr — the
-# self-contained library bundle consumers import (hisab, dhvani, and the
-# Abacus desktop app via `[deps.abaco] modules = ["dist/abaco.cyr"]`).
+# `cyrius distlib abaco` reads the [lib.abaco] profile and emits the
+# self-contained library bundle consumers import (the Abacus desktop app and
+# dhvani via `[deps.abaco] modules = ["dist/abaco.cyr"]`).
 # Order matches src/main.cyr's include order; each module may reference
 # symbols defined earlier. main.cyr is excluded on purpose: it carries the
 # smoke `main()` + `sys_exit`, not library surface.
 #
-# Keep `modules` under [lib], NOT [build] — 5.7.x+ treats [build].modules
-# as an auto-prepend list and would inline every src file before the entry,
-# producing duplicate-fn warnings (the lesson sigil/agnosys logged).
-[lib]
+# Keep `modules` under [lib.PROFILE], NOT [build] — 5.7.x+ treats
+# [build].modules as an auto-prepend list and would inline every src file
+# before the entry, producing duplicate-fn warnings (the lesson sigil/agnosys
+# logged). 6.2.x distlib is profile-based and the flat [lib] form is gone.
+# It writes dist/<pkg>-<profile>.cyr (= dist/abaco-abaco.cyr, no override),
+# so the regen step renames to the consumer path:
+#   cyrius distlib abaco && mv dist/abaco-abaco.cyr dist/abaco.cyr
+[lib.abaco]
 modules = [
     "src/core.cyr",
     "src/ntheory.cyr",
@@ -46,9 +50,16 @@ stdlib = [
     "bench",
     "args",
     "math",
+    # `ganita` (stdlib 6.2.x math bundle) now owns the extended transcendentals
+    # and combinatorics that 6.0.x `math.cyr` carried inline — abaco's eval calls
+    # `f64_{a,}sinh/cosh/tanh`, `f64_asin/acos`, `f64_atan2`, `fibonacci`,
+    # `binomial`. The slim `math` module above keeps the basics (sin/cos/sqrt/…).
+    "ganita",
     "io",
     "net",
     "http",
-    "json",
-    "u128",
+    # `bayan` (stdlib 6.2.x batched bundle) absorbs the former standalone
+    # `json` + `u128` modules; abaco's `json_*` and `u64_mulmod/powmod`
+    # symbols resolve through bayan's back-compat aliases.
+    "bayan",
 ]
