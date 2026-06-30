@@ -4,21 +4,23 @@
 > [`../../CLAUDE.md`](../../CLAUDE.md); forward plan in [`roadmap.md`](roadmap.md);
 > per-tag history in [`../../CHANGELOG.md`](../../CHANGELOG.md).
 
-**Last updated:** 2026-06-15 (2.3.0 — opens the ecosystem-rollout minor; deferred API cleanups landed)
+**Last updated:** 2026-06-30 (2.3.1 — Cyrius 6.3.10 toolchain bump; no functional change, no stdlib re-batch)
 
 ## Versions
 
 | What | Value |
 |------|-------|
-| abaco | **2.3.0** |
-| Cyrius toolchain pin | **6.2.11** |
+| abaco | **2.3.1** |
+| Cyrius toolchain pin | **6.3.10** |
 | License | GPL-3.0-only |
 
-## Stdlib (6.2.x batching)
+## Stdlib (6.2.x batching — unchanged in 6.3.x)
 
 The 6.2.x stdlib re-batched several modules; abaco's `[deps].stdlib` list
-adjusted accordingly. As of 2.3.0 abaco calls the **canonical `bayan_*` API
-directly** — no longer the deprecated back-compat aliases:
+adjusted accordingly at 2.2.5. **6.3.x (the 2.3.1 bump) keeps the same layout** —
+no re-batch, so the dependency list and source symbols are unchanged; the 6.3.x
+bundles only grew internally. As of 2.3.0 abaco calls the **canonical `bayan_*`
+API directly** — no longer the deprecated back-compat aliases:
 
 | Was (6.0.x) | Now (6.2.x) | Canonical symbols abaco uses |
 |-------------|-------------|------------------------------|
@@ -30,7 +32,7 @@ directly** — no longer the deprecated back-compat aliases:
 
 | Artifact | Size | Notes |
 |----------|------|-------|
-| `build/abaco` | ~355 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF. ~356 KB at 2.2.5 (the batched `bayan`/`ganita` bundles carry more code that DCE NOPs but leaves resident) |
+| `build/abaco` | ~358 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF (357,736 B at 2.3.1; ~356 KB at 2.2.5/2.3.0). The batched `bayan`/`ganita`/`net` bundles carry more code that DCE NOPs (1072 fns, 271,671 B) but leaves resident |
 | `dist/abaco.cyr` | ~112 KB (~3.16k lines) | Committed consumer bundle. 6.2.x distlib is profile-based: `cyrius distlib abaco` → `dist/abaco-abaco.cyr`, renamed to `dist/abaco.cyr` |
 
 ## Tests
@@ -74,12 +76,17 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
 ## In flight
 
 - **2.2.x modernization arc CLOSED** (2.2.1–2.2.4); **2.2.5** tracked the
-  Cyrius 6.2.11 toolchain bump + stdlib re-batch. **2.3.0** (this release) opens
-  the ecosystem-rollout minor and lands the two deferred API cleanups:
+  Cyrius 6.2.11 toolchain bump + stdlib re-batch. **2.3.0** opened the
+  ecosystem-rollout minor and landed the two deferred API cleanups:
   - ✅ Migrated off the deprecated `bayan` back-compat aliases to canonical
     `bayan_*` (`bayan_u64_powmod`, `bayan_json_{parse,key,value}`).
   - ✅ Trimmed the semi-public uncalled helpers `mod_mul`, `reg_alias_exact`,
     `eval_has_more` (the 2.2.4 dead-code audit flag).
+- **2.3.1** (this release) tracks the **Cyrius 6.3.10 toolchain bump** — pin
+  6.2.11 → 6.3.10, stdlib re-vendored. No re-batch, no source change, no
+  functional change; `dist/abaco.cyr` byte-identical to 2.3.0 bar the version
+  header. (6.3.x stdlib now ships `lib/tls.cyr` + `tls_native_*` — relevant to
+  the open currency-cache TLS item below, but not wired in this patch.)
 
 - **2.3.x still open** (external — needs consumer repos, not actionable from
   abaco alone): wire the first real consumers (Abacus, dhvani) to

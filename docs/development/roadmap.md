@@ -83,6 +83,18 @@ The two source/API changes an API-change-minor allows (held back from the
 - [x] Trimmed the semi-public uncalled helpers flagged in the 2.2.4 dead-code
       audit (`mod_mul`, `reg_alias_exact`, `eval_has_more`)
 
+### 2.3.1 — Cyrius 6.3.10 toolchain bump ✅ (2026-06-30)
+
+Maintenance patch tracking the toolchain update. No functional change:
+
+- [x] Cyrius pin 6.2.11 → 6.3.10; stdlib re-vendored (`cyrius deps`)
+- [x] **No stdlib re-batch** — `[deps].stdlib` module list unchanged; all
+      symbols abaco uses resolve unchanged (6.3.x bundles grew internally only)
+- [x] Suite green (472 asserts); fuzz 3/3; fmt/lint/vet clean; DCE build passes;
+      benchmarks flat; `dist/abaco.cyr` byte-identical to 2.3.0 bar the version header
+- [x] Noted: 6.3.x stdlib now ships `lib/tls.cyr` + `tls_native_*` (feeds the
+      open currency-cache TLS item below; not wired in this patch)
+
 ### Still open
 
 - [ ] Wire the first real consumers to `dist/abaco.cyr` (Abacus, dhvani)

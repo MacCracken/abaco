@@ -5,6 +5,29 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] — 2026-06-30
+
+**Cyrius 6.3.10 toolchain bump.** A maintenance patch tracking the toolchain
+update. **No stdlib re-batch this time** — unlike 2.2.5, the 6.3.x stdlib keeps
+the same module layout, so abaco's `[deps].stdlib` list is unchanged and no
+source symbols moved. No functional change to abaco's surface; the `dist/abaco.cyr`
+bundle is byte-identical to 2.3.0 except for its version header. Suite green at
+**472 asserts, 0 failures**; fuzz 3/3 (5000 iterations each); fmt/lint/vet clean;
+clean-from-scratch DCE build passes; benchmarks flat (no regression).
+
+### Changed
+
+- **Toolchain pin 6.2.11 → 6.3.10** (`cyrius.cyml [package].cyrius`).
+- **Stdlib re-vendored at 6.3.10** (`cyrius deps`). The module list in
+  `[deps].stdlib` is unchanged — all 18 modules abaco depends on still exist and
+  expose the same API. The 6.3.x bundles grew internally (e.g. `bayan`
+  +144 lines, `net` +38, `math` +5) but the symbols abaco calls
+  (`bayan_u64_powmod`, `bayan_json_{parse,key,value}`, the `ganita` extended
+  transcendentals / combinatorics) resolve unchanged.
+- **Smoke binary `build/abaco`** ≈ 357,736 B (~358 KB) — essentially unchanged
+  from 2.3.0; the marginal growth tracks the larger 6.3.x `bayan`/`net` bundles
+  that DCE NOPs but leaves resident (1072 unreachable fns, 271,671 B NOPed).
+
 ## [2.3.0] — 2026-06-15
 
 **Opens the 2.3.x ecosystem-rollout minor with the deferred API cleanups.** The
