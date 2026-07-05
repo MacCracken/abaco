@@ -5,6 +5,42 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.2] — 2026-07-05
+
+**dB conversion constant fix.** The DSP decibel constants `DB_SCALE` (20/ln10),
+`DB_EXP` (ln10/20), and `DB_GAIN_EXP` (ln10/40) were encoded from slightly-wrong
+f64 bit patterns — all three shared a corrupted mantissa (`…764D5B4BCDB5`).
+`DB_SCALE * DB_EXP` came to **0.99919** instead of ~1.0, so
+`amplitude_to_db(db_to_amplitude(db))` was no longer an identity: the round trip
+drifted **~0.081% of |db|**, exceeding a 0.01 dB tolerance for |db| ≥ 20. Small
+levels looked fine (which is why the pre-existing tests missed it), but at
+mixing/mastering levels the error was real — −0.049 dB at |db|=60. This is a
+Cyrius-port encoding regression, **not** an f32→f64 precision issue: the Rust
+`abaco-1.1.0` f32 originals round-trip tightly. Suite green at **479 asserts, 0
+failures** (+7 from the new round-trip guard); fmt/lint/vet clean.
+
+### Fixed
+
+- **`DB_SCALE` `0x40215D38B4E225BA` → `0x40215F2CED384F28`** (8.682073… →
+  8.685889638065035 — the correctly-rounded 20/ln(10)).
+- **`DB_EXP` `0x3FBD764D5B4BCDB5` → `0x3FBD791C5F888823`** (0.115086… →
+  0.11512925464970229 — ln(10)/20).
+- **`DB_GAIN_EXP` `0x3FAD764D5B4BCDB5` → `0x3FAD791C5F888823`** (0.057543… →
+  0.057564627324851146 — ln(10)/40, used in filter gain/shelf coefficient design).
+
+### Added
+
+- **`test_db_roundtrip`** in `tests/test_dsp.tcyr` — asserts
+  `amplitude_to_db(db_to_amplitude(db)) == db` within 0.01 dB across
+  ±{0, 6, 20, 60}. Anchored at |db|=60 it fails on the old constants, guarding
+  the encoding going forward.
+
+### Changed
+
+- **`dist/abaco.cyr` regenerated** — **no longer byte-identical to 2.3.0/2.3.1**;
+  it now carries the corrected constants (and an expanded rationale comment).
+  Consumers must re-vendor the bundle.
+
 ## [2.3.1] — 2026-06-30
 
 **Cyrius 6.3.10 toolchain bump.** A maintenance patch tracking the toolchain

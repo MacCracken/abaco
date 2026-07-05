@@ -4,13 +4,13 @@
 > [`../../CLAUDE.md`](../../CLAUDE.md); forward plan in [`roadmap.md`](roadmap.md);
 > per-tag history in [`../../CHANGELOG.md`](../../CHANGELOG.md).
 
-**Last updated:** 2026-06-30 (2.3.1 — Cyrius 6.3.10 toolchain bump; no functional change, no stdlib re-batch)
+**Last updated:** 2026-07-05 (2.3.2 — dB constant fix: `DB_SCALE`/`DB_EXP`/`DB_GAIN_EXP` re-encoded; dist regenerated, no longer byte-identical to 2.3.0/2.3.1)
 
 ## Versions
 
 | What | Value |
 |------|-------|
-| abaco | **2.3.1** |
+| abaco | **2.3.2** |
 | Cyrius toolchain pin | **6.3.10** |
 | License | GPL-3.0-only |
 
@@ -37,12 +37,12 @@ API directly** — no longer the deprecated back-compat aliases:
 
 ## Tests
 
-**472 asserts, 0 failures** across 7 `.tcyr` files:
+**479 asserts, 0 failures** across 7 `.tcyr` files:
 
 | Suite | Asserts |
 |-------|---------|
 | `test_ai` | 96 |
-| `test_dsp` | 95 |
+| `test_dsp` | 102 |
 | `test_eval` | 103 |
 | `test_integration` | 27 |
 | `test_ntheory` | 107 |
@@ -82,11 +82,20 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
     `bayan_*` (`bayan_u64_powmod`, `bayan_json_{parse,key,value}`).
   - ✅ Trimmed the semi-public uncalled helpers `mod_mul`, `reg_alias_exact`,
     `eval_has_more` (the 2.2.4 dead-code audit flag).
-- **2.3.1** (this release) tracks the **Cyrius 6.3.10 toolchain bump** — pin
-  6.2.11 → 6.3.10, stdlib re-vendored. No re-batch, no source change, no
-  functional change; `dist/abaco.cyr` byte-identical to 2.3.0 bar the version
-  header. (6.3.x stdlib now ships `lib/tls.cyr` + `tls_native_*` — relevant to
-  the open currency-cache TLS item below, but not wired in this patch.)
+- **2.3.1** tracked the **Cyrius 6.3.10 toolchain bump** — pin 6.2.11 → 6.3.10,
+  stdlib re-vendored. No re-batch, no source change, no functional change;
+  `dist/abaco.cyr` byte-identical to 2.3.0 bar the version header. (6.3.x stdlib
+  now ships `lib/tls.cyr` + `tls_native_*` — relevant to the open currency-cache
+  TLS item below, but not wired in that patch.)
+- **2.3.2** (this release) fixes the **DSP dB conversion constants**. `DB_SCALE`
+  (20/ln10), `DB_EXP` (ln10/20), and `DB_GAIN_EXP` (ln10/40) had been encoded
+  from slightly-wrong f64 bit patterns (shared corrupted mantissa
+  `…764D5B4BCDB5`); `DB_SCALE * DB_EXP` = 0.99919, so the
+  `amplitude_to_db`/`db_to_amplitude` round trip drifted ~0.081% of |db| and
+  blew a 0.01 dB tolerance for |db| ≥ 20. Re-encoded to the correctly-rounded
+  values; added `test_db_roundtrip` (|db| up to 60). **`dist/abaco.cyr` is no
+  longer byte-identical to 2.3.0/2.3.1** — consumers (dhvani) must re-vendor.
+  A Cyrius-port encoding regression, not an f32→f64 issue.
 
 - **2.3.x still open** (external — needs consumer repos, not actionable from
   abaco alone): wire the first real consumers (Abacus, dhvani) to
