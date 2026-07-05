@@ -135,6 +135,28 @@ fn test_db() {
     return 0;
 }
 
+# Round trip amplitude_to_db(db_to_amplitude(db)) == db within 0.01 dB across a
+# wide range. Guards the DB_SCALE/DB_EXP encoding: the pre-2.3.2 constants had a
+# product of 0.99919 (not ~1.0), so the round trip drifted ~0.081% of |db| and
+# exceeded 0.01 dB for |db| >= 20 -- invisible to the small-|db| checks in
+# test_db but a real defect at mixing/mastering levels. |db|=60 is the anchor.
+fn test_db_roundtrip() {
+    var dbs = vec_new();
+    vec_push(dbs, f64_neg(f64_from(60))); vec_push(dbs, f64_neg(f64_from(20)));
+    vec_push(dbs, f64_neg(f64_from(6)));  vec_push(dbs, f64_from(0));
+    vec_push(dbs, f64_from(6));           vec_push(dbs, f64_from(20));
+    vec_push(dbs, f64_from(60));
+    var i = 0;
+    while (i < vec_len(dbs)) {
+        var db = vec_get(dbs, i);
+        var back = amplitude_to_db(db_to_amplitude(db));
+        # tol 10 thousandths = 0.01 dB (assert_f64_near scales by 1000)
+        assert_f64_near(back, db, 10, "db roundtrip");
+        i = i + 1;
+    }
+    return 0;
+}
+
 # ================================================================
 # MIDI tests
 # ================================================================
@@ -346,6 +368,7 @@ fn main() {
     test_trunc_fract_round();
     test_sign();
     test_db();
+    test_db_roundtrip();
     test_midi();
     test_time_constant();
     test_pan();
