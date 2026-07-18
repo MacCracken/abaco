@@ -25,7 +25,7 @@ math engine you can wrap any way you like, this is it.
 
 ## Quick start
 
-Requires the Cyrius toolchain pinned in `cyrius.cyml` (currently `6.3.10`).
+Requires the Cyrius toolchain pinned in `cyrius.cyml` (currently `6.4.66`).
 
 ```bash
 # Vendor the pinned stdlib into lib/ (a gitignored build artifact)

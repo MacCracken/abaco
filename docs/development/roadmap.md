@@ -95,6 +95,23 @@ Maintenance patch tracking the toolchain update. No functional change:
 - [x] Noted: 6.3.x stdlib now ships `lib/tls.cyr` + `tls_native_*` (feeds the
       open currency-cache TLS item below; not wired in this patch)
 
+### 2.3.3 — Cyrius 6.4.66 toolchain bump + error-enum namespacing ✅ (2026-07-17)
+
+Maintenance patch tracking the toolchain update, plus one lint-surfaced hygiene fix:
+
+- [x] Cyrius pin 6.3.10 → 6.4.66; stdlib re-vendored (`cyrius deps`)
+- [x] **No stdlib re-batch** — `[deps].stdlib` module list unchanged; all symbols
+      abaco uses resolve unchanged (6.4.x bundles grew internally only:
+      `bayan` +1106, `math` +246, `io` +157, …)
+- [x] **`EvalErr` enum namespaced `ERR_*` → `ABACO_ERR_*`** — clears the new
+      6.4.x `cyrlint` error-enum-namespace advisory (leaf libs must prefix
+      `<LIB>_ERR_*`). Behaviour-neutral; renamed across `src/eval.cyr`,
+      `tests/test_eval.tcyr`, `tests/test_integration.tcyr`, `fuzz/fuzz_eval.fcyr`
+- [x] Suite green (479 asserts); fuzz 3/3 (5000 iters); fmt/lint/vet clean; DCE
+      build passes (353,408 B, ~4.3 KB smaller than 6.3.10); benchmarks
+      flat-to-faster; `dist/abaco.cyr` regenerated (carries `ABACO_ERR_*`,
+      **not** byte-identical to 2.3.2 — consumers must re-vendor)
+
 ### Still open
 
 - [ ] Wire the first real consumers to `dist/abaco.cyr` (Abacus, dhvani)

@@ -109,7 +109,7 @@ fn main() {
         var r3 = Evaluator_eval(ev, e3);
         var err3 = eval_err(ev);
 
-        if (err1 != ERR_NONE || err2 != ERR_NONE || err3 != ERR_NONE) {
+        if (err1 != ABACO_ERR_NONE || err2 != ABACO_ERR_NONE || err3 != ABACO_ERR_NONE) {
             println("FAIL: synthesized expr should parse");
             sys_exit(1);
         }

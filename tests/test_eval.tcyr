@@ -20,7 +20,7 @@ include "src/eval.cyr"
 fn ev(expr) {
     var e = Evaluator_new();
     var r = Evaluator_eval(e, expr);
-    assert_eq(eval_err(e), ERR_NONE, expr);
+    assert_eq(eval_err(e), ABACO_ERR_NONE, expr);
     return r;
 }
 
@@ -126,7 +126,7 @@ fn test_variables() {
     var e = Evaluator_new();
     Evaluator_set_variable(e, "x", f64_from(42));
     var r = Evaluator_eval(e, "x");
-    assert_eq(eval_err(e), ERR_NONE, "var no err");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "var no err");
     assert_eq(f64_to(r), 42, "var x=42");
     Evaluator_set_variable(e, "y", f64_from(10));
     r = Evaluator_eval(e, "x + y");
@@ -143,10 +143,10 @@ fn test_percent() {
 fn test_errors() {
     var e = Evaluator_new();
     Evaluator_eval(e, "1 / 0");
-    assert_eq(eval_err(e), ERR_DIV_ZERO, "div by zero");
+    assert_eq(eval_err(e), ABACO_ERR_DIV_ZERO, "div by zero");
     e = Evaluator_new();
     Evaluator_eval(e, "");
-    assert_eq(eval_err(e), ERR_INVALID, "empty expr");
+    assert_eq(eval_err(e), ABACO_ERR_INVALID, "empty expr");
     return 0;
 }
 
@@ -164,7 +164,7 @@ fn test_depth_boundary() {
     while (i < depth) { store8(expr + depth + 1 + i, 41); i = i + 1; }
     store8(expr + depth * 2 + 1, 0);
     Evaluator_eval(ev, expr);
-    assert_eq(eval_err(ev), ERR_NONE, "depth 200 accepted");
+    assert_eq(eval_err(ev), ABACO_ERR_NONE, "depth 200 accepted");
 
     # 512-deep should hit the MAX_DEPTH=256 cap and error out cleanly.
     depth = 512;
@@ -177,7 +177,7 @@ fn test_depth_boundary() {
     while (i < depth) { store8(expr + depth + 1 + i, 41); i = i + 1; }
     store8(expr + depth * 2 + 1, 0);
     Evaluator_eval(ev, expr);
-    assert(eval_err(ev) != ERR_NONE, "depth 512 rejected");
+    assert(eval_err(ev) != ABACO_ERR_NONE, "depth 512 rejected");
     return 0;
 }
 
@@ -186,7 +186,7 @@ fn test_arity_cap() {
     var ev = Evaluator_new();
     # mean(1,2,...,8) should work (under cap).
     Evaluator_eval(ev, "mean(1,2,3,4,5,6,7,8)");
-    assert_eq(eval_err(ev), ERR_NONE, "mean with 8 args works");
+    assert_eq(eval_err(ev), ABACO_ERR_NONE, "mean with 8 args works");
 
     # Synthesize a call with 33 args — must be rejected.
     # "mean(1,1,1,...,1)" with 33 ones.
@@ -203,7 +203,7 @@ fn test_arity_cap() {
     store8(expr + pos, 0);
     ev = Evaluator_new();
     Evaluator_eval(ev, expr);
-    assert(eval_err(ev) != ERR_NONE, "33-arg call rejected");
+    assert(eval_err(ev) != ABACO_ERR_NONE, "33-arg call rejected");
     return 0;
 }
 
@@ -216,7 +216,7 @@ fn test_exponent_clamp() {
     var r = Evaluator_eval(ev, "1e9999999999");
     # Parser should complete and produce a finite-or-inf result, not
     # hang or overflow exp_val into a negative value.
-    assert_eq(eval_err(ev), ERR_NONE, "pathological exponent parses");
+    assert_eq(eval_err(ev), ABACO_ERR_NONE, "pathological exponent parses");
     # Normal scientific notation still works.
     r = Evaluator_eval(ev, "1.5e3");
     assert_eq(f64_to(r), 1500, "1.5e3 = 1500");

@@ -5,6 +5,49 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.3] — 2026-07-17
+
+**Cyrius 6.4.66 toolchain bump + error-enum namespacing.** A maintenance patch
+tracking the toolchain update, plus one hygiene fix surfaced by the 6.4.x lint.
+**No stdlib re-batch** — unlike 2.2.5, the 6.4.x stdlib keeps the same module
+layout, so abaco's `[deps].stdlib` list is unchanged and no source symbols
+moved; the 6.4.x bundles only grew internally. The 6.4.x `cyrlint` adds an
+error-enum-namespace advisory (proposal `2026-07-11-error-enum-namespace-lint-gate`):
+a leaf library must prefix its error enum (`<LIB>_ERR_*`) so flat enum constants
+don't collide across libraries. abaco's `EvalErr` members were bare `ERR_*`; they
+are now `ABACO_ERR_*`. Suite green at **479 asserts, 0 failures**; fuzz 3/3 (5000
+iterations each); fmt/lint/vet clean; clean-from-scratch DCE build passes;
+benchmarks flat-to-faster (no regression).
+
+### Changed
+
+- **Toolchain pin 6.3.10 → 6.4.66** (`cyrius.cyml [package].cyrius`).
+- **Stdlib re-vendored at 6.4.66** (`cyrius deps`). The module list in
+  `[deps].stdlib` is unchanged — all 18 modules abaco depends on still exist and
+  expose the same API. The 6.4.x bundles grew internally (e.g. `bayan`
+  +1106 lines, `math` +246, `io` +157, `syscalls` +53, `alloc` +39, `net` +22,
+  `fnptr` +17, `ganita` +7); the 10 unchanged declared deps (`string`, `fmt`,
+  `vec`, `str`, `tagged`, `hashmap`, `assert`, `bench`, `args`, `http`) are
+  byte-identical. The symbols abaco calls (`bayan_u64_powmod`,
+  `bayan_json_{parse,key,value}`, the `ganita` extended transcendentals /
+  combinatorics) resolve unchanged.
+- **`EvalErr` error enum namespaced `ERR_*` → `ABACO_ERR_*`** — `ERR_NONE`,
+  `ERR_DIV_ZERO`, `ERR_UNKNOWN_FN`, `ERR_UNKNOWN_VAR`, `ERR_PARSE`, `ERR_MATH`,
+  `ERR_INVALID` are now `ABACO_ERR_*`. Clears the new 6.4.x `cyrlint`
+  error-enum-namespace advisory (a leaf lib must prefix its error enum so the
+  flat enum constant doesn't collide with the sakshi base logger's reserved
+  `ERR_*` or another library's). Behaviour-neutral: the underlying integer
+  values (0–6) and all control flow are identical; only the identifiers change.
+  Callers comparing `eval_err(e)` against these constants must use the new
+  names (safe: no live bundle consumer is wired yet).
+- **Smoke binary `build/abaco`** ≈ 353,408 B — down ~4.3 KB from 357,736 B at
+  2.3.1/6.3.10. The 6.4.x stdlib carries more code that DCE NOPs (1134
+  unreachable fns, 286,827 B NOPed vs 1072/271,671 B at 6.3.10) but the resident
+  binary is marginally smaller.
+- **`dist/abaco.cyr` regenerated** — **no longer byte-identical to 2.3.2**; the
+  bundle now carries the `ABACO_ERR_*` names (and the 2.3.3 version header).
+  Consumers must re-vendor the bundle.
+
 ## [2.3.2] — 2026-07-05
 
 **dB conversion constant fix.** The DSP decibel constants `DB_SCALE` (20/ln10),

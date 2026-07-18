@@ -34,7 +34,7 @@ fn test_nl_to_eval_to_history() {
     assert_eq(pq_kind(q), PQ_CALCULATION, "kind = calc");
 
     var result = Evaluator_eval(ev, pq_s1(q));
-    assert_eq(eval_err(ev), ERR_NONE, "eval clean");
+    assert_eq(eval_err(ev), ABACO_ERR_NONE, "eval clean");
     assert_eq(f64_to(result), 14, "14");
 
     CalcHistory_push(h, pq_s1(q), "14", "2026-04-14T00:00:00Z");
@@ -48,7 +48,7 @@ fn test_percent_of_end_to_end() {
     assert(q != 0, "pct parsed");
     var ev = Evaluator_new();
     var r = Evaluator_eval(ev, pq_s1(q));
-    assert_eq(eval_err(ev), ERR_NONE, "eval pct clean");
+    assert_eq(eval_err(ev), ABACO_ERR_NONE, "eval pct clean");
     assert_eq(f64_to(r), 34, "15% of 230 = 34 (trunc)");
     return 0;
 }
