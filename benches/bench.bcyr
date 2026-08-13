@@ -119,7 +119,7 @@ fn _bench_clamp() {
 }
 
 fn _bench_round() {
-    f64_round(f64_div(f64_from(37), f64_from(10)));
+    f64_round_half_away(f64_div(f64_from(37), f64_from(10)));
     return 0;
 }
 
@@ -372,7 +372,7 @@ fn _bench_batch_round() {
     var i = 0;
     while (i < BATCH_SIZE) {
         var v = f64_mul(load64(_batch_buf + i * 8), f64_from(100));
-        f64_round(v);
+        f64_round_half_away(v);
         i = i + 1;
     }
     return 0;

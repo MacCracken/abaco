@@ -41,12 +41,18 @@ jobs:
 
       - name: Lint
         # src is warning-clean as of 2.2.1; any new warning fails the gate.
+        # Cyrius 6.5.x added an untracked-deferral advisory that prints as
+        # "deferral line N: ..." rather than "warn ...", so it needs its own
+        # match or it slips through the gate silently (see CHANGELOG 2.3.4).
         run: |
           fail=0
           for f in src/*.cyr; do
             out=$(cyrius lint "$f" 2>&1 || true)
             if echo "$out" | grep -qE '^\s*warn '; then
               echo "$out"; echo "::error::lint warnings in $f"; fail=1
+            fi
+            if echo "$out" | grep -qE '^\s*deferral line '; then
+              echo "$out"; echo "::error::untracked deferrals in $f — cite a CHANGELOG/roadmap/docs/issue reference on the marker line"; fail=1
             fi
           done
           [ $fail -eq 0 ] || exit 1

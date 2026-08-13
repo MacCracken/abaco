@@ -112,8 +112,66 @@ Maintenance patch tracking the toolchain update, plus one lint-surfaced hygiene 
       flat-to-faster; `dist/abaco.cyr` regenerated (carries `ABACO_ERR_*`,
       **not** byte-identical to 2.3.2 — consumers must re-vendor)
 
+### 2.3.4 — Cyrius 6.5.20 toolchain bump + evaluator hardening ✅ (2026-08-13)
+
+Maintenance patch tracking the toolchain update — the **first bump in the 2.3.x
+arc that was not source-neutral**. 6.5.x broke the build twice:
+
+- [x] Cyrius pin 6.4.66 → 6.5.20; stdlib re-vendored (`cyrius deps`)
+- [x] **No stdlib re-batch** — `[deps].stdlib` module list unchanged; all 18
+      declared modules exist at 6.5.20 (bundles grew internally: `bayan` +774,
+      `syscalls_x86_64_agnos` +442, `alloc` +241, `io` +203, `vec` +187, …)
+- [x] **`f64_round` → `f64_round_half_away`** — 6.5.x *reserved* the name, which
+      exposed that the intrinsic had been silently shadowing abaco's hand-rolled
+      version since 6.2.11 (verified against 6.2.11/6.3.10/6.4.66: all answer
+      `round(2.5) = 2`). So 2.3.3 shipped ties-to-even while its source, tests
+      and `docs/sources.md` all said ties-away-from-zero. The rename restores the
+      documented behaviour — **`round()` changes for exact-`.5` inputs** — and
+      `test_round_ties_away` pins both modes
+- [x] **Fuzz harnesses fixed for the new call-arity enforcement** — bare
+      `print(cstr)` no longer compiles against `lib/io.cyr`'s `print(msg, len)`;
+      added a local `_fz_puts` helper to all three harnesses
+- [x] **Deferral-comment lint gate** — `cyrlint` requires a
+      `CHANGELOG`/`roadmap`/`docs/`/`issue` cross-reference on the same line as
+      any deferral marker; the two hoosh follow-ups in `src/ai.cyr` now point here.
+      **Not a 6.5.x addition** — 6.3.10 and 6.4.66 flag the 2.3.3 tree identically;
+      it slipped through 2.3.1–2.3.3 because CI matched only `warn ` lines and
+      `cyrius lint src/*.cyr` lints just the first path. Both holes closed.
+- [x] `test_round_ties_away` added — pins both rounding modes (479 → 486 asserts)
+- [x] **Four pre-existing evaluator defects fixed** from the 2026-08-13 audit
+      ([`../audit/2026-08-13-audit.md`](../audit/2026-08-13-audit.md)): the
+      `tokenize()` out-of-bounds heap write (silently wrong answers from ~343
+      terms), the unbounded `eval_pow` exponent loop (~81 years from 20 bytes),
+      unary/power recursion escaping `ABACO_MAX_DEPTH` (native stack overflow),
+      and an uncapped `totient()` domain. All reproduced first; all have
+      regression tests
+- [x] **Parser limits namespaced** `ABACO_MAX_TOKENS` / `ABACO_MAX_DEPTH` —
+      `MAX_TOKENS` collided with stdlib `patra.cyr`, and duplicate globals only
+      warn, so a consumer could silently have got 128 instead of 512
+- [x] **`fuzz_eval` extended to reach these paths** — 48 → 1200 byte cap, `^`/`!`
+      promoted to biased bytes, targeted adversarial shapes every 4th iteration.
+      Hangs against the 2.3.3 evaluator; passes 20,000 iters against 2.3.4
+- [x] Suite green (509 asserts, was 479); fuzz 3/3 (20,000 iters); fmt/lint/vet
+      clean; DCE build passes (395,688 B, ~42 KB larger than 6.4.66);
+      `dist/abaco.cyr` regenerated (117,233 B — **not** byte-identical to 2.3.3;
+      consumers must re-vendor, and any consumer calling the bundle's
+      `f64_round` now gets the ties-to-even builtin instead)
+
 ### Still open
 
+- [ ] **`parse_number` unguarded i64 accumulators** (audit M-3, 2026-08-13) —
+      `int_part` / `frac_part` / `frac_div` are multiplied by 10 per digit with
+      no overflow guard, so ~19+ digit literals wrap to negative values. Left
+      out of 2.3.4 deliberately: it is a numeric-accuracy defect rather than a
+      memory-safety one, and the correct fix (f64 accumulation with a shrinking
+      scale, as `lib/math.cyr` does) interacts with the exactness `eval_pow`'s
+      fast path relies on. Wants a focused change, not a toolchain-bump rider.
+- [ ] **Fuzz harness for `src/ai.cyr`** (audit P-1) — the NL parser, calc
+      history and currency-rates JSON path have no harness at all.
+- [ ] Live currency-rate fetch via **hoosh** — `src/ai.cyr`'s `CurrencyCache` is
+      a pure rates cache today (`set_rates` + `convert`); the live HTTP path
+      needs `[deps.hoosh]` and a JSON parser for nested rate maps. (Referenced
+      from the `src/ai.cyr` header and `CurrencyCache` comments.)
 - [ ] Wire the first real consumers to `dist/abaco.cyr` (Abacus, dhvani)
 - [ ] Audit consumers for duplicated math that should use `abaco::dsp` —
       dhvani (first target), shruti, jalwa, tarang

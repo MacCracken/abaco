@@ -166,7 +166,7 @@ fn test_depth_boundary() {
     Evaluator_eval(ev, expr);
     assert_eq(eval_err(ev), ABACO_ERR_NONE, "depth 200 accepted");
 
-    # 512-deep should hit the MAX_DEPTH=256 cap and error out cleanly.
+    # 512-deep should hit the ABACO_MAX_DEPTH=256 cap and error out cleanly.
     depth = 512;
     ev = Evaluator_new();
     expr = alloc(depth * 2 + 2);
@@ -223,6 +223,168 @@ fn test_exponent_clamp() {
     return 0;
 }
 
+# 2.3.4 audit: tokenize() wrote past the ABACO_MAX_TOKENS-sized array with no
+# bound check. Past ~343 terms the overflow collided with the bump allocator's
+# per-number scratch cells and results went SILENTLY WRONG (a 343-term sum of
+# ones returned 342); far enough out it SIGSEGVs. Overflow must now be a clean
+# ABACO_ERR_PARSE, and everything under the cap must still be exact.
+fn test_token_cap() {
+    # 200 terms of "1+1+...+1" = 399 tokens, comfortably under the 512 cap.
+    var terms = 200;
+    var expr = alloc(terms * 2 + 2);
+    var pos = 0;
+    var i = 0;
+    while (i < terms) {
+        if (i > 0) { store8(expr + pos, 43); pos = pos + 1; }   # '+'
+        store8(expr + pos, 49); pos = pos + 1;                  # '1'
+        i = i + 1;
+    }
+    store8(expr + pos, 0);
+    var e = Evaluator_new();
+    var r = Evaluator_eval(e, expr);
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "200-term sum parses");
+    assert_eq(f64_to(r), 200, "200-term sum is exact (was silently wrong)");
+
+    # 256 terms = 511 tokens: the largest input that fits under the 512 cap.
+    terms = 256;
+    expr = alloc(terms * 2 + 2);
+    pos = 0;
+    i = 0;
+    while (i < terms) {
+        if (i > 0) { store8(expr + pos, 43); pos = pos + 1; }
+        store8(expr + pos, 49); pos = pos + 1;
+        i = i + 1;
+    }
+    store8(expr + pos, 0);
+    e = Evaluator_new();
+    r = Evaluator_eval(e, expr);
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "256-term sum parses (511 tokens)");
+    assert_eq(f64_to(r), 256, "256-term sum is exact at the cap boundary");
+
+    # 257 terms = 513 tokens: first input over the cap.
+    terms = 257;
+    expr = alloc(terms * 2 + 2);
+    pos = 0;
+    i = 0;
+    while (i < terms) {
+        if (i > 0) { store8(expr + pos, 43); pos = pos + 1; }
+        store8(expr + pos, 49); pos = pos + 1;
+        i = i + 1;
+    }
+    store8(expr + pos, 0);
+    e = Evaluator_new();
+    Evaluator_eval(e, expr);
+    assert_eq(eval_err(e), ABACO_ERR_PARSE, "257-term sum is a parse error");
+
+    # 343 terms — where the old OOB write first corrupted results (returned
+    # 342). Now rejected cleanly rather than silently answering wrong.
+    terms = 343;
+    expr = alloc(terms * 2 + 2);
+    pos = 0;
+    i = 0;
+    while (i < terms) {
+        if (i > 0) { store8(expr + pos, 43); pos = pos + 1; }
+        store8(expr + pos, 49); pos = pos + 1;
+        i = i + 1;
+    }
+    store8(expr + pos, 0);
+    e = Evaluator_new();
+    Evaluator_eval(e, expr);
+    assert_eq(eval_err(e), ABACO_ERR_PARSE, "343-term input rejected, not corrupted");
+
+    # Same via eval_partial, which tokenizes on its own path.
+    e = Evaluator_new();
+    Evaluator_eval_partial(e, expr);
+    assert_eq(eval_err(e), ABACO_ERR_PARSE, "over-cap partial is a parse error");
+    return 0;
+}
+
+# 2.3.4 audit: eval_pow's exact path looped exp times with no cap, so
+# "2^1000000000000000000" was ~81 years of work from 20 bytes of input. Past
+# ABACO_POW_EXACT_MAX the O(1) exp2/log2 path gives the same answer.
+fn test_pow_exponent_cap() {
+    var e = Evaluator_new();
+    # Exactness under the cap is why the fast path exists — keep proving it.
+    assert_eq(f64_to(Evaluator_eval(e, "2^10")), 1024, "2^10 exact");
+    assert_eq(f64_to(Evaluator_eval(e, "2^62")), 4611686018427387904, "2^62 exact");
+    assert_eq(f64_to(Evaluator_eval(e, "3^5")), 243, "3^5 exact");
+    assert_eq(f64_to(Evaluator_eval(e, "0-2^3")), 0 - 8, "negative base odd exp");
+
+    # Over the cap: must return promptly. +Inf is the correct f64 answer.
+    var r = Evaluator_eval(e, "2^1000000000000000000");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "huge exponent evaluates");
+    assert_eq(r, 0x7FF0000000000000, "2^1e18 = +Inf, promptly");
+
+    # ** spelling reaches the same path.
+    r = Evaluator_eval(e, "2**1000000000000000000");
+    assert_eq(r, 0x7FF0000000000000, "2**1e18 = +Inf, promptly");
+
+    # pow() spelling too.
+    r = Evaluator_eval(e, "pow(2,1000000000000000000)");
+    assert_eq(r, 0x7FF0000000000000, "pow(2,1e18) = +Inf, promptly");
+
+    # |base| < 1 underflows to 0 rather than spinning.
+    r = Evaluator_eval(e, "0.5^1000000000000000000");
+    assert_eq(f64_to(r), 0, "0.5^1e18 = 0, promptly");
+    return 0;
+}
+
+# 2.3.4 audit: ABACO_MAX_DEPTH only guarded the paren/arg sites, so unary-sign
+# chains and right-associative '^' chains recursed unbounded into a native
+# stack overflow. Both now charge depth.
+fn test_unary_and_power_depth() {
+    # 200 leading minuses: under the cap, and an even count means +1.
+    var n = 200;
+    var expr = alloc(n + 3);
+    var i = 0;
+    while (i < n) { store8(expr + i, 45); i = i + 1; }   # '-'
+    store8(expr + n, 49);                                 # '1'
+    store8(expr + n + 1, 0);
+    var e = Evaluator_new();
+    var r = Evaluator_eval(e, expr);
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "200 unary minuses accepted");
+    assert_eq(f64_to(r), 1, "even minus count = +1");
+
+    # 5000 minuses: must be a clean parse error, not a stack overflow.
+    n = 5000;
+    expr = alloc(n + 3);
+    i = 0;
+    while (i < n) { store8(expr + i, 45); i = i + 1; }
+    store8(expr + n, 49);
+    store8(expr + n + 1, 0);
+    e = Evaluator_new();
+    Evaluator_eval(e, expr);
+    assert_eq(eval_err(e), ABACO_ERR_PARSE, "5000 unary minuses rejected");
+
+    # Right-associative '^' chain: "2^2^2^...^1", 300 operators.
+    n = 300;
+    expr = alloc(n * 2 + 4);
+    var pos = 0;
+    i = 0;
+    while (i < n) {
+        store8(expr + pos, 50); pos = pos + 1;           # '2'
+        store8(expr + pos, 94); pos = pos + 1;           # '^'
+        i = i + 1;
+    }
+    store8(expr + pos, 49); pos = pos + 1;               # '1'
+    store8(expr + pos, 0);
+    e = Evaluator_new();
+    Evaluator_eval(e, expr);
+    assert_eq(eval_err(e), ABACO_ERR_PARSE, "300-deep '^' chain rejected");
+    return 0;
+}
+
+# 2.3.4 audit: the evaluator's totient(n) had no domain cap over an O(sqrt(n))
+# trial-division loop, unlike factorial (170) and fibonacci (92).
+fn test_totient_cap() {
+    var e = Evaluator_new();
+    assert_eq(f64_to(Evaluator_eval(e, "totient(36)")), 12, "totient(36) = 12");
+    assert_eq(f64_to(Evaluator_eval(e, "totient(1000000)")), 400000, "totient(1e6)");
+    Evaluator_eval(e, "totient(999999999999999)");
+    assert_eq(eval_err(e), ABACO_ERR_MATH, "totient over cap rejected");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco eval tests ===");
@@ -241,6 +403,10 @@ fn main() {
     test_depth_boundary();
     test_arity_cap();
     test_exponent_clamp();
+    test_token_cap();
+    test_pow_exponent_cap();
+    test_unary_and_power_depth();
+    test_totient_cap();
     assert_summary();
     return 0;
 }

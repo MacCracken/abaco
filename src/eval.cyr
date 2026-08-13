@@ -34,10 +34,24 @@ enum EvalErr {
 # For NUMBER: value is f64 bits
 # For IDENT: value is pointer to null-terminated string
 
-var MAX_TOKENS = 512;
+var ABACO_MAX_TOKENS = 512;
+
+# tokenize() sentinel: input needs more than ABACO_MAX_TOKENS tokens. Negative so it
+# can never collide with a real token count; callers map it to ABACO_ERR_PARSE.
+var ABACO_TOK_OVERFLOW = (0 - 1);
+
+# Domain cap for the evaluator's `totient(n)`. The ntheory implementation
+# trial-divides to sqrt(n), so this bounds that loop at ~10^6 iterations.
+var ABACO_TOTIENT_MAX = 1000000000000;
+
+# Largest exponent eval_pow will resolve by repeated multiplication. f64 tops
+# out at ~1.8e308 (2^1024) and bottoms out at ~5e-324, so no base can still be
+# changing after 1024 squarings — beyond this the exact path and the exp2/log2
+# path agree, and only the exact path costs O(exp). See eval_pow.
+var ABACO_POW_EXACT_MAX = 1024;
 
 # Token array: each token is 16 bytes (type + value)
-fn tok_alloc() { return alloc(MAX_TOKENS * 16); }
+fn tok_alloc() { return alloc(ABACO_MAX_TOKENS * 16); }
 fn tok_type(toks, i) { return load64(toks + i * 16); }
 fn tok_val(toks, i) { return load64(toks + i * 16 + 8); }
 fn tok_set(toks, i, typ, val) {
@@ -197,14 +211,21 @@ fn parse_number(input, start, len, out_end) {
     return result;
 }
 
-# Tokenize input string into token array
-# Returns token count, tokens stored in toks array
+# Tokenize input string into token array.
+# Returns the token count, or ABACO_TOK_OVERFLOW when the input needs more than
+# ABACO_MAX_TOKENS tokens. tok_alloc() reserves exactly ABACO_MAX_TOKENS * 16 bytes, so
+# writing token ABACO_MAX_TOKENS would run off the end of the allocation and corrupt
+# whatever the bump allocator handed out next (in practice the per-number
+# `nend` scratch cells, which silently changed results from ~343 terms on).
+# Callers map ABACO_TOK_OVERFLOW to ABACO_ERR_PARSE.
 fn tokenize(input, toks) {
     var len = strlen(input);
     var i = 0;
     var nt = 0;
 
     while (i < len) {
+        # Bound EVERY write: one loop pass appends at most one token.
+        if (nt >= ABACO_MAX_TOKENS) { return ABACO_TOK_OVERFLOW; }
         var c = load8(input + i);
         if (is_space(c) == 1) { i = i + 1; }
         elif (c == 43) { tok_set(toks, nt, TOK_PLUS, 0); nt = nt + 1; i = i + 1; }
@@ -295,15 +316,20 @@ fn implicit_mul(toks, nt) {
     }
     if (need == 0) { return nt; }
 
-    # Build new array
+    # Build new array. Insertion can add up to one star per token, so `ni` can
+    # outrun ABACO_MAX_TOKENS even when `nt` did not — this needs its own bound, not
+    # the caller's. Overflowing here would both write past newtoks and make the
+    # memcpy below copy an oversized run back over `toks`.
     var newtoks = tok_alloc();
     var ni = 0;
     i = 0;
     while (i < nt) {
+        if (ni >= ABACO_MAX_TOKENS) { return ABACO_TOK_OVERFLOW; }
         tok_set(newtoks, ni, tok_type(toks, i), tok_val(toks, i));
         ni = ni + 1;
         if (i + 1 < nt) {
             if (needs_star(toks, nt, i) == 1) {
+                if (ni >= ABACO_MAX_TOKENS) { return ABACO_TOK_OVERFLOW; }
                 tok_set(newtoks, ni, TOK_STAR, 0);
                 ni = ni + 1;
             }
@@ -324,7 +350,7 @@ fn implicit_mul(toks, nt) {
 # (SandboxJS GHSA-8pfc-jjgw-6g26, CPython #32758 / #95185 class).
 # 256 levels is ~64 KB of C stack frames at ~256 bytes/frame — well below
 # any platform's default limit while still comfortable for human input.
-var MAX_DEPTH = 256;
+var ABACO_MAX_DEPTH = 256;
 
 # Helper: check if current token matches type
 fn eval_at(e, typ) {
@@ -345,7 +371,7 @@ var CONST_TAU = F64_TAU;
 # Forward declarations handled by Cyrius's forward-call support
 
 fn parse_expr(e) {
-    if (eval_depth(e) >= MAX_DEPTH) { eval_set_err(e, ABACO_ERR_PARSE); return f64_from(0); }
+    if (eval_depth(e) >= ABACO_MAX_DEPTH) { eval_set_err(e, ABACO_ERR_PARSE); return f64_from(0); }
     var left = parse_term(e);
     if (eval_err(e) != ABACO_ERR_NONE) { return left; }
     while (eval_pos(e) < eval_ntoks(e)) {
@@ -432,11 +458,22 @@ fn eval_pow(base, exp) {
     var zero = f64_from(0);
     if (f64_eq(exp, zero) == 1) { return f64_from(1); }
     if (f64_eq(base, zero) == 1) { return zero; }
-    # For integer exponents, use repeated multiplication for precision
+    # For integer exponents, use repeated multiplication for precision.
+    #
+    # The loop bound comes straight from user text, so it MUST be capped: the
+    # exponent in `2^1000000000000000000` is 19 bytes of input driving 10^18
+    # iterations (~81 years at the measured 2.57 ns/iteration) — an
+    # algorithmic-complexity DoS, the same class the Cyrius stdlib closed in
+    # lib/math.cyr at 6.4.69 by clamping its own decimal-exponent apply loop.
+    #
+    # ABACO_POW_EXACT_MAX is behaviour-preserving, not a truncation: |base| >= 2 hits
+    # +Inf by 2^1024 and |base| <= 0.5 hits 0, so past that every extra
+    # multiplication is provably a no-op. Anything larger falls through to the
+    # O(1) exp2/log2 path below, which returns the same +Inf / 0 / 1.0.
     var exp_i = f64_to(exp);
     var exp_back = f64_from(exp_i);
     if (f64_eq(exp, exp_back) == 1) {
-        if (exp_i >= 0) {
+        if (exp_i >= 0 && exp_i <= ABACO_POW_EXACT_MAX) {
             var result = f64_from(1);
             var i = 0;
             while (i < exp_i) {
@@ -477,24 +514,41 @@ fn parse_power(e) {
         }
         base = result;
     }
+    # `^` is right-associative, so a^b^c^... recurses once per operator and
+    # needs depth accounting for the same reason parse_unary does.
     if (eval_at(e, TOK_POWER) == 1) {
+        if (eval_depth(e) >= ABACO_MAX_DEPTH) {
+            eval_set_err(e, ABACO_ERR_PARSE);
+            return f64_from(0);
+        }
         eval_advance(e);
+        eval_set_depth(e, eval_depth(e) + 1);
         var exp = parse_power(e);
+        eval_set_depth(e, eval_depth(e) - 1);
+        if (eval_err(e) != ABACO_ERR_NONE) { return base; }
         return eval_pow(base, exp);
     }
     return base;
 }
 
+# Unary +/- chains recurse once per sign, so they need the same ABACO_MAX_DEPTH
+# accounting parse_expr does. Without it `----...--1` recursed unbounded and
+# overflowed the native stack — the paren/arg sites were the only places
+# charging depth, which left `-` and `^` chains entirely unbounded.
 fn parse_unary(e) {
     if (eval_pos(e) < eval_ntoks(e)) {
         var t = tok_type(eval_toks(e), eval_pos(e));
-        if (t == TOK_MINUS) {
+        if (t == TOK_MINUS || t == TOK_PLUS) {
+            if (eval_depth(e) >= ABACO_MAX_DEPTH) {
+                eval_set_err(e, ABACO_ERR_PARSE);
+                return f64_from(0);
+            }
             eval_advance(e);
-            return f64_neg(parse_unary(e));
-        }
-        if (t == TOK_PLUS) {
-            eval_advance(e);
-            return parse_unary(e);
+            eval_set_depth(e, eval_depth(e) + 1);
+            var inner = parse_unary(e);
+            eval_set_depth(e, eval_depth(e) - 1);
+            if (t == TOK_MINUS) { return f64_neg(inner); }
+            return inner;
         }
     }
     return parse_primary(e);
@@ -662,7 +716,7 @@ fn call_function(e, name, args, nargs) {
         if (streq(name, "abs") == 1) { return f64_abs(a); }
         if (streq(name, "ceil") == 1) { return f64_ceil(a); }
         if (streq(name, "floor") == 1) { return f64_floor(a); }
-        if (streq(name, "round") == 1) { return f64_round(a); }
+        if (streq(name, "round") == 1) { return f64_round_half_away(a); }
         if (streq(name, "exp") == 1) { return f64_exp(a); }
         # Inverse trig — stdlib math.cyr (Cyrius 4.8.5+).
         if (streq(name, "asin") == 1) { return f64_asin(a); }
@@ -717,6 +771,12 @@ fn call_function(e, name, args, nargs) {
         if (streq(name, "totient") == 1) {
             var n = f64_to(a);
             if (n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
+            # totient() trial-divides to sqrt(n), so an unbounded n is an
+            # attacker-controlled O(sqrt(n)) loop. Cap the domain the way
+            # `factorial` (n > 170) and `fibonacci` (n > 92) already do; 10^12
+            # keeps the loop under ~10^6 iterations and covers any realistic
+            # calculator input.
+            if (n > ABACO_TOTIENT_MAX) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             return f64_from(totient(n));
         }
         var is_fib = 0;
@@ -776,6 +836,11 @@ fn Evaluator_eval(e, expr) {
     eval_set_err(e, ABACO_ERR_NONE);
     eval_set_depth(e, 0);
     var nt = tokenize(expr, toks);
+    if (nt == ABACO_TOK_OVERFLOW) {
+        eval_set_ntoks(e, 0);
+        eval_set_err(e, ABACO_ERR_PARSE);
+        return f64_from(0);
+    }
     eval_set_ntoks(e, nt);
     if (nt == 0) { eval_set_err(e, ABACO_ERR_INVALID); return f64_from(0); }
     var result = parse_expr(e);
@@ -793,6 +858,11 @@ fn Evaluator_eval_partial(e, expr) {
     eval_set_err(e, ABACO_ERR_NONE);
     eval_set_depth(e, 0);
     var nt = tokenize(expr, toks);
+    if (nt == ABACO_TOK_OVERFLOW) {
+        eval_set_ntoks(e, 0);
+        eval_set_err(e, ABACO_ERR_PARSE);
+        return f64_from(0);
+    }
     if (nt == 0) { eval_set_err(e, ABACO_ERR_INVALID); return f64_from(0); }
 
     # Try full expression first

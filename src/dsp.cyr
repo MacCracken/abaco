@@ -70,10 +70,16 @@ fn f64_rms2(a, b) {
 # f64_hypot, f64_trunc, f64_fract, f64_sign — now provided by stdlib math.cyr
 # (Cyrius 4.10.2+). Removed hand-rolled duplicates.
 
-# -- Round to nearest (half away from zero) --
-# round(x) = floor(x + 0.5)
-# Not yet in stdlib — keep hand-rolled.
-fn f64_round(x) {
+# -- Round to nearest, ties away from zero --
+# round(x) = floor(x + 0.5) for x >= 0, ceil(x - 0.5) for x < 0.
+#
+# Cyrius 6.5.x made `f64_round` a compiler builtin, and the builtin rounds
+# ties to EVEN (round(2.5) = 2, round(-2.5) = -2) per the IEEE-754 default.
+# abaco keeps ties-away-from-zero (round(2.5) = 3) because that is what the
+# expression evaluator's user-facing `round()` has always done and what a
+# desk calculator is expected to do; the name carries the tie rule so the two
+# can never be confused. See test_round_ties_away.
+fn f64_round_half_away(x) {
     var half = f64_div(f64_from(1), f64_from(2));
     var zero = f64_from(0);
     if (f64_lt(x, zero) == 1) {
@@ -411,7 +417,7 @@ var DSP_C0_FREQ = 0x4030_B400_0000_0000;   # 16.3516 Hz — MIDI 12
 fn _freq_semis_from_c0(freq) {
     if (f64_gt(freq, f64_from(0)) == 0) { return 0 - 1; }
     var semis = f64_mul(DSP_SEMITONES, f64_log2(f64_div(freq, DSP_C0_FREQ)));
-    return f64_to(f64_round(semis));
+    return f64_to(f64_round_half_away(semis));
 }
 
 # freq_to_pitch_class: 0..11 for C..B, or -1 when freq <= 0.

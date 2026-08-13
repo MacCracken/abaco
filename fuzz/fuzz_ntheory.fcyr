@@ -11,6 +11,13 @@ include "src/ntheory.cyr"
 
 var _fz_state = 1234567;
 
+# Newline-free stdout write. Cyrius 6.5.x enforces call arity, and the stdlib
+# `print` is `print(msg, len)` — a bare `print(cstr)` no longer compiles.
+fn _fz_puts(s) {
+    print(s, strlen(s));
+    return 0;
+}
+
 fn _fz_rand() {
     _fz_state = _fz_state * 6364136223846793005 + 1442695040888963407;
     return _fz_state;
@@ -70,9 +77,9 @@ fn main() {
             if (n < 1000000) {
                 var tp = trial_prime(n);
                 if (ip != tp) {
-                    print("DIVERGENCE n="); print_num(n);
-                    print(" is_prime="); print_num(ip);
-                    print(" trial="); println(tp);
+                    _fz_puts("DIVERGENCE n="); print_num(n);
+                    _fz_puts(" is_prime="); print_num(ip);
+                    _fz_puts(" trial="); println(tp);
                     sys_exit(1);
                 }
             }
@@ -90,9 +97,9 @@ fn main() {
                 fi = fi + 1;
             }
             if (product != n) {
-                print("FAIL: product(factor(");
+                _fz_puts("FAIL: product(factor(");
                 print_num(n);
-                print(")) = ");
+                _fz_puts(")) = ");
                 print_num(product);
                 println("");
                 sys_exit(1);
@@ -104,17 +111,17 @@ fn main() {
         if (n >= 0 && n < 1000000) {
             var np = next_prime(n);
             if (np <= n) {
-                print("FAIL: next_prime(");
+                _fz_puts("FAIL: next_prime(");
                 print_num(n);
-                print(") = ");
+                _fz_puts(") = ");
                 print_num(np);
                 println(" not > n");
                 sys_exit(1);
             }
             if (is_prime(np) != 1) {
-                print("FAIL: next_prime(");
+                _fz_puts("FAIL: next_prime(");
                 print_num(n);
-                print(") = ");
+                _fz_puts(") = ");
                 print_num(np);
                 println(" not actually prime");
                 sys_exit(1);

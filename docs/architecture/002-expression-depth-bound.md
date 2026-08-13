@@ -1,12 +1,20 @@
-# 002 — Expression recursion depth bound (`MAX_DEPTH`)
+# 002 — Expression recursion depth bound (`ABACO_MAX_DEPTH`)
 
 The recursive-descent parser in `src/eval.cyr` tracks nesting depth in the
 `Evaluator` struct (`depth` field, offset `+40`) and caps it.
 
-- `MAX_DEPTH = 256`. Entering a parenthesized group or a function-call argument
-  list increments depth; leaving decrements it.
-- When `eval_depth(e) >= MAX_DEPTH`, the parser sets `ERR_PARSE` and returns
-  `f64_from(0)` instead of recursing further.
+- `ABACO_MAX_DEPTH = 256`. **Every** recursive descent charges depth: a
+  parenthesized group, a function-call argument list, a unary `+`/`-` sign, and
+  the right-associative `^` exponent. Leaving decrements it.
+- When `eval_depth(e) >= ABACO_MAX_DEPTH`, the parser sets `ABACO_ERR_PARSE` and
+  returns `f64_from(0)` instead of recursing further.
+
+> **Corrected 2026-08-13 (2.3.4).** Through 2.3.3 only the paren and argument
+> sites charged depth. `parse_unary` and `parse_power` recursed into themselves
+> without touching the counter, so `----…--1` and `2^2^2^…^1` were bounded by
+> nothing but the native stack and overflowed it. The 2026-04-14 audit recorded
+> this bound as covering all recursion, which was not true of those two paths.
+> Both now charge depth, with regression tests either side of the cap.
 
 **Why it exists** — this is a denial-of-service guard, not an ergonomic limit.
 Deeply nested input like `(((((…)))))` or `f(f(f(…)))` would otherwise recurse

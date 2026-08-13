@@ -14,6 +14,13 @@ include "src/eval.cyr"
 # LCG PRNG
 var _fz_state = 42424242;
 
+# Newline-free stdout write. Cyrius 6.5.x enforces call arity, and the stdlib
+# `print` is `print(msg, len)` — a bare `print(cstr)` no longer compiles.
+fn _fz_puts(s) {
+    print(s, strlen(s));
+    return 0;
+}
+
 fn _fz_rand() {
     _fz_state = _fz_state * 6364136223846793005 + 1442695040888963407;
     return _fz_state;
@@ -26,8 +33,12 @@ fn _fz_u(m) {
 }
 
 # Bias toward expression-relevant bytes — digits, operators, identifiers.
+# '^' and '!' are first-class here (2.3.4): the 2026-08-12 audit found the
+# old table reached '^' only through the ~0.04%/byte wild-byte path, which is
+# why the unbounded eval_pow loop and the unbounded '^'-chain recursion both
+# survived every prior fuzz run.
 fn _fz_byte() {
-    var kind = _fz_u(20);
+    var kind = _fz_u(22);
     if (kind < 6)  { return 48 + _fz_u(10); }     # 0-9
     if (kind < 10) { return 97 + _fz_u(26); }     # a-z
     if (kind == 10) { return 43; }                # +
@@ -39,11 +50,17 @@ fn _fz_byte() {
     if (kind == 16) { return 46; }                # .
     if (kind == 17) { return 44; }                # ,
     if (kind == 18) { return 32; }                # space
+    if (kind == 19) { return 94; }                # ^
+    if (kind == 20) { return 33; }                # !
     return _fz_u(128);                            # wild byte
 }
 
+# Length cap must exceed ABACO_MAX_TOKENS * 2 so the corpus can actually cross
+# the token-array boundary — at the old 48-byte cap the tokenizer could emit at
+# most ~48 tokens against a 512 limit, a 10x margin the fuzzer could never
+# close, which is how the out-of-bounds token write went unfound.
 fn _fz_expr() {
-    var len = _fz_u(48) + 1;
+    var len = _fz_u(1200) + 1;
     var buf = alloc(len + 1);
     var i = 0;
     while (i < len) {
@@ -52,6 +69,61 @@ fn _fz_expr() {
     }
     store8(buf + len, 0);
     return buf;
+}
+
+# Adversarial shapes the random byte stream will essentially never produce:
+# long digit runs as exponents, deep unary-sign chains, deep '^' chains, and
+# long operator chains that overrun the token array. Invariant is the same as
+# everywhere else — bounded work, no crash, no corruption.
+fn _fz_pathological(which, e) {
+    var buf = 0;
+    var i = 0;
+    var pos = 0;
+    var n = 0;
+    if (which == 0) {
+        # "2^<up to 19 digits>" — the eval_pow exact-path exponent.
+        n = _fz_u(19) + 1;
+        buf = alloc(n + 4);
+        store8(buf, 50); store8(buf + 1, 94);
+        while (i < n) { store8(buf + 2 + i, 49 + _fz_u(9)); i = i + 1; }
+        store8(buf + 2 + n, 0);
+    }
+    elif (which == 1) {
+        # Unary-sign chain, straddling ABACO_MAX_DEPTH.
+        n = _fz_u(600) + 1;
+        buf = alloc(n + 3);
+        while (i < n) { store8(buf + i, 45); i = i + 1; }
+        store8(buf + n, 49);
+        store8(buf + n + 1, 0);
+    }
+    elif (which == 2) {
+        # Right-associative '^' chain, straddling ABACO_MAX_DEPTH.
+        n = _fz_u(400) + 1;
+        buf = alloc(n * 2 + 4);
+        while (i < n) {
+            store8(buf + pos, 50); pos = pos + 1;
+            store8(buf + pos, 94); pos = pos + 1;
+            i = i + 1;
+        }
+        store8(buf + pos, 49); pos = pos + 1;
+        store8(buf + pos, 0);
+    }
+    else {
+        # "1+1+1+..." straddling the ABACO_MAX_TOKENS boundary.
+        n = _fz_u(700) + 1;
+        buf = alloc(n * 2 + 2);
+        while (i < n) {
+            if (i > 0) { store8(buf + pos, 43); pos = pos + 1; }
+            store8(buf + pos, 49); pos = pos + 1;
+            i = i + 1;
+        }
+        store8(buf + pos, 0);
+    }
+    Evaluator_eval(e, buf);
+    # Any outcome is fine except crashing or hanging; an over-cap input must
+    # report an error rather than silently returning a wrong number.
+    Evaluator_eval_partial(e, buf);
+    return 0;
 }
 
 fn main() {
@@ -78,6 +150,10 @@ fn main() {
         Evaluator_eval(ev, s);
         # Partial eval must not crash either.
         Evaluator_eval_partial(ev, s);
+
+        # Every 4th iteration, run one targeted adversarial shape instead of
+        # relying on the random stream to stumble into it.
+        if (iter % 4 == 0) { _fz_pathological(_fz_u(4), ev); }
 
         # Whitespace idempotence + commutativity on synthesized valid exprs.
         # a in [1..1000), b in [1..1000).
@@ -114,14 +190,14 @@ fn main() {
             sys_exit(1);
         }
         if (f64_to(r1) != f64_to(r2)) {
-            print("FAIL: whitespace idempotence ");
-            print(e1); print(" vs "); println(e2);
+            _fz_puts("FAIL: whitespace idempotence ");
+            _fz_puts(e1); _fz_puts(" vs "); println(e2);
             sys_exit(1);
         }
         if (f64_to(r1) != f64_to(r3)) {
-            print("FAIL: commutativity a+b vs b+a for a=");
+            _fz_puts("FAIL: commutativity a+b vs b+a for a=");
             print_num(a);
-            print(" b=");
+            _fz_puts(" b=");
             print_num(b);
             println("");
             sys_exit(1);

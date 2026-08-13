@@ -10,6 +10,6 @@ For the *why* behind design choices, see [`../adr/`](../adr/).
 | # | Invariant |
 |---|-----------|
 | [001](001-token-storage-layout.md) | Token storage layout (`src/eval.cyr`) |
-| [002](002-expression-depth-bound.md) | Expression recursion depth bound (`MAX_DEPTH`) |
+| [002](002-expression-depth-bound.md) | Expression recursion depth bound (`ABACO_MAX_DEPTH`) |
 | [003](003-unit-registry-hashing.md) | Unit registry: two maps + lookup order |
 | [004](004-miller-rabin-witness-bound.md) | Miller–Rabin witness set validity bound |

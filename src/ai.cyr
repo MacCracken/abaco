@@ -1,8 +1,8 @@
 # abaco::ai — natural-language parsing, calculation history, currency conversion.
 #
 # The currency converter is split into a pure rates cache (`set_rates` +
-# `convert`); live HTTP fetch via hoosh is a follow-up once hoosh is added
-# as a sibling dep.
+# `convert`). Live HTTP fetch via hoosh is a follow-up — docs/development/roadmap.md
+# (2.3.x "Still open") — pending hoosh as a sibling dep.
 
 enum AiError {
     AI_OK;
@@ -627,8 +627,9 @@ fn CalcHistory_load_from_file(h, path) {
 
 # ================================================================
 # CurrencyConverter — rates cache + conversion.
-# Live HTTP fetch via hoosh is a follow-up (needs [deps.hoosh] and
-# a JSON parser for nested rate maps).
+# Live HTTP fetch via hoosh is a follow-up tracked in docs/development/roadmap.md
+# (2.3.x "Still open") — needs [deps.hoosh] and a JSON parser for nested
+# rate maps.
 # Layout: { base_cstr, rates_map, base_url_cstr }
 # rates_map is a hashmap<cstr, f64_bits>
 # ================================================================

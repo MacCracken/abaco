@@ -5,6 +5,211 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.4] — 2026-08-13
+
+**Cyrius 6.5.20 toolchain bump — first bump that is _not_ source-neutral — plus
+four evaluator defects fixed.** The 6.5.x toolchain broke the build in two ways:
+
+1. **`f64_round` became a reserved builtin.** abaco had hand-rolled
+   `fn f64_round` in `src/dsp.cyr` since the port, and 6.5.x rejects that
+   outright. Investigating it turned up something worse than a rename: the
+   compiler had been *silently shadowing* that function since at least 6.2.11,
+   so the shipped `round()` was ties-to-**even** while the source, tests and
+   citations all described ties-**away-from-zero**. See below — **`round()`
+   changes for exact-`.5` inputs in this release.**
+2. **Call arity is now enforced.** A bare `print(cstr)` compiled at 6.4.66 even
+   though `lib/io.cyr` declares `print(msg, len)`; 6.5.20 rejects it. All three
+   fuzz harnesses used the 1-arg form.
+
+Auditing the bump then surfaced four pre-existing defects in `src/eval.cyr`,
+none related to the toolchain: an **out-of-bounds heap write** in the tokenizer
+that produced silently wrong answers, an **unbounded exponent loop** (~81 years
+of work from 20 bytes of input), **unbounded parser recursion** past
+`ABACO_MAX_DEPTH`, and an **uncapped `totient()` domain**. All four are fixed
+here with regression tests — see *Fixed* and
+[`docs/audit/2026-08-13-audit.md`](docs/audit/2026-08-13-audit.md).
+
+**No stdlib re-batch** — the `[deps].stdlib` module list is unchanged and all 18
+declared modules still exist at 6.5.20. Suite green at **509 asserts, 0
+failures** (was 479); fuzz 3/3 at **20,000 iterations** each; fmt/lint/vet clean
+(per-file — see below); DCE build passes.
+
+### Changed
+
+- **Toolchain pin 6.4.66 → 6.5.20** (`cyrius.cyml [package].cyrius`).
+- **`f64_round` → `f64_round_half_away`** (`src/dsp.cyr`), which **changes
+  `round()` results for exact-`.5` inputs.** Call sites updated in
+  `src/eval.cyr` (the evaluator's `round`), `src/dsp.cyr`
+  (`_freq_semis_from_c0`), `tests/test_dsp.tcyr`, and `benches/bench.bcyr`.
+
+  | input | 2.3.3 shipped | 2.3.4 |
+  |-------|---------------|-------|
+  | `round(0.5)` | 0 | **1** |
+  | `round(2.5)` | 2 | **3** |
+  | `round(-2.5)` | −2 | **−3** |
+  | `round(3.5)` | 4 | 4 |
+
+  The reason is worth recording, because it is not what it looks like. abaco's
+  hand-rolled `f64_round` was **dead code**: `f64_round` has been a compiler
+  intrinsic since at least 6.2.11, and the intrinsic shadowed the local
+  definition without a diagnostic. Verified by building the 2.3.3 tree against
+  the 6.2.11, 6.3.10 and 6.4.66 toolchains — all three answer `round(2.5) = 2`,
+  i.e. ties-to-even, while the function 20 lines away in `src/dsp.cyr` said
+  ties-away-from-zero and `docs/sources.md` cited it as such. So for four
+  releases the documented behaviour and the shipped behaviour disagreed, and
+  nothing could have caught it: the existing tests only checked `3.7`, `3.2` and
+  `-3.7`, which both rounding modes answer identically.
+
+  6.5.x promoting `f64_round` to a reserved word forced the name apart and made
+  the divergence visible. Renaming restores the documented, tested, cited
+  behaviour — ties away from zero, as the evaluator's `round()` was always
+  specified to do and as a desk calculator is expected to behave.
+  `test_round_ties_away` now pins **both** modes so they can never silently
+  swap again.
+
+  Two consequences worth noting. First, abaco no longer *supplies* `f64_round`
+  to the vendored stdlib — at 6.4.66, `lib/math.cyr` called `f64_round` without
+  defining it and resolved to abaco's copy (which the intrinsic had already
+  displaced); at 6.5.20 it resolves to the intrinsic explicitly. Second, the
+  `round_4096` benchmark went 7.86 µs → 26.7 µs. That is not a regression: the
+  old figure timed a single `roundsd` instruction because the intrinsic had
+  replaced the call, and the new figure is the first honest measurement of the
+  hand-rolled function actually running.
+- **Fuzz harnesses fixed for arity enforcement** — added a local `_fz_puts(s)`
+  helper (`print(s, strlen(s))`) to `fuzz/fuzz_{eval,ntheory,units}.fcyr` and
+  routed the 1-arg `print(...)` diagnostics through it. Diagnostic-only change;
+  no invariant altered.
+- **Deferral comments cross-referenced** — `cyrlint` has an untracked-deferral
+  gate: a comment carrying a deferral marker (`TODO`, `FIXME`, `follow-up`,
+  `deferred`, `for now`, `not yet`, `out of scope`, …) must carry a `CHANGELOG` /
+  `roadmap` / `docs/` / `issue` / `See ` reference **on the same line**, or
+  `#skip-lint`. The two hoosh live-fetch follow-ups in `src/ai.cyr` now point at
+  `docs/development/roadmap.md`; the roadmap gained a matching "Still open"
+  entry so the reference is real.
+  **This gate is not new in 6.5.x** — verified by running the 6.3.10 and 6.4.66
+  `cyrlint` binaries against the 2.3.3 tree, where it reports the same two
+  deferrals. 2.3.1 and 2.3.3 both claimed "lint clean" because nothing was
+  looking: CI matched only `^\s*warn ` lines (fixed below), and the advisory
+  prints under a separate `deferral line N:` heading above a `0 warnings`
+  summary that reads as success.
+- **Stdlib re-vendored at 6.5.20** (`cyrius deps`). Module list unchanged; the
+  bundles grew internally (`bayan` +774 lines, `syscalls_x86_64_agnos` +442,
+  `alloc` +241, `io` +203, `vec` +187, `bench` +185, `syscalls_aarch64_linux`
+  +138, `syscalls_linux_common` +92, `fmt` +61, `syscalls_macos` +65,
+  `syscalls` +51, `syscalls_windows` +43, `atomic` +21, `ganita` +20,
+  `syscalls_x86_64_linux` +18, `math` +8, `assert` +6, `string` +4;
+  `alloc_*`, `args_*`, `hashmap`, `http`, `net`, `str` byte-identical).
+- **Smoke binary `build/abaco`** ≈ 395,688 B — up ~42 KB from 353,408 B at
+  2.3.3/6.4.66 (1203 unreachable fns, 312,537 B NOPed by DCE).
+- **`dist/abaco.cyr` regenerated** — 117,233 B / 3,244 lines (was 112,517 B /
+  3,167). Carries the `f64_round_half_away` rename and the evaluator bound
+  checks, so it is **not**
+  byte-identical to 2.3.3 and consumers must re-vendor. Any consumer that was
+  calling the bundle's `f64_round` now silently gets the ties-to-even builtin
+  instead — call `f64_round_half_away` to keep the old behaviour.
+
+### Added
+
+- **`test_round_ties_away`** (`tests/test_dsp.tcyr`) — pins the tie behaviour of
+  both `f64_round_half_away` (0.5→1, 1.5→2, 2.5→3, −0.5→−1, −2.5→−3) *and* the
+  6.5.x builtin `f64_round` (0.5→0, 2.5→2), so a future toolchain bump cannot
+  silently swap one rounding mode for the other — the pre-existing tests used
+  only `3.7`/`3.2`/`-3.7`, which both modes answer identically, which is exactly
+  why the four-release divergence went unnoticed.
+- **`test_token_cap`, `test_pow_exponent_cap`, `test_unary_and_power_depth`,
+  `test_totient_cap`** (`tests/test_eval.tcyr`) — regression coverage for the
+  four defects in *Fixed* below, each pinned either side of its boundary.
+  Suite total 479 → **509 asserts**.
+
+### Fixed
+
+Four evaluator defects found by the 2026-08-13 audit
+([`docs/audit/2026-08-13-audit.md`](docs/audit/2026-08-13-audit.md)). All four
+predate this release and are unrelated to the toolchain bump; all four were
+reproduced before being fixed and have regression tests.
+
+- **`tokenize()` wrote past the end of the token array — heap corruption.**
+  `ABACO_MAX_TOKENS` (512) was declared and allocated against, but the token
+  counter was never checked, so any input needing more than 512 tokens wrote
+  outside `tok_alloc()`'s 8192 bytes. The bump allocator hands out the
+  per-number `nend` scratch cells from the region immediately after the token
+  array, so the overflow interleaved with them and **produced silently wrong
+  answers long before it crashed** — a 343-term sum of ones returned 342, and
+  every larger input also returned 342, with no error set. `TOK_IDENT` payloads
+  are pointers, so a corrupted one was passed to `streq()` as a wild read.
+  Around 16M tokens it SIGSEGVs. `tokenize` and `implicit_mul` now both bound
+  every write and return `ABACO_TOK_OVERFLOW`, which `Evaluator_eval` and
+  `Evaluator_eval_partial` surface as `ABACO_ERR_PARSE`. `implicit_mul` needs
+  its own check: it inserts up to one `*` per token, so its output can exceed
+  the cap even when its input did not.
+- **`eval_pow` had an unbounded O(exponent) loop — DoS.** The integer-exponent
+  fast path multiplied `exp` times with the count taken straight from user text
+  and no cap, so `2^1000000000000000000` (20 bytes) was ~10¹⁸ multiplications,
+  about **81 years** at the measured 2.57 ns/iteration. `2**N` and `pow(2,N)`
+  reach the same path. Now capped at `ABACO_POW_EXACT_MAX` (1024), above which
+  the existing O(1) `exp2`/`log2` path returns the identical value — f64 has
+  already saturated to ±∞ or 0 by 2¹⁰²⁴, so every skipped iteration was
+  provably a no-op. Same class of fix, and the same argument, as the Cyrius
+  stdlib's own 6.4.69 clamp in `lib/math.cyr`. The three pathological inputs now
+  return in **2 ms** total.
+- **`ABACO_MAX_DEPTH` did not bound unary or power recursion — stack overflow.**
+  Only the paren and function-argument sites charged depth. `parse_unary` and
+  `parse_power` recursed into themselves without touching the counter, so
+  `----…--1` and `2^2^2^…^1` were limited by nothing but the native stack.
+  Both now charge depth and early-out with `ABACO_ERR_PARSE`, matching
+  `parse_expr`. `docs/architecture/002-expression-depth-bound.md` claimed the
+  bound already covered all recursion; corrected there too.
+- **`totient(n)` had no domain cap.** The evaluator exposed it directly over an
+  O(√n) trial-division loop while `factorial` (170) and `fibonacci` (92) were
+  both bounded. Capped at `ABACO_TOTIENT_MAX` (10¹²), keeping the loop under
+  ~10⁶ iterations.
+
+- **Parser limit globals namespaced** — `MAX_TOKENS` / `MAX_DEPTH` →
+  `ABACO_MAX_TOKENS` / `ABACO_MAX_DEPTH`, joining `ABACO_ERR_*`. `MAX_TOKENS`
+  collided with `enum TokLim { MAX_TOKENS = 128; }` in the stdlib's
+  `lib/patra.cyr`, and duplicate globals are a **warning, not an error**, so a
+  consumer bundling `dist/abaco.cyr` alongside `patra` could silently get 128 —
+  a 4× undersized token array — with only a build warning to show for it.
+- **Fuzz harness could not reach any of the above.** `fuzz_eval` capped inputs
+  at 48 bytes, so against a 512-token limit it had a 10× margin it could never
+  close, and it emitted `^` only through the ~0.04%/byte wild-byte path. The
+  cap is now 1200 bytes, `^` and `!` are first-class biased bytes, and every
+  4th iteration runs a targeted adversarial shape (long exponent runs, deep
+  sign chains, deep `^` chains, token-array overruns). Confirmed to
+  discriminate: the extended harness **hangs** against the 2.3.3 evaluator and
+  passes 20,000 iterations against this one.
+- **CI lint gate was blind to a whole advisory class.** `.github/workflows/ci.yml`
+  matched only `^\s*warn ` lines, but `cyrlint` prints untracked deferrals as
+  `deferral line N: …` followed by a `0 warnings` summary — so the gate went
+  green while `src/ai.cyr` carried two untracked deferrals through **2.3.1,
+  2.3.2 and 2.3.3**, each of which recorded "lint clean". The gate now matches
+  both forms.
+- **`cyrius lint`/`fmt` glob invocations silently checked one file.** `cyrlint`
+  and `cyrfmt` accept a *single* path; the extra arguments from
+  `cyrius lint src/*.cyr` are ignored without a diagnostic, so that command —
+  as documented in `CLAUDE.md`'s Quick Start and used for prior releases —
+  checked only `src/ai.cyr` and reported clean for the whole crate. `CLAUDE.md`
+  now documents the per-file loop that CI already used. (Re-checked per file at
+  2.3.4: all 7 modules are genuinely clean.)
+- **Consumer stdlib list in `README.md` and `docs/guides/consuming-abaco.md` was
+  broken.** Both still told consumers to declare `"json"` and `"u128"` — modules
+  that stopped existing when 6.2.x folded them into `bayan` (abaco's own
+  `[deps].stdlib` was updated at 2.2.5; the consumer-facing copies were not).
+  `cyrius deps` cannot resolve those names, so anyone following the README would
+  have failed at step one. Both lists now read `…, "math", "ganita", "io",
+  "net", "http", "bayan"` — `ganita` was also missing, which would have left
+  abaco's extended transcendentals undefined at link time. Pre-existing since
+  2.2.5, surfaced while re-checking the dependency story for this bump.
+- **`README.md` distlib command** was the pre-6.2.x bare `cyrius distlib`;
+  distlib is profile-based now and writes `dist/abaco-abaco.cyr`, so the
+  documented step needs the profile argument and the rename.
+- **`README.md` status counts** — "381 tests" / "56 benchmarks" were several
+  releases stale; now 486 asserts / 77 benchmarks. Consumer-snippet `tag` in
+  `README.md` and the guide bumped 2.2.1 → 2.3.4.
+- **`README.md` called hisab a consumer.** It is a *sibling* higher-math library
+  with a distinct domain, as `CLAUDE.md` and `docs/development/state.md` both
+  state; the ecosystem list now agrees with them.
+
 ## [2.3.3] — 2026-07-17
 
 **Cyrius 6.4.66 toolchain bump + error-enum namespacing.** A maintenance patch

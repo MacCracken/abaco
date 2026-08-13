@@ -38,6 +38,12 @@ source. No magic numbers.
   `freq = 440 · 2^((m−69)/12)`. A4 = 440 Hz (ISO 16:1975); MIDI note 69 = A4.
 - **C0 reference** = 16.3516 Hz (MIDI note 12), used for pitch-class /
   octave computation: `round(12 · log2(freq / C0))`.
+  - `round` here is **ties away from zero** (`f64_round_half_away`), not the
+    IEEE-754 round-half-to-even that the Cyrius 6.5.x `f64_round` builtin
+    implements. Same rule as the expression evaluator's user-facing `round()`;
+    the two modes are pinned apart by `test_round_ties_away` (2.3.4).
+    - IEEE 754-2019 §4.3.1 (roundTiesToEven, the default) vs §4.3.3
+      (roundTiesToAway, an explicitly sanctioned attribute).
 - **Decibel** — `20 · log10(amplitude ratio)` (field/amplitude quantity);
   dBFS uses a 1.0 full-scale reference (float-audio norm).
 - **Window functions.** Coefficients per the standard survey:
@@ -91,13 +97,24 @@ source. No magic numbers.
 - **Recursive-descent parsing** with operator precedence (standard technique).
   - Aho, Lam, Sethi, Ullman. *Compilers: Principles, Techniques, and Tools*
     (2nd ed.), §4.4 (predictive parsing).
-- **Parser depth bound (`MAX_DEPTH`)** — guards against stack-exhaustion DoS
+- **Parser depth bound (`ABACO_MAX_DEPTH`)** — guards against stack-exhaustion DoS
   from deeply nested input, in the spirit of the SandboxJS recursion-limit
   class of fixes. Documented inline in `eval.cyr`.
 - **IEEE 754 number parsing** with scientific notation; exponent clamped at
   308 (f64 overflows to +inf near 1.8 × 10³⁰⁸) so adversarial `1e999…`
   inputs terminate in bounded work.
   - IEEE 754-2019, *Standard for Floating-Point Arithmetic*.
+- **Integer-exponent power bound (`ABACO_POW_EXACT_MAX = 1024`)** — `eval_pow`
+  resolves whole exponents by repeated multiplication for exactness (`2^10` is
+  1024, not a log/exp round-trip). f64 saturates to ±∞ at 2¹⁰²⁴ and to 0 below
+  ~5 × 10⁻³²⁴, so no base can still be changing after 1024 steps; past the bound
+  the O(1) `exp2(exp · log2|base|)` path yields the same value. Bounding it
+  turns `2^1000000000000000000` from ~10¹⁸ multiplications into constant work.
+  Same reasoning the Cyrius stdlib applied to its own decimal-exponent loop in
+  `lib/math.cyr` at 6.4.69.
+- **Totient domain cap (`ABACO_TOTIENT_MAX = 10¹²`)** — φ(n) is computed by
+  trial division to √n, so the evaluator bounds n the way it already bounds
+  `factorial` (170) and `fibonacci` (92); 10¹² keeps the loop under ~10⁶ steps.
 
 ## Constants
 

@@ -41,8 +41,10 @@ CYRIUS_DCE=1 cyrius build src/main.cyr build/abaco   # smoke build (DCE)
 for t in tests/test_*.tcyr; do cyrius test "$t"; done  # full test suite
 for b in benches/*.bcyr; do cyrius bench "$b"; done    # benchmarks
 for f in fuzz/*.fcyr; do cyrius build "$f" build/$(basename "$f" .fcyr); done  # fuzz
-cyrius fmt src/*.cyr --check                 # format check
-cyrius lint src/*.cyr                         # static analysis
+# fmt/lint/doc take ONE path — extra glob args are silently dropped, so
+# `cyrius lint src/*.cyr` checks src/ai.cyr only and reports clean. Loop.
+for f in src/*.cyr; do cyrius fmt "$f" --check || echo "DIRTY $f"; done
+for f in src/*.cyr; do cyrius lint "$f"; done  # static analysis
 cyrius distlib abaco && mv dist/abaco-abaco.cyr dist/abaco.cyr  # regenerate dist/abaco.cyr
 ./scripts/bench-history.sh                    # benchmark CSV trail
 ```

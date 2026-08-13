@@ -25,7 +25,7 @@ math engine you can wrap any way you like, this is it.
 
 ## Quick start
 
-Requires the Cyrius toolchain pinned in `cyrius.cyml` (currently `6.4.66`).
+Requires the Cyrius toolchain pinned in `cyrius.cyml` (currently `6.5.20`).
 
 ```bash
 # Vendor the pinned stdlib into lib/ (a gitignored build artifact)
@@ -34,8 +34,9 @@ cyrius deps
 # Build the smoke binary
 cyrius build src/main.cyr build/abaco
 
-# Regenerate the consumer bundle dist/abaco.cyr
-cyrius distlib
+# Regenerate the consumer bundle dist/abaco.cyr (distlib is profile-based
+# since 6.2.x and writes dist/abaco-abaco.cyr, so rename to the consumer path)
+cyrius distlib abaco && mv dist/abaco-abaco.cyr dist/abaco.cyr
 
 # Run the demo
 cyrius run programs/basic.cyr
@@ -56,11 +57,11 @@ cyrius bench benches/bench.bcyr
 # your-project/cyrius.cyml
 [deps]
 stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged",
-          "hashmap", "fnptr", "math", "io", "net", "http", "json", "u128"]
+          "hashmap", "fnptr", "math", "ganita", "io", "net", "http", "bayan"]
 
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.2.1"
+tag = "2.3.4"
 modules = ["dist/abaco.cyr"]   # self-contained library bundle
 ```
 
@@ -120,7 +121,8 @@ case preserved (`mW` vs `MW`). Reciprocal units (L/100km). Tempo
 Abaco sits at the base of a stack:
 
 - **abacus** — desktop calculator / CLI / REPL GUI (rebuilding; consumes abaco)
-- **hisab** — physics + symbolic algebra + high math (consumes abaco)
+- **hisab** — physics + symbolic algebra + high math (*sibling* library, distinct
+  domain — not a consumer)
 - **dhvani** — audio DSP pipelines (consumes `abaco::dsp`)
 - **abaco** — math primitives (this repo)
 - **cyrius** — language + stdlib
@@ -132,9 +134,9 @@ headless, stable, and reusable.
 ## Status
 
 - **v2.0.0** — Rust → Cyrius port complete (breaking: not a Rust crate anymore)
-- **381 tests** passing (`cyrius test`)
-- **3 fuzz harnesses** (eval, ntheory, units) — run clean at 10k+ iters
-- **56 benchmarks** — CSV history tracked in `bench-history.csv`
+- **509 asserts** passing across 7 suites (`cyrius test`)
+- **3 fuzz harnesses** (eval, ntheory, units) — run clean at 20k+ iters
+- **77 benchmarks** — CSV history tracked in `bench-history.csv`
 - **100% of the public API** is documented (`cyrius doc --check`)
 
 Known gaps live in [ROADMAP.md](ROADMAP.md).

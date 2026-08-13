@@ -5,9 +5,12 @@
 1. Fork the repository.
 2. Create a branch from `main`.
 3. Make your changes. Ensure:
-   - `cyrius test` — all 381+ assertions pass
-   - `cyrius lint src/*.cyr` — clean (ignore `Type_method` PascalCase
-     warnings; convention is intentional)
+   - `cyrius test` — all 509+ assertions pass
+   - `for f in src/*.cyr; do cyrius lint "$f"; done` — clean, meaning **both**
+     `0 warnings` and `0 untracked deferrals` on every file. Lint takes one path
+     and silently ignores extra glob args, so `cyrius lint src/*.cyr` checks
+     `src/ai.cyr` alone. (Ignore `Type_method` PascalCase warnings; that
+     convention is intentional.)
    - `./scripts/bench-history.sh` — no unexplained regressions
    - `./fuzz/run.sh` — all fuzz harnesses still pass
 4. Open a pull request to `main`.
@@ -15,7 +18,7 @@
 ## Prerequisites
 
 - The Cyrius toolchain on `PATH` at the version pinned in `cyrius.cyml`
-  (`[package].cyrius`, currently `6.4.66`) — `which cyrius` should resolve
+  (`[package].cyrius`, currently `6.5.20`) — `which cyrius` should resolve
 - Run `cyrius deps` to vendor the pinned stdlib into `lib/`
 
 No Cargo, no Rust, no Python — the entire toolchain is Cyrius.
