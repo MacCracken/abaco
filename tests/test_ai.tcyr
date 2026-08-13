@@ -432,17 +432,94 @@ fn test_history_json_braces() {
 }
 
 # 2.3.4: `_jf_find_value` matched a key name anywhere in the slice, including
-# inside a value. `to_json` always writes the real key first so this stayed
-# benign in practice, but a hand-written or attacker-supplied file has no such
-# ordering guarantee — load_from_file reads untrusted data.
+# inside a value.
+#
+# 2.3.5 fix-audit: the original payload here ESCAPED the lookalike, so the
+# pre-2.3.4 matcher never matched it either and the test passed identically
+# before and after the fix. The discriminating payload is an UNESCAPED value
+# that is exactly a key name: the old matcher matched the value "input", then
+# scanned forward to the next ':' — the timestamp's — and returned HIJACK.
 fn test_history_json_key_confusion() {
+    # Discriminating case: "result" holds the bare text `input`, and the
+    # genuine "input" key appears AFTER it.
     var h = CalcHistory_new(10);
-    # "result" carries text that looks like an "input" key/value pair.
-    var json = "[{\"result\":\"\\\"input\\\":\\\"HIJACK\\\"\",\"input\":\"REAL\",\"timestamp\":\"t\"}]";
+    var json = "[{\"result\":\"input\",\"timestamp\":\"HIJACK\",\"input\":\"REAL\"}]";
     CalcHistory_from_json(h, json);
     assert_eq(CalcHistory_len(h), 1, "entry parsed");
     var e = CalcHistory_get(h, 0);
-    assert(streq(he_input(e), "REAL") == 1, "genuine key wins over lookalike in a value");
+    assert(streq(he_input(e), "REAL") == 1, "genuine key beats a bare lookalike value");
+    assert(streq(he_timestamp(e), "HIJACK") == 1, "timestamp still reads its own value");
+
+    # Escaped lookalike: benign under both old and new matchers, kept as a
+    # second case so the escape path stays covered.
+    h = CalcHistory_new(10);
+    json = "[{\"result\":\"\\\"input\\\":\\\"HIJACK\\\"\",\"input\":\"REAL\",\"timestamp\":\"t\"}]";
+    CalcHistory_from_json(h, json);
+    assert_eq(CalcHistory_len(h), 1, "escaped-lookalike entry parsed");
+    assert(streq(he_input(CalcHistory_get(h, 0)), "REAL") == 1, "escaped lookalike ignored");
+
+    # Residual the fix does NOT close: the matcher checks key position but not
+    # nesting depth, so a key inside a nested object would win. It stays benign
+    # today only because _jfa_get_string rejects the non-string value. Pinned
+    # here so the residual is recorded rather than latent.
+    h = CalcHistory_new(10);
+    json = "[{\"result\":{\"input\":\"HIJACK\"},\"input\":\"REAL\",\"timestamp\":\"t\"}]";
+    var err = CalcHistory_from_json(h, json);
+    assert_eq(err, AI_ERR_PARSE, "nested-object value rejected (residual pinned)");
+    assert_eq(CalcHistory_len(h), 0, "no entry from the nested payload");
+    return 0;
+}
+
+# 2.3.5 fix-audit: _jf_get_object still counted raw braces after the 2.3.4 H-4
+# fix rewrote the other scans, so a '}' inside a rates KEY truncated the object.
+# _ccy_load_body's only completeness check is `kept == 0`, so a truncated object
+# that still yielded one valid pair was reported as SUCCESS with a silently
+# incomplete rate table — in the module's only network-facing parser.
+fn test_ccy_brace_in_key() {
+    var c = CurrencyCache_new("http://localhost:8088");
+    # A key containing '}' must not end the rates object early: EUR and GBP
+    # both follow it and must survive.
+    var body = "{\"base\":\"USD\",\"rates\":{\"A}B\":1.0,\"EUR\":0.92,\"GBP\":0.79}}";
+    var err = _ccy_load_body(c, body, strlen(body));
+    assert_eq(err, 0, "brace-in-key body loads");
+    var r = CurrencyCache_convert(c, f64_from(100), "USD", "EUR");
+    assert(r != 0, "EUR survived a '}' in an earlier key");
+    assert_eq(f64_to(cr_to_value(r)), 92, "100 USD = 92 EUR");
+    r = CurrencyCache_convert(c, f64_from(100), "USD", "GBP");
+    assert(r != 0, "GBP survived too");
+    assert_eq(f64_to(cr_to_value(r)), 79, "100 USD = 79 GBP");
+    return 0;
+}
+
+# 2.3.5 fix-audit: _ccy_json_depth_ok counted braces/brackets with no floor, so
+# unbalanced CLOSERS drove the counter negative and masked genuine nesting from
+# `maxd`. N ']' bytes bought N free levels — a FALSE ACCEPT, the one direction a
+# DoS guard must never fail in, and the opposite of the "only ever rejects more
+# aggressively" property the function's own comment claimed.
+fn test_ccy_depth_guard_clamp() {
+    # Shallow object accepted.
+    var shallow = str_new("{\"EUR\":0.92}", 12);
+    assert_eq(_ccy_json_depth_ok(shallow), 1, "flat rates object accepted");
+
+    # Build a genuinely over-deep object: 12 levels > CCY_MAX_JSON_DEPTH (8).
+    var depth = 12;
+    var buf = alloc(depth * 8 + 32);
+    var pos = 0;
+    var i = 0;
+    while (i < depth) { memcpy(buf + pos, "{\"a\":", 5); pos = pos + 5; i = i + 1; }
+    memcpy(buf + pos, "1.0", 3); pos = pos + 3;
+    i = 0;
+    while (i < depth) { store8(buf + pos, 125); pos = pos + 1; i = i + 1; }
+    assert_eq(_ccy_json_depth_ok(str_new(buf, pos)), 0, "12-level object rejected");
+
+    # Same object prefixed with unbalanced ']' padding — must STILL be rejected.
+    var pad = 20;
+    var padded = alloc(pos + pad + 2);
+    i = 0;
+    while (i < pad) { store8(padded + i, 93); i = i + 1; }   # ']'
+    memcpy(padded + pad, buf, pos);
+    assert_eq(_ccy_json_depth_ok(str_new(padded, pad + pos)), 0,
+    "']' padding does not buy free depth (false-accept guard)");
     return 0;
 }
 
@@ -485,6 +562,8 @@ fn main() {
     test_ccy_deep_nesting_rejected();
     test_history_json_roundtrip();
     test_history_json_escapes();
+    test_ccy_brace_in_key();
+    test_ccy_depth_guard_clamp();
     test_history_json_braces();
     test_history_json_key_confusion();
     test_history_empty_json();

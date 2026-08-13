@@ -296,6 +296,46 @@ fn test_token_cap() {
     e = Evaluator_new();
     Evaluator_eval_partial(e, expr);
     assert_eq(eval_err(e), ABACO_ERR_PARSE, "over-cap partial is a parse error");
+
+    # 2.3.5 fix-audit: 511 and 513 were tested but not 512 — the exact
+    # accept/reject edge, and the only value an off-by-one would move.
+    # A leading '-' makes the count even: 1 + 256 ones + 255 pluses = 512.
+    terms = 256;
+    expr = alloc(terms * 2 + 4);
+    pos = 0;
+    store8(expr + pos, 45); pos = pos + 1;                  # '-'
+    i = 0;
+    while (i < terms) {
+        if (i > 0) { store8(expr + pos, 43); pos = pos + 1; }
+        store8(expr + pos, 49); pos = pos + 1;
+        i = i + 1;
+    }
+    store8(expr + pos, 0);
+    e = Evaluator_new();
+    r = Evaluator_eval(e, expr);
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "exactly 512 tokens accepted (cap boundary)");
+    assert_eq(f64_to(r), 254, "512-token expression evaluates correctly");
+
+    # 2.3.5 fix-audit: the cap check used to run BEFORE the byte was
+    # classified, so a pass that emits no token still counted. An expression at
+    # exactly the cap followed by whitespace was a false ABACO_ERR_PARSE.
+    terms = 256;
+    expr = alloc(terms * 2 + 8);
+    pos = 0;
+    store8(expr + pos, 45); pos = pos + 1;
+    i = 0;
+    while (i < terms) {
+        if (i > 0) { store8(expr + pos, 43); pos = pos + 1; }
+        store8(expr + pos, 49); pos = pos + 1;
+        i = i + 1;
+    }
+    store8(expr + pos, 32); pos = pos + 1;                  # trailing spaces
+    store8(expr + pos, 32); pos = pos + 1;
+    store8(expr + pos, 0);
+    e = Evaluator_new();
+    r = Evaluator_eval(e, expr);
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "512 tokens + trailing whitespace still accepted");
+    assert_eq(f64_to(r), 254, "trailing whitespace does not consume token budget");
     return 0;
 }
 
@@ -332,8 +372,19 @@ fn test_pow_exponent_cap() {
 # 2.3.4 audit: ABACO_MAX_DEPTH only guarded the paren/arg sites, so unary-sign
 # chains and right-associative '^' chains recursed unbounded into a native
 # stack overflow. Both now charge depth.
+# 2.3.4 audit H-3: ABACO_MAX_DEPTH only guarded the paren/arg sites, so unary
+# sign chains recursed unbounded into a native stack overflow.
+#
+# 2.3.5 fix-audit: the original version of this test was DECORATIVE. It used
+# 5000 minuses (5001 tokens) and a 300-operator '^' chain (601 tokens); both
+# exceed ABACO_MAX_TOKENS, so tokenize() rejected them before the parser was
+# ever entered. The assertions passed on the token cap, not the depth cap, and
+# stayed green with the depth accounting deleted. The inputs below sit INSIDE
+# the token budget so they actually reach parse_unary, and every rejection also
+# asserts eval_ntoks != 0 so a token-cap rejection can never masquerade as a
+# depth-cap one.
 fn test_unary_and_power_depth() {
-    # 200 leading minuses: under the cap, and an even count means +1.
+    # 200 leading minuses: under both caps, and an even count means +1.
     var n = 200;
     var expr = alloc(n + 3);
     var i = 0;
@@ -345,8 +396,21 @@ fn test_unary_and_power_depth() {
     assert_eq(eval_err(e), ABACO_ERR_NONE, "200 unary minuses accepted");
     assert_eq(f64_to(r), 1, "even minus count = +1");
 
-    # 5000 minuses: must be a clean parse error, not a stack overflow.
-    n = 5000;
+    # 256 minuses = 257 tokens: the last depth the parser accepts.
+    n = 256;
+    expr = alloc(n + 3);
+    i = 0;
+    while (i < n) { store8(expr + i, 45); i = i + 1; }
+    store8(expr + n, 49);
+    store8(expr + n + 1, 0);
+    e = Evaluator_new();
+    r = Evaluator_eval(e, expr);
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "256 unary minuses accepted (depth boundary)");
+    assert_eq(f64_to(r), 1, "256 minuses = +1");
+
+    # 257 minuses = 258 tokens: over ABACO_MAX_DEPTH, well under the token cap.
+    # This is the assertion that actually pins the H-3 fix.
+    n = 257;
     expr = alloc(n + 3);
     i = 0;
     while (i < n) { store8(expr + i, 45); i = i + 1; }
@@ -354,10 +418,29 @@ fn test_unary_and_power_depth() {
     store8(expr + n + 1, 0);
     e = Evaluator_new();
     Evaluator_eval(e, expr);
-    assert_eq(eval_err(e), ABACO_ERR_PARSE, "5000 unary minuses rejected");
+    assert_eq(eval_err(e), ABACO_ERR_PARSE, "257 unary minuses rejected on DEPTH");
+    assert(eval_ntoks(e) != 0, "rejection came from the parser, not the token cap");
 
-    # Right-associative '^' chain: "2^2^2^...^1", 300 operators.
+    # 300 minuses: comfortably inside the depth-rejection window [257, 511].
     n = 300;
+    expr = alloc(n + 3);
+    i = 0;
+    while (i < n) { store8(expr + i, 45); i = i + 1; }
+    store8(expr + n, 49);
+    store8(expr + n + 1, 0);
+    e = Evaluator_new();
+    Evaluator_eval(e, expr);
+    assert_eq(eval_err(e), ABACO_ERR_PARSE, "300 unary minuses rejected on depth");
+    assert(eval_ntoks(e) != 0, "300-minus rejection is a depth rejection");
+
+    # parse_power's own guard is UNREACHABLE through '^' chains alone at
+    # ABACO_MAX_TOKENS = 512: reaching depth 256 needs >= 256 operators at 2
+    # tokens each (operator + operand) = >= 513 tokens, and parenthesising costs
+    # 2 tokens per level too. A 255-operator chain is the most that fits and
+    # parses fine at depth 255. The guard is retained as defence-in-depth
+    # against a future cap change; what IS testable is that the longest chain
+    # the token budget allows still evaluates rather than overflowing the stack.
+    n = 255;
     expr = alloc(n * 2 + 4);
     var pos = 0;
     i = 0;
@@ -370,7 +453,25 @@ fn test_unary_and_power_depth() {
     store8(expr + pos, 0);
     e = Evaluator_new();
     Evaluator_eval(e, expr);
-    assert_eq(eval_err(e), ABACO_ERR_PARSE, "300-deep '^' chain rejected");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "255-operator '^' chain evaluates (depth 255)");
+
+    # 300 operators = 601 tokens: rejected, but by the TOKEN cap. Asserted
+    # explicitly so the distinction is recorded rather than assumed.
+    n = 300;
+    expr = alloc(n * 2 + 4);
+    pos = 0;
+    i = 0;
+    while (i < n) {
+        store8(expr + pos, 50); pos = pos + 1;
+        store8(expr + pos, 94); pos = pos + 1;
+        i = i + 1;
+    }
+    store8(expr + pos, 49); pos = pos + 1;
+    store8(expr + pos, 0);
+    e = Evaluator_new();
+    Evaluator_eval(e, expr);
+    assert_eq(eval_err(e), ABACO_ERR_PARSE, "300-operator '^' chain rejected");
+    assert_eq(eval_ntoks(e), 0, "...by the TOKEN cap, not the depth cap");
     return 0;
 }
 
@@ -459,6 +560,150 @@ fn test_long_literals() {
     return 0;
 }
 
+# 2.3.5 fix-audit: implicit_mul has its OWN overflow bound (it inserts up to one
+# '*' per token, so its output can exceed the cap when its input did not), and
+# test_token_cap never reached it — every input there is a plain "1+1+..." with
+# no implicit multiplication. "2pi" is the only shape in the crate that does:
+# N terms tokenize to 3N-1 and expand to 4N-1.
+fn test_implicit_mul_cap() {
+    # 128 terms: 383 tokens in, 511 out — the largest that fits.
+    var terms = 128;
+    var expr = alloc(terms * 4 + 2);
+    var pos = 0;
+    var i = 0;
+    while (i < terms) {
+        if (i > 0) { store8(expr + pos, 43); pos = pos + 1; }   # '+'
+        store8(expr + pos, 50); pos = pos + 1;                  # '2'
+        store8(expr + pos, 112); pos = pos + 1;                 # 'p'
+        store8(expr + pos, 105); pos = pos + 1;                 # 'i'
+        i = i + 1;
+    }
+    store8(expr + pos, 0);
+    var e = Evaluator_new();
+    var r = Evaluator_eval(e, expr);
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "128 '2pi' terms parse (511 tokens after expansion)");
+    assert_eq(f64_to(r), 804, "128 * 2pi = 804 (truncated)");
+
+    # 129 terms: 386 tokens in — under the cap — but 515 out. Only
+    # implicit_mul's own bound can catch this.
+    terms = 129;
+    expr = alloc(terms * 4 + 2);
+    pos = 0;
+    i = 0;
+    while (i < terms) {
+        if (i > 0) { store8(expr + pos, 43); pos = pos + 1; }
+        store8(expr + pos, 50); pos = pos + 1;
+        store8(expr + pos, 112); pos = pos + 1;
+        store8(expr + pos, 105); pos = pos + 1;
+        i = i + 1;
+    }
+    store8(expr + pos, 0);
+    e = Evaluator_new();
+    Evaluator_eval(e, expr);
+    assert_eq(eval_err(e), ABACO_ERR_PARSE, "129 '2pi' terms rejected by implicit_mul's bound");
+    return 0;
+}
+
+# 2.3.5 fix-audit: test_round_ties_away pins the f64_round_half_away HELPER, but
+# the whole point of the 2.3.4 rename was to protect the EVALUATOR's binding at
+# the `round` dispatch. That call site could be switched back to the ties-to-even
+# builtin with the entire suite green. These assertions close that.
+fn test_evaluator_round_ties() {
+    ev_int("round(2.5)", 3, "eval round(2.5) = 3, not 2");
+    ev_int("round(0.5)", 1, "eval round(0.5) = 1, not 0");
+    ev_int("round(3.5)", 4, "eval round(3.5) = 4");
+    ev_int("round(0-2.5)", 0 - 3, "eval round(-2.5) = -3, not -2");
+    ev_int("round(3.7)", 4, "eval round(3.7) = 4");
+    ev_int("round(3.2)", 3, "eval round(3.2) = 3");
+    return 0;
+}
+
+# 2.3.5: regressions introduced by the 2.3.4 fixes themselves, plus the
+# top-of-range residual that remains.
+fn test_pow_nonfinite_and_parity() {
+    var e = Evaluator_new();
+    # 2.3.4 sent every integer exponent > 1024 to the exp2/log2 path, and
+    # exp2(log2(+Inf)) = exp2(+Inf) = NaN. Binary exponentiation propagates
+    # Inf correctly. INF_BITS = 0x7FF0000000000000.
+    var inf = 0x7FF0000000000000;
+    var neg_inf = 0xFFF0000000000000;
+    assert_eq(Evaluator_eval(e, "(1e200*1e200)^1024"), inf, "Inf^1024 = +Inf");
+    assert_eq(Evaluator_eval(e, "(1e200*1e200)^1025"), inf, "Inf^1025 = +Inf (was NaN)");
+    assert_eq(Evaluator_eval(e, "(1e200*1e200)^2000"), inf, "Inf^2000 = +Inf (was NaN)");
+    assert_eq(Evaluator_eval(e, "(0-(1e200*1e200))^2001"), neg_inf, "(-Inf)^odd = -Inf (was NaN)");
+
+    # Parity through a genuinely negative base (the old assertion used
+    # "0-2^3", which is -(2^3) and never exercises the parity branch).
+    ev_int("(0-2)^3", 0 - 8, "(-2)^3 = -8");
+    ev_int("(0-2)^4", 16, "(-2)^4 = 16");
+    ev_int("(0-1)^2001", 0 - 1, "(-1)^odd = -1");
+    ev_int("(0-1)^2000", 1, "(-1)^even = 1");
+
+    # Exactness must survive binary exponentiation, including past the old cap.
+    ev_int("2^10", 1024, "2^10 exact");
+    ev_int("2^62", 4611686018427387904, "2^62 exact");
+    ev_int("3^5", 243, "3^5 exact");
+    ev_int("1^2000", 1, "1^2000 = 1");
+    ev_int("0.5^2000", 0, "0.5^2000 underflows to 0");
+
+    # Bounded work at any exponent — no cap needed now.
+    assert_eq(Evaluator_eval(e, "2^1000000000000000000"), inf, "2^1e18 = +Inf promptly");
+    assert_eq(Evaluator_eval(e, "pow(2,1000000000000000000)"), inf, "pow(2,1e18) = +Inf promptly");
+    assert_eq(f64_to(Evaluator_eval(e, "2^(0-1000000000000000000)")), 0, "2^-1e18 = 0 promptly");
+    return 0;
+}
+
+fn test_zero_mantissa_and_range() {
+    var e = Evaluator_new();
+    # 2.3.4 regression: 0.0 * _pow10(>=309) = 0.0 * +Inf = NaN, silently.
+    var r = Evaluator_eval(e, "0e308");
+    assert_eq(r, 0, "0e308 = +0.0");
+    r = Evaluator_eval(e, "0e309");
+    assert_eq(r, 0, "0e309 = +0.0 (was NaN)");
+    assert(f64_eq(r, r) == 1, "0e309 is not NaN");
+    r = Evaluator_eval(e, "0e400");
+    assert_eq(r, 0, "0e400 = +0.0 (was NaN)");
+    assert(f64_eq(r, r) == 1, "0e400 is not NaN");
+    assert_eq(Evaluator_eval(e, "0.0e400"), 0, "0.0e400 = +0.0");
+    assert_eq(Evaluator_eval(e, "0e9999999999"), 0, "0e9999999999 = +0.0");
+
+    # The literal's own decimal exponent and the written exponent must combine
+    # BEFORE clamping. 1e-94 * 1e101 = 1e7.
+    ev_int("0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001e101",
+    10000000, "long fraction + large exponent combine correctly");
+
+    # Subnormal range must survive the lower clamp: mant carries ~1e18, so a
+    # -340 clamp would round genuine underflows up to nonzero.
+    var sub = Evaluator_eval(e, "1e-320");
+    assert(f64_gt(sub, f64_from(0)) == 1, "1e-320 is a nonzero subnormal");
+    assert_eq(Evaluator_eval(e, "1e-400"), 0, "1e-400 underflows to exactly 0");
+    assert_eq(Evaluator_eval(e, "99999999999999999e-341"), 0, "17-digit mantissa at e-341 underflows to 0");
+    return 0;
+}
+
+# 2.3.5 KNOWN RESIDUAL, pinned so it cannot silently widen. _pow10 builds the
+# scale factor with ceil(k/22) roundings, holding the parse to 1-3 ulp across
+# the range — but at the very top of f64, 1 ulp of upward error IS +Inf, so
+# literals within ~2 ulp of DBL_MAX saturate. Closing this needs a double-double
+# scale; see docs/development/roadmap.md.
+fn test_top_of_range_literals() {
+    var e = Evaluator_new();
+    var inf = 0x7FF0000000000000;
+    # Everything up to ~1.79769313486231e308 stays finite and within 3 ulp.
+    assert(Evaluator_eval(e, "1e307") != inf, "1e307 finite");
+    assert(Evaluator_eval(e, "1e308") != inf, "1e308 finite");
+    assert(Evaluator_eval(e, "1.7e308") != inf, "1.7e308 finite");
+    assert(Evaluator_eval(e, "1.79769313486231e308") != inf, "15-digit near-max finite");
+    assert(Evaluator_eval(e, "1.797693134862315e308") != inf, "16-digit near-max finite");
+    # The residual: the canonical DBL_MAX decimal saturates.
+    assert_eq(Evaluator_eval(e, "1.7976931348623157e308"), inf,
+    "DBL_MAX literal saturates (known residual, roadmap)");
+    # Genuine overflow must still be +Inf.
+    assert_eq(Evaluator_eval(e, "1e309"), inf, "1e309 overflows to +Inf");
+    assert_eq(Evaluator_eval(e, "1e400"), inf, "1e400 overflows to +Inf");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco eval tests ===");
@@ -482,6 +727,11 @@ fn main() {
     test_unary_and_power_depth();
     test_totient_cap();
     test_long_literals();
+    test_implicit_mul_cap();
+    test_evaluator_round_ties();
+    test_pow_nonfinite_and_parity();
+    test_zero_mantissa_and_range();
+    test_top_of_range_literals();
     assert_summary();
     return 0;
 }

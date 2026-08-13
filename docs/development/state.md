@@ -4,13 +4,13 @@
 > [`../../CLAUDE.md`](../../CLAUDE.md); forward plan in [`roadmap.md`](roadmap.md);
 > per-tag history in [`../../CHANGELOG.md`](../../CHANGELOG.md).
 
-**Last updated:** 2026-08-13 (2.3.4 — Cyrius 6.5.20 toolchain bump; first non-source-neutral bump of the arc. `f64_round` became a reserved builtin, which exposed that it had been silently shadowing abaco's hand-rolled version since 6.2.11; call arity is now enforced. Also fixes six pre-existing defects found by the 2026-08-13 audit — five in the evaluator (incl. an out-of-bounds heap write) and one in the history JSON reader — and adds a fuzz harness for the previously unfuzzed src/ai.cyr. dist regenerated, not byte-identical to 2.3.3)
+**Last updated:** 2026-08-13 (2.3.5 — a second audit run against 2.3.4's *fixes*. Two of them introduced silent NaN regressions, the H-4 JSON fix was incomplete, and six regression assertions turned out to be decorative. `eval_pow` rewritten to binary exponentiation; parse_number exponent handling corrected; three further `src/ai.cyr` defects fixed incl. a 1-byte OOB write)
 
 ## Versions
 
 | What | Value |
 |------|-------|
-| abaco | **2.3.4** |
+| abaco | **2.3.5** |
 | Cyrius toolchain pin | **6.5.20** |
 | License | GPL-3.0-only |
 
@@ -49,18 +49,18 @@ apart by `test_round_ties_away`. 6.5.x also enforces **call arity**, so
 
 | Artifact | Size | Notes |
 |----------|------|-------|
-| `build/abaco` | ~396 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF (395,712 B at 2.3.4/6.5.20; was 353,408 B at 2.3.3/6.4.66, 357,736 B at 2.3.1/6.3.10). The 6.5.x stdlib both NOPs more (1203 unreachable fns, 312,537 B) and leaves ~38 KB more resident |
-| `dist/abaco.cyr` | ~123 KB (~3.38k lines) | Committed consumer bundle. 6.2.x distlib is profile-based: `cyrius distlib abaco` → `dist/abaco-abaco.cyr`, renamed to `dist/abaco.cyr`. 2.3.4: 123,434 B / 3,380 lines — carries the `f64_round_half_away` rename, the evaluator bound-check fixes and string-aware JSON scanning; **not** byte-identical to 2.3.3 (consumers must re-vendor, and a consumer calling the bundle's old `f64_round` now silently gets the ties-to-even builtin) |
+| `build/abaco` | ~396 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF (395,712 B at 2.3.5/6.5.20; was 353,408 B at 2.3.3/6.4.66, 357,736 B at 2.3.1/6.3.10). The 6.5.x stdlib both NOPs more (1205 unreachable fns, 317,111 B) and leaves ~38 KB more resident |
+| `dist/abaco.cyr` | ~129 KB (~3.49k lines) | Committed consumer bundle. 6.2.x distlib is profile-based: `cyrius distlib abaco` → `dist/abaco-abaco.cyr`, renamed to `dist/abaco.cyr`. 2.3.5: 129,046 B / 3,485 lines — carries the `f64_round_half_away` rename, the evaluator bound-check fixes and string-aware JSON scanning; **not** byte-identical to 2.3.4 (consumers must re-vendor, and a consumer calling the bundle's old `f64_round` now silently gets the ties-to-even builtin) |
 
 ## Tests
 
-**547 asserts, 0 failures** across 7 `.tcyr` files:
+**631 asserts, 0 failures** across 7 `.tcyr` files:
 
 | Suite | Asserts |
 |-------|---------|
-| `test_ai` | 105 |
+| `test_ai` | 118 |
 | `test_dsp` | 109 |
-| `test_eval` | 155 |
+| `test_eval` | 226 |
 | `test_integration` | 27 |
 | `test_ntheory` | 107 |
 | `test_simd` | 10 |
@@ -123,7 +123,7 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
   the new names — **no longer byte-identical to 2.3.2**. Suite green (479
   asserts); fuzz 3/3; fmt/lint/vet clean; DCE build passes; benchmarks
   flat-to-faster vs 6.3.10.
-- **2.3.4** (this release) tracks the **Cyrius 6.5.20 toolchain bump** — pin
+- **2.3.4** tracks the **Cyrius 6.5.20 toolchain bump** — pin
   6.4.66 → 6.5.20, stdlib re-vendored. **No stdlib re-batch**, but unlike 2.3.1
   and 2.3.3 this bump was **not source-neutral** — 6.5.x broke the build twice:
   - **`f64_round` became a compiler builtin** (reserved keyword), so abaco's
@@ -183,6 +183,33 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
   new, closing the audit's P-1 gap); fmt/lint/vet clean; DCE build passes
   (395,712 B, ~42 KB larger than 6.4.66); `dist/abaco.cyr` regenerated
   (123,434 B — **not** byte-identical to 2.3.3).
+
+- **2.3.5** (this release) is the **fix audit** — a second adversarial pass run
+  against 2.3.4's fixes rather than the bugs they replaced
+  ([`../audit/2026-08-13-fix-audit.md`](../audit/2026-08-13-fix-audit.md); 74
+  findings raised, 39 confirmed). It found that:
+  - **Two 2.3.4 fixes introduced new silent wrong answers.** The `eval_pow` cap
+    turned `(±Inf)^n` into NaN for n > 1024 (2.3.3 correctly gave ±Inf), and a
+    zero significand with a large exponent made `0e400` parse as NaN. Both had
+    `eval_err = NONE`, i.e. exactly the failure class 2.3.4 set out to remove.
+  - **`eval_pow` is now binary exponentiation** — O(log|exp|), ≤63
+    multiplications for any i64 exponent. That removes the DoS *without* a cap,
+    propagates Inf/0 per IEEE, and recovers the ~493 ulps the cap was costing
+    across `0.5 < |base| < 2`, where its "behaviour-preserving" claim was false.
+  - **The H-4 JSON fix was incomplete**: `_jf_get_object` was never made
+    string-aware, `_ccy_json_depth_ok` could FALSE ACCEPT via `]` padding, and
+    `CalcHistory_load_from_file` wrote one byte past its allocation.
+  - **Six regression assertions were decorative** — green with the code they
+    guarded deleted. The H-3 depth test's inputs exceeded the token cap so they
+    never reached the parser; the key-confusion payload escaped its own
+    lookalike; `fuzz_eval` discarded every result and so passed 50,000
+    iterations with all token bounds removed; `fuzz_ai`'s CRLF assertion could
+    never fire; the MED-7 probe checked 1 key in 26; the deep-nesting block
+    asserted nothing. All now verified to fail when their fix is reverted.
+
+  Suite 547 → **631 asserts**; fuzz 4/4 at 20,000 iters; fmt/lint/vet clean;
+  DCE build 395,712 B; `dist/abaco.cyr` 129,046 B — **not** byte-identical to
+  2.3.4, consumers must re-vendor.
 
 - **2.3.x still open** (external — needs consumer repos, not actionable from
   abaco alone): wire the first real consumers (Abacus, dhvani) to

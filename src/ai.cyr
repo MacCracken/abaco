@@ -630,10 +630,25 @@ fn CalcHistory_save_to_file(h, path) {
 # Load a history from a JSON file, appending entries to an existing `h`.
 # Pass a freshly-constructed history to get a clean load. Returns 0 on
 # success, AI_ERR_PARSE on malformed JSON, AI_ERR_HTTP on read failure.
+# Load history from a JSON file. Returns 0 on success, AI_ERR_* otherwise.
+#
+# The buffer is one byte larger than the read cap so the NUL terminator has a
+# home INSIDE the allocation: `file_read_all` returns exactly `cap` for any
+# file of `cap` bytes or more, and the old `alloc(65536)` +
+# `store8(buf + 65536, 0)` wrote one byte past the end. `alloc` is a
+# header-less bump allocator aligned to 8, so that byte was the address the
+# next allocation would receive — and a hard fault whenever the block happened
+# to end on a chunk boundary. The parser's `strlen` then depended on a
+# terminator stored outside its own buffer.
+#
+# A file at or above the cap is rejected rather than silently truncated: a
+# half-read JSON array would parse as a short history with no error.
 fn CalcHistory_load_from_file(h, path) {
-    var buf = alloc(65536);
-    var n = file_read_all(path, buf, 65536);
+    var cap = 65536;
+    var buf = alloc(cap + 1);
+    var n = file_read_all(path, buf, cap);
     if (n <= 0) { return AI_ERR_HTTP; }
+    if (n >= cap) { return AI_ERR_PARSE; }
     store8(buf + n, 0);
     return CalcHistory_from_json(h, buf);
 }
@@ -794,6 +809,13 @@ fn _jf_get_string(body, len, key) {
 }
 
 # Extract a top-level nested object `"key":{...}` as a Str including braces, or 0.
+# Extract an object-valued field. String-aware: a '}' inside a rates KEY or
+# value used to end the extraction early, and because `_ccy_load_body`'s only
+# completeness check is `kept == 0`, a truncated object that still yielded one
+# valid pair was accepted as success with a silently incomplete rate table.
+# Same defect class as the 2.3.4 H-4 fix, in the module's only network-facing
+# parser — missed because that fix rewrote CalcHistory_from_json and
+# _jf_find_value but not this scan.
 fn _jf_get_object(body, len, key) {
     var off = _jf_find_value(body, len, key);
     if (off < 0) { return 0; }
@@ -802,12 +824,14 @@ fn _jf_get_object(body, len, key) {
     var i = off + 1;
     while (i < len) {
         var c = load8(body + i);
-        if (c == 123) { depth = depth + 1; }
+        if (c == 34) { i = _jf_skip_string(body, len, i); }
+        elif (c == 123) { depth = depth + 1; i = i + 1; }
         elif (c == 125) {
             depth = depth - 1;
             if (depth == 0) { return str_new(body + off, i - off + 1); }
+            i = i + 1;
         }
-        i = i + 1;
+        else { i = i + 1; }
     }
     return 0;
 }
@@ -855,6 +879,14 @@ fn _ccy_json_depth_ok(s) {
         elif (ch == 91) { depth = depth + 1; if (depth > maxd) { maxd = depth; } }
         elif (ch == 125) { depth = depth - 1; }
         elif (ch == 93) { depth = depth - 1; }
+        # Floor the counter at zero. Unbalanced CLOSERS (typically inside a
+        # string, which this scan deliberately does not skip) otherwise drive
+        # `depth` negative and mask that much genuine nesting from `maxd` — a
+        # key padded with N ']' bytes bought N free levels. That is a FALSE
+        # ACCEPT, the one direction a DoS guard must never fail in, and it
+        # contradicted this function's own "only ever rejects more
+        # aggressively" claim. Clamping restores that property in one line.
+        if (depth < 0) { depth = 0; }
         i = i + 1;
     }
     if (maxd > CCY_MAX_JSON_DEPTH) { return 0; }

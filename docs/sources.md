@@ -100,18 +100,34 @@ source. No magic numbers.
 - **Parser depth bound (`ABACO_MAX_DEPTH`)** — guards against stack-exhaustion DoS
   from deeply nested input, in the spirit of the SandboxJS recursion-limit
   class of fixes. Documented inline in `eval.cyr`.
-- **IEEE 754 number parsing** with scientific notation; exponent clamped at
-  308 (f64 overflows to +inf near 1.8 × 10³⁰⁸) so adversarial `1e999…`
-  inputs terminate in bounded work.
+- **IEEE 754 number parsing** with scientific notation. Significant digits go
+  into an exact 18-digit i64 mantissa (the largest count that cannot overflow on
+  `mant * 10 + digit`); everything else moves a decimal exponent, so no
+  accumulator can wrap at any input length. The literal's own decimal exponent
+  and the written exponent are combined and *then* clamped — clamping them
+  separately lets a long fraction and a large exponent cancel into the wrong
+  magnitude. The clamp is +340 above (10³⁰⁹ is already +Inf) and
+  −(340 + 18) below, the mantissa headroom that keeps genuine subnormals from
+  being rounded up to nonzero. Adversarial `1e999…` inputs terminate in bounded
+  work.
   - IEEE 754-2019, *Standard for Floating-Point Arithmetic*.
-- **Integer-exponent power bound (`ABACO_POW_EXACT_MAX = 1024`)** — `eval_pow`
-  resolves whole exponents by repeated multiplication for exactness (`2^10` is
-  1024, not a log/exp round-trip). f64 saturates to ±∞ at 2¹⁰²⁴ and to 0 below
-  ~5 × 10⁻³²⁴, so no base can still be changing after 1024 steps; past the bound
-  the O(1) `exp2(exp · log2|base|)` path yields the same value. Bounding it
-  turns `2^1000000000000000000` from ~10¹⁸ multiplications into constant work.
-  Same reasoning the Cyrius stdlib applied to its own decimal-exponent loop in
-  `lib/math.cyr` at 6.4.69.
+- **Integer exponents via binary exponentiation** — `eval_pow` resolves whole
+  exponents by square-and-multiply, which is exact for representable results
+  (`2^10` is 1024, not a log/exp round-trip) and O(log |exp|): at most 63
+  multiplications for any i64 exponent, so `2^1000000000000000000` is constant
+  work with no cap needed.
+  - Knuth, D. E. *The Art of Computer Programming, Vol. 2* (3rd ed.), §4.6.3
+    (evaluation of powers; right-to-left binary method).
+  - 2.3.4 instead capped a linear loop at 1024 and handed the tail to
+    `exp2(exp · log2|base|)`. That was wrong twice over: the band
+    0.5 < |base| < 2 is still changing well past 1024 (so the cap cost up to
+    ~493 ulps in a function whose purpose is exactness), and `exp2(log2(+Inf))`
+    is NaN, so `(±Inf)^n` silently stopped being ±Inf. See
+    `docs/audit/2026-08-13-fix-audit.md` R-1 / P-1.
+- **Decimal scaling (`_pow10`)** — the scale factor is built through the exact
+  10²² block (the largest power of ten f64 represents exactly), so a literal
+  needs ceil(k/22) roundings rather than k. Measured 1–3 ulp across the range.
+  IEEE 754-2019 §3.3 (the exactly-representable decimal range).
 - **Totient domain cap (`ABACO_TOTIENT_MAX = 10¹²`)** — φ(n) is computed by
   trial division to √n, so the evaluator bounds n the way it already bounds
   `factorial` (170) and `fibonacci` (92); 10¹² keeps the loop under ~10⁶ steps.

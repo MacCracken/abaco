@@ -14,7 +14,7 @@ endpoint; consumers that don't call `fetch` never open a socket.
 | Expression parsing | Stack overflow via deep nesting | `eval_depth` bounded at `ABACO_MAX_DEPTH`; **every** recursive path charges depth — parens, call arguments, unary signs and `^` chains (the last two were unbounded before 2.3.4) |
 | Expression parsing | Token-array overrun | `tokenize` / `implicit_mul` bound every write against `ABACO_MAX_TOKENS`, returning `ABACO_ERR_PARSE` (unchecked before 2.3.4 — see the 2026-08-13 audit) |
 | Expression parsing | Algorithmic-complexity DoS | `eval_pow` capped at `ABACO_POW_EXACT_MAX`, `totient` at `ABACO_TOTIENT_MAX`, scientific exponents at 308/400, `factorial` at 170, `fibonacci` at 92 |
-| Expression parsing | Integer overflow in numeric literals | `parse_number` uses an exact 18-digit mantissa plus a decimal exponent — no accumulator can wrap; both exponents are combined then clamped (the i64 accumulators wrapped before 2.3.4) |
+| Expression parsing | Integer overflow in numeric literals | `parse_number` uses an exact 18-digit mantissa plus a decimal exponent — no accumulator can wrap. Both exponents are genuinely combined before clamping as of 2.3.5 (2.3.4 still saturated the written exponent separately, preserving the bug its own comment claimed to have removed) |
 | History JSON | Structure smuggled through string values | All structural scanning skips string contents via `_jf_skip_string`; keys match only in key position. Before 2.3.4 a `{`, `}` or `]` in any field silently destroyed the whole history on reload |
 | Division by zero | Undefined / inf propagation | Explicit zero checks in eval + units, returns `ABACO_ERR_MATH` / `UERR_CONVERT` |
 | NaN / Infinity | Silent propagation | `sanitize_sample` scrubs inputs in DSP; eval detects and returns error |
@@ -62,7 +62,7 @@ no crashes or invariant violations.
 - **Cyrius-level safety.** No raw C, no `unsafe` escape hatches — the
   language itself forbids pointer arithmetic outside what stdlib
   helpers expose.
-- **Fuzz-tested.** Three harnesses guard invariants, not just
+- **Fuzz-tested.** Four harnesses guard invariants, not just
   happy-path behaviour. New parser / lookup code extends the
   harnesses as part of the PR.
 - **Deterministic.** No hidden RNG, no clocks in the compute path.

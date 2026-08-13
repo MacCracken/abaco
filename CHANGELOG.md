@@ -5,6 +5,131 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.5] — 2026-08-13
+
+**A second audit, run against 2.3.4's fixes rather than the bugs they replaced.**
+It found that two of those fixes introduced **new silent wrong answers**, that
+the H-4 JSON fix was incomplete, and — the part worth dwelling on — that six of
+2.3.4's regression assertions were **decorative**: green whether or not the code
+they guarded was present. Full report:
+[`docs/audit/2026-08-13-fix-audit.md`](docs/audit/2026-08-13-fix-audit.md)
+(74 findings raised, 39 confirmed).
+
+Suite **631 asserts** (was 547); fuzz 4/4 at 20,000 iterations; fmt/lint/vet
+clean; DCE build passes; benchmarks flat.
+
+### Fixed — regressions introduced by 2.3.4
+
+- **`(±Inf)^n` returned NaN for integer n > 1024.** The `ABACO_POW_EXACT_MAX`
+  cap sent every exponent above it to `exp2(exp · log2|base|)`, and
+  `exp2(+Inf)` is NaN. 2.3.3 returned ±Inf, the IEEE-754 answer. The boundary
+  sat exactly at the cap; `eval_err` stayed `ABACO_ERR_NONE`, so it was silent.
+  `test_pow_exponent_cap` used only finite bases, which is why it passed.
+- **`0e400` parsed as NaN.** An all-zero significand made the scale multiply
+  `0.0 * +Inf`. Affected `0e309`..`0e400`, `0.0e400`, `.e400`,
+  `0e9999999999`; a differential fuzz found 70 NaNs under 2.3.4 and none under
+  2.3.3. `parse_number` now short-circuits a zero mantissa.
+
+- **`eval_pow` rewritten to binary exponentiation**, replacing the cap
+  entirely. Square-and-multiply is O(log|exp|) — at most 63 multiplications for
+  any i64 exponent — so it removes the DoS *without* a cap, propagates Inf and 0
+  as IEEE requires, and keeps the exact path across the whole range. The cap's
+  "behaviour-preserving" claim was measurably false: `0.5^1024` is 2⁻¹⁰²⁴ (a
+  normal value, zero only at 1075), the band `0.5004 < |base| < 1.998` is still
+  changing past 1024, and handing that tail to exp2/log2 cost up to ~493 ulps in
+  a function whose stated purpose is exactness.
+
+### Fixed — parse_number
+
+- **The two exponents were still clamped separately.** The 2.3.4 comment
+  promised "combine, THEN clamp", but the written exponent was saturated at 400
+  per digit *before* the combination, so the cancellation bug it described
+  survived verbatim. Per-digit saturation is now `ABACO_DEC_EXP_MAX` (10⁹), far
+  above the f64 range, leaving `total = dec_exp + sci` as the only clamp.
+- **The lower clamp broke genuine subnormals.** `ABACO_POW10_MAX = 340` was
+  justified as "nothing representable survives past this" — true only for
+  `mant == 1`. With a mantissa up to ~10¹⁸ the product lands near 10⁻³²², inside
+  the subnormal range; 296 of 710 probed literals were wrong, 293 of them
+  returning nonzero where the answer is exactly 0.0. The bound now carries
+  `ABACO_MANT_DIGITS` of headroom.
+- **`_pow10` accuracy** — the scale factor is now built through the exact 10²²
+  block, cutting roundings from k to ceil(k/22) and holding the parse to 1–3 ulp
+  across the range. **Known residual:** literals within ~2 ulp of DBL_MAX still
+  saturate to +Inf, because 1 ulp of upward error at the top of the range *is*
+  +Inf. Closing it needs a double-double scale; pinned by
+  `test_top_of_range_literals` and tracked in the roadmap. For proportion: mean
+  absolute error over a 1510-literal corpus is 1.6 ulp here versus 72932 at 2.3.3.
+
+### Fixed — src/ai.cyr (the H-4 fix was incomplete)
+
+- **`_jf_get_object` was never made string-aware.** The 2.3.4 fix rewrote the
+  other scans and its comment claimed "every structural scan in this module goes
+  through this" — but this one still counted raw braces. A `}` inside a rates
+  **key** truncated the object, and since `_ccy_load_body`'s only completeness
+  check is `kept == 0`, a truncated object that still yielded one valid pair was
+  reported as **success** with a silently incomplete rate table.
+- **`_ccy_json_depth_ok` could FALSE ACCEPT.** It counted braces and brackets
+  with no floor, so unbalanced closers drove the counter negative and masked
+  genuine nesting: N `]` bytes bought N free levels. That is the one direction a
+  DoS guard must never fail in, and it contradicted the function's own "only
+  ever rejects more aggressively" comment. Fixed with a clamp at zero.
+- **1-byte out-of-bounds write in `CalcHistory_load_from_file`.** It allocated
+  65536, read up to 65536, then wrote the NUL at `buf + n` — one past the end for
+  any file at or above the cap, landing exactly where the header-less bump
+  allocator would hand out next, and on unmapped memory when the block ended on a
+  chunk boundary. Now allocates `cap + 1` and rejects an over-cap file rather
+  than silently truncating it.
+
+### Fixed — tests and fuzz harnesses that did not test
+
+- **`test_unary_and_power_depth` was decorative.** Its inputs (5000 minuses,
+  a 300-operator `^` chain) both exceed `ABACO_MAX_TOKENS`, so the tokenizer
+  rejected them before the parser ran — the assertions passed on H-1's token cap,
+  not H-3's depth accounting, and stayed green with the depth fix reverted.
+  Rewritten to sit inside the token budget (256 accepted, 257 and 300 rejected),
+  with `eval_ntoks != 0` asserted on every rejection so a token-cap rejection
+  cannot masquerade as a depth-cap one. Also records that `parse_power`'s guard
+  is **unreachable** through `^` chains at the current cap (256 operators need
+  513 tokens) and is retained as defence-in-depth.
+- **`test_history_json_key_confusion` could not fail** — its payload escaped the
+  lookalike, so the pre-fix matcher never matched it either. Replaced with an
+  unescaped lookalike; the 2.3.3 parser returns `HIJACK`, this one returns `REAL`.
+- **`fuzz_eval` did not detect H-1**: it crossed the token boundary but discarded
+  every result, so with all bounds removed it passed 50,000 iterations. Each
+  pathological shape now asserts its contract — the sum shape checks the value is
+  exactly n, which is what the out-of-bounds write corrupted.
+- **`fuzz_ai`'s CRLF invariant was vacuous.** The assertion required a URL to be
+  both control-byte-bearing and *accepted*, but the generated URLs were random
+  bytes that the scheme check always rejects, so it could never fire. URLs are
+  now built from a real accepted prefix plus fuzz bytes, with a mirrored
+  assertion so the guard cannot be satisfied by rejecting everything.
+- **The MED-7 rate probe inspected 1 key in 26** — it hard-coded the third letter
+  of its probe keys while the generator randomised all three (194 of 4028
+  accepted rates actually checked). It now walks exactly the keys planted.
+- **The deep-nesting block asserted nothing.** It cannot be made discriminating
+  end-to-end (a nested payload is rejected by `kept == 0` regardless), so the
+  guard's contract is asserted directly, alongside a probe for the `]`-padding
+  false accept.
+- **No harness could reach the `totient` domain cap** — the generators emit no
+  function-call syntax. A fifth pathological shape composes calls from a fixed
+  vocabulary of function names.
+- **`implicit_mul`'s own overflow bound had no test** (every `test_token_cap`
+  input is a plain `1+1+…`); `2pi` terms are the only shape that reaches it —
+  128 fit, 129 do not.
+- **No test evaluated the expression `round(…)`**, so the evaluator binding the
+  2.3.4 rename exists to protect could have been switched back to the
+  ties-to-even builtin with the suite green.
+
+### Fixed — other
+
+- **Token cap rejected a valid expression followed by whitespace.** The check ran
+  before the byte was classified, so a pass that emitted no token still counted.
+- **Docs**: the 2.3.4 CHANGELOG claimed the README fix wrote "486 asserts" when
+  it wrote 547; `SECURITY.md` said "Three harnesses" two sections after listing
+  four; `docs/development.md` carried stale expected output; the quoted DCE
+  statistics did not reproduce; `docs/architecture/002` repeated the mistaken
+  claim about what the depth tests pin.
+
 ## [2.3.4] — 2026-08-13
 
 **Cyrius 6.5.20 toolchain bump — first bump that is _not_ source-neutral — plus
@@ -261,7 +386,7 @@ regression tests.
   distlib is profile-based now and writes `dist/abaco-abaco.cyr`, so the
   documented step needs the profile argument and the rename.
 - **`README.md` status counts** — "381 tests" / "56 benchmarks" were several
-  releases stale; now 486 asserts / 77 benchmarks. Consumer-snippet `tag` in
+  releases stale; now 547 asserts / 77 benchmarks. Consumer-snippet `tag` in
   `README.md` and the guide bumped 2.2.1 → 2.3.4.
 - **`README.md` called hisab a consumer.** It is a *sibling* higher-math library
   with a distinct domain, as `CLAUDE.md` and `docs/development/state.md` both

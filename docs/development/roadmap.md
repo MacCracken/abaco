@@ -167,8 +167,54 @@ arc that was not source-neutral**. 6.5.x broke the build twice:
       consumers must re-vendor, and any consumer calling the bundle's
       `f64_round` now gets the ties-to-even builtin instead)
 
+### 2.3.5 — Fix audit ✅ (2026-08-13)
+
+A second adversarial audit, run against **2.3.4's fixes** rather than the bugs
+they replaced ([`../audit/2026-08-13-fix-audit.md`](../audit/2026-08-13-fix-audit.md);
+74 findings raised, 39 confirmed). It caught what the first audit structurally
+could not:
+
+- [x] **Two 2.3.4 fixes introduced new silent wrong answers** — the `eval_pow`
+      cap turned `(±Inf)^n` into NaN for n > 1024 (2.3.3 gave ±Inf correctly),
+      and a zero significand with a large exponent made `0e400` parse as NaN.
+      Both left `eval_err = NONE`
+- [x] **`eval_pow` rewritten to binary exponentiation** — O(log|exp|), ≤63
+      multiplications for any i64 exponent. Removes the DoS *without* a cap,
+      propagates Inf/0 per IEEE, and recovers ~493 ulps across
+      `0.5 < |base| < 2` where the cap's "behaviour-preserving" claim was false
+- [x] **parse_number**: the two exponents are now genuinely combined before
+      clamping (2.3.4 still saturated the written one separately); the lower
+      clamp carries mantissa headroom so real subnormals survive; `_pow10`
+      builds its scale through the exact 10²² block, holding the parse to 1–3 ulp
+- [x] **The H-4 JSON fix was incomplete** — `_jf_get_object` was never made
+      string-aware, `_ccy_json_depth_ok` could FALSE ACCEPT via `]` padding, and
+      `CalcHistory_load_from_file` wrote one byte past its allocation
+- [x] **Six regression assertions were decorative** — green with the code they
+      guarded deleted. The H-3 depth test's inputs exceeded the token cap and
+      never reached the parser; the key-confusion payload escaped its own
+      lookalike; `fuzz_eval` discarded every result (50,000 iterations green
+      with all token bounds removed); `fuzz_ai`'s CRLF assertion could never
+      fire; the MED-7 probe checked 1 key in 26; the deep-nesting block asserted
+      nothing. **Each is now verified to fail when its fix is reverted**
+- [x] Token cap no longer rejects a valid expression followed by whitespace
+- [x] Suite 547 → **631 asserts**; fuzz 4/4 at 20,000 iters; fmt/lint/vet clean;
+      DCE build 395,712 B; `dist/abaco.cyr` 129,046 B (**not** byte-identical to
+      2.3.4 — consumers must re-vendor)
+
 ### Still open
 
+- [ ] **`parse_number` top-of-range residual** (fix-audit P-4, 2026-08-13) —
+      literals within ~2 ulp of DBL_MAX (`1.7976931348623157e308`) still
+      saturate to +Inf, because at the very top of the f64 range 1 ulp of upward
+      error *is* +Inf. `_pow10`'s exact-10²² split holds the rest of the range to
+      1–3 ulp (mean 1.6 ulp over a 1510-literal corpus, versus 72932 at 2.3.3);
+      closing this last case needs a two-term (double-double) scale factor, which
+      is disproportionate for a patch. Pinned by `test_top_of_range_literals` so
+      it cannot silently widen.
+- [ ] **`parse_power`'s depth guard is unreachable** at `ABACO_MAX_TOKENS = 512`
+      — reaching depth 256 through `^` needs ≥256 operators at 2 tokens each =
+      ≥513 tokens, so the token cap always fires first. Retained as
+      defence-in-depth; revisit if the token cap is ever raised.
 - [ ] Live currency-rate fetch via **hoosh** — `src/ai.cyr`'s `CurrencyCache` is
       a pure rates cache today (`set_rates` + `convert`); the live HTTP path
       needs `[deps.hoosh]` and a JSON parser for nested rate maps. (Referenced

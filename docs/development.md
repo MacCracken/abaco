@@ -34,8 +34,8 @@ cyrius test
 cyrius test tests/test_ai.tcyr
 ```
 
-Expected output: `6 files passed, 0 failed (381 assertions)` (or
-higher).
+Expected output: 7 files passed, 0 failed, **631 assertions** (or higher).
+Each suite prints its own `N passed, 0 failed (N total)` line.
 
 ## Bench
 

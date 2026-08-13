@@ -26,6 +26,14 @@ Consequences:
 
 - 256 is well above any human-written expression but low enough to stay within
   the stack. Don't raise it without re-checking stack headroom.
-- The bound is checked at recursion entry, so the rejection is deterministic:
-  the audit regression tests pin depth 200 as accepted and a depth-512 input as
-  rejected.
+- The bound is checked at recursion entry, so the rejection is deterministic.
+  `test_unary_and_power_depth` pins 200 and 256 signs as accepted, 257 and 300
+  as rejected — and asserts `eval_ntoks != 0` on each rejection, because the
+  2.3.4 version of that test used inputs so long that `ABACO_MAX_TOKENS` (a
+  different guard) rejected them before the parser was entered, leaving this
+  bound with no coverage at all. See docs/audit/2026-08-13-fix-audit.md T-1.
+- **`parse_power`'s guard is unreachable** at `ABACO_MAX_TOKENS = 512`: reaching
+  depth 256 through `^` needs at least 256 operators at 2 tokens each (operator
+  plus operand) = 513 tokens, and parenthesising costs 2 tokens per level too.
+  A 255-operator chain is the longest that fits and parses fine at depth 255.
+  The guard is retained as defence-in-depth against a future cap change.

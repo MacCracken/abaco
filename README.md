@@ -61,7 +61,7 @@ stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged",
 
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.3.4"
+tag = "2.3.5"
 modules = ["dist/abaco.cyr"]   # self-contained library bundle
 ```
 
@@ -134,7 +134,7 @@ headless, stable, and reusable.
 ## Status
 
 - **v2.0.0** — Rust → Cyrius port complete (breaking: not a Rust crate anymore)
-- **547 asserts** passing across 7 suites (`cyrius test`)
+- **631 asserts** passing across 7 suites (`cyrius test`)
 - **4 fuzz harnesses** (eval, ntheory, units, ai) — run clean at 20k+ iters
 - **77 benchmarks** — CSV history tracked in `bench-history.csv`
 - **100% of the public API** is documented (`cyrius doc --check`)

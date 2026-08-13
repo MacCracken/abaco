@@ -151,6 +151,17 @@ fn _fz_phrase() {
     return buf;
 }
 
+# Keys planted by the most recent _fz_rates_json call. The MED-7 probe walks
+# exactly these.
+#
+# 2.3.5 fix-audit: the probe used to enumerate "AAA".."ZZA" — it hard-coded the
+# THIRD letter to 'A' while the generator picked all three at random, so it
+# inspected 1 key in 26 (measured: 194 of 4028 accepted rates). The harness
+# header advertised "EVERY rate that survives is finite, positive, < 10^6";
+# that was true of ~4% of them. Recording what was planted makes the claim
+# exact and costs nothing.
+var _FZ_PLANTED = 0;
+
 # A rates payload with adversarial values in the real {"base","rates"} shape.
 var _FZ_RATE_N = 12;
 fn _fz_rate_literal(n) {
@@ -160,7 +171,8 @@ fn _fz_rate_literal(n) {
     if (n == 3)  { return "1e400"; }          # +Inf -> must be dropped
     if (n == 4)  { return "-1e400"; }         # -Inf -> must be dropped
     if (n == 5)  { return "999999999"; }      # > 10^6 -> must be dropped
-    if (n == 6)  { return "1000000"; }        # exactly the cap -> dropped (not <)
+    if (n == 6)  { return "1000000"; }        # exactly 10^6 -> ACCEPTED (the
+    # guard is `> cap`, not `>=`)
     if (n == 7)  { return "0.0000000001"; }   # tiny but plausible
     if (n == 8)  { return "nan"; }            # unparseable
     if (n == 9)  { return "1e-400"; }         # underflows to 0 -> dropped
@@ -169,6 +181,7 @@ fn _fz_rate_literal(n) {
 }
 
 fn _fz_rates_json() {
+    _FZ_PLANTED = vec_new();
     var buf = alloc(1024);
     var pos = 0;
     memcpy(buf + pos, "{\"base\":\"", 9); pos = pos + 9;
@@ -183,10 +196,13 @@ fn _fz_rates_json() {
     while (i < n) {
         if (i > 0) { store8(buf + pos, 44); pos = pos + 1; }
         store8(buf + pos, 34); pos = pos + 1;
-        var code = 65 + _fz_u(26);
-        store8(buf + pos, code); pos = pos + 1;
-        store8(buf + pos, 65 + _fz_u(26)); pos = pos + 1;
-        store8(buf + pos, 65 + _fz_u(26)); pos = pos + 1;
+        var key = alloc(4);
+        store8(key, 65 + _fz_u(26));
+        store8(key + 1, 65 + _fz_u(26));
+        store8(key + 2, 65 + _fz_u(26));
+        store8(key + 3, 0);
+        vec_push(_FZ_PLANTED, key);
+        memcpy(buf + pos, key, 3); pos = pos + 3;
         store8(buf + pos, 34); pos = pos + 1;
         store8(buf + pos, 58); pos = pos + 1;
         var lit = _fz_rate_literal(_fz_u(_FZ_RATE_N));
@@ -200,8 +216,16 @@ fn _fz_rates_json() {
 }
 
 # Deeply-nested rates object — the MED-4 depth guard's target.
+#
+# A VALID rate sits at the bottom of the nest. That is what makes the guard
+# observable: bayan_json_parse at 6.5.20 is a flat scanner, so with the depth
+# check removed it still finds "EUR":0.92, keeps it, and _ccy_load_body reports
+# success. With the check in place the payload is rejected outright. An inner
+# value of plain "1.0" (as this generator used before 2.3.5) produces
+# AI_ERR_CURRENCY either way — via `kept == 0` rather than the guard — so the
+# assertion could not tell the two apart.
 fn _fz_nested_json(depth) {
-    var buf = alloc(depth * 12 + 64);
+    var buf = alloc(depth * 12 + 96);
     var pos = 0;
     memcpy(buf + pos, "{\"base\":\"USD\",\"rates\":", 22); pos = pos + 22;
     var i = 0;
@@ -209,7 +233,7 @@ fn _fz_nested_json(depth) {
         memcpy(buf + pos, "{\"a\":", 5); pos = pos + 5;
         i = i + 1;
     }
-    memcpy(buf + pos, "1.0", 3); pos = pos + 3;
+    memcpy(buf + pos, "{\"EUR\":0.92}", 12); pos = pos + 12;
     i = 0;
     while (i < depth) { store8(buf + pos, 125); pos = pos + 1; i = i + 1; }
     store8(buf + pos, 125); pos = pos + 1;
@@ -227,25 +251,17 @@ fn _fz_nested_json(depth) {
 fn _check_rates_plausible(c) {
     var rates = ccy_rates(c);
     if (rates == 0) { return 0; }
-    var codes = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    var a = 0;
-    while (a < 26) {
-        var b = 0;
-        while (b < 26) {
-            var key = alloc(4);
-            store8(key, 65 + a);
-            store8(key + 1, 65 + b);
-            store8(key + 2, 65);
-            store8(key + 3, 0);
-            if (map_has(rates, key) == 1) {
-                var bits = map_get(rates, key);
-                if (_ccy_rate_plausible(bits) == 0) {
-                    _fz_fail("cache holds an implausible rate (MED-7 invariant)");
-                }
+    if (_FZ_PLANTED == 0) { return 0; }
+    var i = 0;
+    while (i < vec_len(_FZ_PLANTED)) {
+        var key = vec_get(_FZ_PLANTED, i);
+        if (map_has(rates, key) == 1) {
+            var bits = map_get(rates, key);
+            if (_ccy_rate_plausible(bits) == 0) {
+                _fz_fail("cache holds an implausible rate (MED-7 invariant)");
             }
-            b = b + 1;
         }
-        a = a + 1;
+        i = i + 1;
     }
     return 0;
 }
@@ -345,9 +361,44 @@ fn main() {
         _ccy_load_body(c, junk, strlen(junk));
         _check_rates_plausible(c);
 
-        # Deep nesting — the MED-4 guard must reject rather than recurse.
+        # Deep nesting. Assert the MED-4 guard DIRECTLY rather than through
+        # _ccy_load_body: a nested payload is rejected by the `kept == 0` check
+        # anyway (bayan_json_parse at 6.5.20 is a flat scanner and never
+        # extracts nested pairs), so an end-to-end assertion cannot tell the
+        # guard's rejection from that one and stays green with the guard
+        # deleted — which is exactly how the 2.3.4 version of this block was
+        # vacuous. _ccy_json_depth_ok's own contract is testable.
+        # _fz_nested_json(d) wraps the rate in d levels of {"a": ...} plus the
+        # {"EUR":..} object itself, so the extracted rates value nests d+1 deep
+        # — extract it exactly as _ccy_load_body does rather than measuring the
+        # whole body, whose outer object adds one more level.
+        var depth = _fz_u(16) + 1;
+        var nested = _fz_nested_json(depth);
+        var robj = _jf_get_object(nested, strlen(nested), "rates");
+        if (robj == 0) { _fz_fail("rates object not extractable from nested payload"); }
+        var ok_depth = _ccy_json_depth_ok(robj);
+        if (depth + 1 > CCY_MAX_JSON_DEPTH) {
+            if (ok_depth != 0) { _fz_fail("depth guard accepted an over-deep object (MED-4)"); }
+        } else {
+            if (ok_depth != 1) { _fz_fail("depth guard rejected a shallow object"); }
+        }
+        # False-accept probe: unbalanced CLOSERS must not buy free depth. Before
+        # the 2.3.5 clamp, N ']' bytes drove the counter negative and masked N
+        # levels of genuine nesting — a false ACCEPT, the one direction a DoS
+        # guard must never fail in.
+        var pad = _fz_u(24) + 1;
+        var deep = _fz_nested_json(CCY_MAX_JSON_DEPTH + 4);
+        var dobj = _jf_get_object(deep, strlen(deep), "rates");
+        if (dobj == 0) { _fz_fail("deep rates object not extractable"); }
+        var dl = str_len(dobj);
+        var padded = alloc(dl + pad + 2);
+        var pi = 0;
+        while (pi < pad) { store8(padded + pi, 93); pi = pi + 1; }   # ']'
+        memcpy(padded + pad, str_data(dobj), dl);
+        if (_ccy_json_depth_ok(str_new(padded, pad + dl)) != 0) {
+            _fz_fail("']' padding bought free depth past the guard (false accept)");
+        }
         c = CurrencyCache_new("https://example.invalid");
-        var nested = _fz_nested_json(_fz_u(64) + 1);
         _ccy_load_body(c, nested, strlen(nested));
         _check_rates_plausible(c);
 
@@ -370,8 +421,25 @@ fn main() {
         if (ai_last_err() != AI_OK) { _fz_fail("convert set an error on a good pair"); }
 
         # --- URL validation ----------------------------------------------
-        # Any control byte must be rejected — this is the CRLF-injection guard.
-        var url = _fz_str(40);
+        # 2.3.5 fix-audit: this used a bare _fz_str(40), which _ccy_validate_url
+        # rejects on the scheme check every time — so `ok` was never 0 and the
+        # control-byte conjunction below could NEVER fire. The guard could be
+        # deleted with the harness still passing 20,000 iterations, while the
+        # header advertised it as verified. Building the URL from a real
+        # accepted prefix makes acceptance reachable, which is what gives the
+        # assertion teeth.
+        var prefix = "https://";
+        var pk = _fz_u(4);
+        if (pk == 1) { prefix = "http://localhost"; }
+        if (pk == 2) { prefix = "http://127.0.0.1"; }
+        if (pk == 3) { prefix = "http://evil.example.com"; }
+        var pl = strlen(prefix);
+        var tail = _fz_str(24);
+        var tl = strlen(tail);
+        var url = alloc(pl + tl + 1);
+        memcpy(url, prefix, pl);
+        memcpy(url + pl, tail, tl);
+        store8(url + pl + tl, 0);
         var ok = _ccy_validate_url(url);
         var ulen = strlen(url);
         var ui = 0;
@@ -384,6 +452,11 @@ fn main() {
         }
         if (has_ctrl == 1 && ok == 0) {
             _fz_fail("validate_url accepted a URL containing a control byte");
+        }
+        # Mirror: a control-byte-free https URL must be ACCEPTED, so the guard
+        # cannot be "fixed" by rejecting everything.
+        if (has_ctrl == 0 && pk == 0 && ok != 0) {
+            _fz_fail("validate_url rejected a clean https URL");
         }
         # Plaintext http:// to a non-loopback host must be rejected.
         if (_ccy_validate_url("http://evil.example.com/rates") == 0) {

@@ -21,6 +21,13 @@ fn _fz_puts(s) {
     return 0;
 }
 
+fn _fz_fail(msg) {
+    _fz_puts("FAIL: ");
+    println(msg);
+    sys_exit(1);
+    return 0;
+}
+
 fn _fz_rand() {
     _fz_state = _fz_state * 6364136223846793005 + 1442695040888963407;
     return _fz_state;
@@ -33,7 +40,7 @@ fn _fz_u(m) {
 }
 
 # Bias toward expression-relevant bytes — digits, operators, identifiers.
-# '^' and '!' are first-class here (2.3.4): the 2026-08-12 audit found the
+# `^` and `!` are first-class here (2.3.4): the 2026-08-13 audit found the
 # old table reached '^' only through the ~0.04%/byte wild-byte path, which is
 # why the unbounded eval_pow loop and the unbounded '^'-chain recursion both
 # survived every prior fuzz run.
@@ -72,32 +79,52 @@ fn _fz_expr() {
 }
 
 # Adversarial shapes the random byte stream will essentially never produce:
-# long digit runs as exponents, deep unary-sign chains, deep '^' chains, and
-# long operator chains that overrun the token array. Invariant is the same as
-# everywhere else — bounded work, no crash, no corruption.
+# long digit runs as exponents, deep unary-sign chains, deep '^' chains, long
+# operator chains that overrun the token array, and function calls.
+#
+# 2.3.5 fix-audit: these shapes were generated but their results were DISCARDED,
+# so the harness could not detect a regression of the very defects it was
+# written for — with every ABACO_MAX_TOKENS bound deleted it still passed 50,000
+# iterations, because H-1's failure mode is a silently WRONG ANSWER, not a
+# crash. Every shape now asserts its contract.
 fn _fz_pathological(which, e) {
     var buf = 0;
     var i = 0;
     var pos = 0;
     var n = 0;
+    var r = 0;
     if (which == 0) {
-        # "2^<up to 19 digits>" — the eval_pow exact-path exponent.
+        # "2^<up to 19 digits>" — the eval_pow exponent path. Must return
+        # promptly; +Inf is the right answer once the exponent is large.
         n = _fz_u(19) + 1;
         buf = alloc(n + 4);
         store8(buf, 50); store8(buf + 1, 94);
         while (i < n) { store8(buf + 2 + i, 49 + _fz_u(9)); i = i + 1; }
         store8(buf + 2 + n, 0);
+        r = Evaluator_eval(e, buf);
+        if (eval_err(e) != ABACO_ERR_NONE) { _fz_fail("2^N should evaluate"); }
+        if (f64_eq(r, r) == 0) { _fz_fail("2^N returned NaN"); }
+        return 0;
     }
-    elif (which == 1) {
-        # Unary-sign chain, straddling ABACO_MAX_DEPTH.
+    if (which == 1) {
+        # Unary-sign chain straddling ABACO_MAX_DEPTH (256) and the token cap.
+        # Depth is observable for n in [257, 511].
         n = _fz_u(600) + 1;
         buf = alloc(n + 3);
         while (i < n) { store8(buf + i, 45); i = i + 1; }
         store8(buf + n, 49);
         store8(buf + n + 1, 0);
+        Evaluator_eval(e, buf);
+        if (n <= 256) {
+            if (eval_err(e) != ABACO_ERR_NONE) { _fz_fail("unary chain under depth cap rejected"); }
+        } else {
+            if (eval_err(e) != ABACO_ERR_PARSE) { _fz_fail("over-deep unary chain accepted"); }
+        }
+        return 0;
     }
-    elif (which == 2) {
-        # Right-associative '^' chain, straddling ABACO_MAX_DEPTH.
+    if (which == 2) {
+        # Right-associative '^' chain. n operators = 2n+1 tokens, so the token
+        # cap bites at n >= 256; below that it must evaluate.
         n = _fz_u(400) + 1;
         buf = alloc(n * 2 + 4);
         while (i < n) {
@@ -107,9 +134,18 @@ fn _fz_pathological(which, e) {
         }
         store8(buf + pos, 49); pos = pos + 1;
         store8(buf + pos, 0);
+        Evaluator_eval(e, buf);
+        if (n * 2 + 1 <= ABACO_MAX_TOKENS) {
+            if (eval_err(e) != ABACO_ERR_NONE) { _fz_fail("'^' chain under both caps rejected"); }
+        } else {
+            if (eval_err(e) != ABACO_ERR_PARSE) { _fz_fail("over-cap '^' chain accepted"); }
+        }
+        return 0;
     }
-    else {
-        # "1+1+1+..." straddling the ABACO_MAX_TOKENS boundary.
+    if (which == 3) {
+        # "1+1+1+..." straddling ABACO_MAX_TOKENS. THIS is the H-1 detector:
+        # under the cap the sum must be EXACTLY n, which is what the
+        # out-of-bounds token write used to corrupt (343 terms -> 342).
         n = _fz_u(700) + 1;
         buf = alloc(n * 2 + 2);
         while (i < n) {
@@ -118,11 +154,35 @@ fn _fz_pathological(which, e) {
             i = i + 1;
         }
         store8(buf + pos, 0);
+        r = Evaluator_eval(e, buf);
+        if (n * 2 - 1 <= ABACO_MAX_TOKENS) {
+            if (eval_err(e) != ABACO_ERR_NONE) { _fz_fail("under-cap sum rejected"); }
+            if (f64_to(r) != n) { _fz_fail("under-cap sum returned the WRONG VALUE (H-1)"); }
+        } else {
+            if (eval_err(e) != ABACO_ERR_PARSE) { _fz_fail("over-cap sum accepted"); }
+        }
+        return 0;
     }
+    # Function calls with adversarial arguments — the only shape that reaches
+    # the evaluator's domain caps (totient, factorial, fibonacci). The random
+    # byte stream cannot produce a 7-letter function name, so M-1 had no fuzz
+    # coverage at all before 2.3.5.
+    n = _fz_u(4);
+    var name = "totient(";
+    if (n == 1) { name = "factorial("; }
+    if (n == 2) { name = "fib("; }
+    if (n == 3) { name = "isprime("; }
+    var nl = strlen(name);
+    var digits = _fz_u(19) + 1;
+    buf = alloc(nl + digits + 4);
+    memcpy(buf, name, nl);
+    pos = nl;
+    while (i < digits) { store8(buf + pos, 48 + _fz_u(10)); pos = pos + 1; i = i + 1; }
+    store8(buf + pos, 41); pos = pos + 1;
+    store8(buf + pos, 0);
     Evaluator_eval(e, buf);
-    # Any outcome is fine except crashing or hanging; an over-cap input must
-    # report an error rather than silently returning a wrong number.
-    Evaluator_eval_partial(e, buf);
+    # Any outcome is acceptable except a hang; an out-of-domain argument must
+    # report ABACO_ERR_MATH rather than grinding.
     return 0;
 }
 
@@ -153,7 +213,7 @@ fn main() {
 
         # Every 4th iteration, run one targeted adversarial shape instead of
         # relying on the random stream to stumble into it.
-        if (iter % 4 == 0) { _fz_pathological(_fz_u(4), ev); }
+        if (iter % 4 == 0) { _fz_pathological(_fz_u(5), ev); }
 
         # Whitespace idempotence + commutativity on synthesized valid exprs.
         # a in [1..1000), b in [1..1000).
