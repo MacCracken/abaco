@@ -12,7 +12,7 @@ In your project's `cyrius.cyml`:
 ```toml
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.3.5"                 # pin to a released tag, never a branch
+tag = "2.4.0"                 # pin to a released tag, never a branch
 modules = ["dist/abaco.cyr"]  # the bundle is the only file you name
 ```
 
@@ -82,6 +82,18 @@ fn main() {
 Bump the `tag` and run `cyrius deps`. abaco follows SemVer (post-1.0): patch and
 minor bumps are source-compatible; a major bump documents breaking changes in
 [`CHANGELOG.md`](../../CHANGELOG.md) with a migration section.
+
+### 2.4.0 — larger expressions, correctly-rounded literals
+
+Two user-visible changes, both improvements — nothing to migrate:
+
+- **Expressions up to 1024 tokens** parse (was 512). Costs 16 KB per evaluation
+  instead of 8 KB. Nothing that parsed before stops parsing.
+- **Decimal literals are correctly rounded.** `1.7976931348623157e308` (DBL_MAX)
+  now parses to DBL_MAX rather than `+Inf`, subnormals like `1e-320` are
+  bit-exact, and 99.74% of a 5000-literal corpus matches the correctly-rounded
+  reference (worst case 1 ulp). If you were compensating for the old parser's
+  error, stop.
 
 ### 2.3.4 — one rename you may need to act on
 

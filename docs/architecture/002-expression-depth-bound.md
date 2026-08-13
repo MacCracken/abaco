@@ -32,8 +32,12 @@ Consequences:
   2.3.4 version of that test used inputs so long that `ABACO_MAX_TOKENS` (a
   different guard) rejected them before the parser was entered, leaving this
   bound with no coverage at all. See docs/audit/2026-08-13-fix-audit.md T-1.
-- **`parse_power`'s guard is unreachable** at `ABACO_MAX_TOKENS = 512`: reaching
+- **`parse_power`'s guard was unreachable** at `ABACO_MAX_TOKENS = 512`: reaching
   depth 256 through `^` needs at least 256 operators at 2 tokens each (operator
-  plus operand) = 513 tokens, and parenthesising costs 2 tokens per level too.
-  A 255-operator chain is the longest that fits and parses fine at depth 255.
-  The guard is retained as defence-in-depth against a future cap change.
+  plus operand) = 513 tokens, and parenthesising costs 2 tokens per level too —
+  so the token cap always fired first and the guard could not be exercised.
+  **2.4.0 raised the cap to 1024**, which closes that: the guard tests depth
+  before incrementing, so 256 operators evaluate at depth 255 and 257 (515
+  tokens) is a genuine depth rejection. `test_unary_and_power_depth` pins both
+  sides and asserts `eval_ntoks != 0` so a token-cap rejection cannot be
+  mistaken for a depth one.

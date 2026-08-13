@@ -5,6 +5,74 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] — 2026-08-13
+
+**Closes both residuals the 2.3.5 fix audit left open.** Minor rather than patch
+because one of them is closed by raising the expression token cap, which is
+user-visible: expressions up to **1024 tokens** now parse where the limit was 512.
+
+Suite **643 asserts** (was 631); fuzz 4/4 at 20,000 iterations; fmt/lint/vet
+clean; DCE build passes; parsing benchmarks **faster** than 2.3.5 despite the
+added precision.
+
+### Changed
+
+- **Decimal literals are now correctly rounded.** `parse_number` scales through
+  an **error-compensated (double-double) factor** — Dekker's two-product carries
+  the ~53 bits a single f64 drops, so the final rounding sees them. The mantissa
+  is split the same way: it holds up to 18 digits, past f64's exact-integer
+  limit of 2⁵³, so `f64_from(mant)` alone was already spending the last ulp.
+
+  Measured over a 5000-literal random corpus spanning the whole exponent range:
+
+  | | mean abs. error | top of range |
+  |---|---|---|
+  | 2.3.3 | ~72932 ulp | finite, 287 ulp low |
+  | 2.3.5 | 1–3 ulp | **+Inf** (saturated) |
+  | 2.4.0 | **99.74% bit-exact, worst 1 ulp** | bit-exact |
+
+  `1.7976931348623157e308` — the canonical shortest round-trip decimal for
+  DBL_MAX — now parses to DBL_MAX exactly. Subnormals (`1e-320`, `1e-323`,
+  `5e-324`) and the exact-power boundary (`1e22`/`1e23`) are bit-exact too.
+
+  A **Clinger fast path** keeps this free: when the mantissa is below 2⁵³ and
+  |exponent| ≤ 22 both operands are exact, so one multiplication is provably
+  correctly rounded and the compensated path is skipped entirely. That covers
+  essentially every literal a human writes, and because the exact powers of ten
+  are now built **once** into a table rather than rebuilt per literal, parsing is
+  faster than 2.3.5: `sci_add` 2.31 → 2.20 µs, `sci_mul` 2.21 → 2.11 µs.
+
+- **`ABACO_MAX_TOKENS` 512 → 1024.** Expressions up to 1024 tokens now parse.
+  This also closes the second residual: at 512, reaching `ABACO_MAX_DEPTH`
+  through a right-associative `^` chain needed ≥256 operators at 2 tokens each =
+  ≥513 tokens, so the token cap always fired first and **`parse_power`'s depth
+  guard was structurally unreachable** — retained but untestable. At 1024 the
+  window exists (257 operators = 515 tokens), and
+  `test_unary_and_power_depth` now pins it: 256 operators evaluate, 257 are
+  rejected on depth with `eval_ntoks != 0` asserted so a token-cap rejection
+  cannot masquerade as a depth one. **Verified discriminating** — reverting the
+  `parse_power` guard fails 2 assertions where before it failed none.
+
+  Costs 16 KB per `tok_alloc` (was 8 KB). Test boundaries move with it:
+  512-term sums accept / 513 reject, 256 `2pi` terms accept / 257 reject.
+
+### Fixed
+
+- The `_pow10` accuracy residual (fix-audit P-4) — see above.
+- `parse_power`'s unreachable depth guard (fix-audit T-1 structural note) — see
+  above.
+
+### Notes
+
+- Cyrius has no tuples, so the double-double pair travels in a 3-word buffer and
+  every error-compensated primitive returns through an out-parameter. Filed
+  upstream as
+  `cyrius/docs/development/proposals/2026-08-13-tuple-multi-value-returns.md`,
+  registered in that repo's potential backlog.
+- 13 of 5000 corpus literals remain 1 ulp low. Reaching 100% correctly-rounded
+  needs a bignum fallback (Clinger/Eisel-Lemire); not pursued — the remaining
+  error is at the rounding boundary and bounded at 1 ulp.
+
 ## [2.3.5] — 2026-08-13
 
 **A second audit, run against 2.3.4's fixes rather than the bugs they replaced.**

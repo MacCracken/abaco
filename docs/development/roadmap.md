@@ -201,20 +201,46 @@ could not:
       DCE build 395,712 B; `dist/abaco.cyr` 129,046 B (**not** byte-identical to
       2.3.4 — consumers must re-vendor)
 
+### 2.4.0 — Close the fix-audit residuals ✅ (2026-08-13)
+
+A **minor**, not a patch: one residual is closed by raising the expression token
+cap, which is user-visible.
+
+- [x] **Decimal literals are correctly rounded.** `parse_number` scales through
+      an error-compensated (double-double) factor — Dekker two-product carries
+      the bits a single f64 drops — and splits the **mantissa** the same way,
+      which is what actually closed the last ulp: 18 digits exceeds f64's
+      exact-integer limit, so `f64_from(mant)` alone already spent it.
+      `1.7976931348623157e308` (DBL_MAX) now parses exactly where 2.3.4/2.3.5
+      returned +Inf. Over a 5000-literal corpus spanning the full exponent
+      range: **99.74% bit-exact, worst 1 ulp** (2.3.3 averaged ~73000 ulp)
+- [x] **…and it is FASTER than 2.3.5.** A Clinger fast path (mantissa < 2^53 and
+      |exponent| ≤ 22 ⇒ both operands exact ⇒ one provably correct rounding)
+      skips the compensated path for essentially every human-written literal,
+      and the exact powers of ten are now built **once** into a table instead of
+      rebuilt per literal — which is what 2.3.5 was doing. `sci_add`
+      2.31 → 2.20 µs, `sci_mul` 2.21 → 2.11 µs
+- [x] **`ABACO_MAX_TOKENS` 512 → 1024**, closing the second residual: at 512,
+      depth 256 through a `^` chain needed ≥513 tokens, so the token cap always
+      fired first and `parse_power`'s depth guard was structurally unreachable.
+      257 operators (515 tokens) now reaches it. **Verified discriminating** —
+      reverting the guard fails 2 assertions where before it failed none
+- [x] Test boundaries moved with the cap (512-term sums accept / 513 reject;
+      256 `2pi` terms accept / 257 reject) and `fuzz_eval`'s `^` shape now
+      asserts the depth window rather than the token window
+- [x] Suite 631 → **643 asserts**; fuzz 4/4 at 20,000 iters; fmt/lint/vet clean;
+      DCE build 399,880 B; `dist/abaco.cyr` 135,736 B (**not** byte-identical to
+      2.3.5 — consumers must re-vendor)
+- [x] Filed `cyrius/docs/development/proposals/2026-08-13-tuple-multi-value-returns.md`
+      upstream and registered it in that repo's potential backlog — Cyrius has no
+      tuples, so every error-compensated primitive here returns through an
+      out-parameter or a heap buffer
+
 ### Still open
 
-- [ ] **`parse_number` top-of-range residual** (fix-audit P-4, 2026-08-13) —
-      literals within ~2 ulp of DBL_MAX (`1.7976931348623157e308`) still
-      saturate to +Inf, because at the very top of the f64 range 1 ulp of upward
-      error *is* +Inf. `_pow10`'s exact-10²² split holds the rest of the range to
-      1–3 ulp (mean 1.6 ulp over a 1510-literal corpus, versus 72932 at 2.3.3);
-      closing this last case needs a two-term (double-double) scale factor, which
-      is disproportionate for a patch. Pinned by `test_top_of_range_literals` so
-      it cannot silently widen.
-- [ ] **`parse_power`'s depth guard is unreachable** at `ABACO_MAX_TOKENS = 512`
-      — reaching depth 256 through `^` needs ≥256 operators at 2 tokens each =
-      ≥513 tokens, so the token cap always fires first. Retained as
-      defence-in-depth; revisit if the token cap is ever raised.
+> The two residuals the 2.3.5 fix audit left open were closed in 2.4.0.
+
+
 - [ ] Live currency-rate fetch via **hoosh** — `src/ai.cyr`'s `CurrencyCache` is
       a pure rates cache today (`set_rates` + `convert`); the live HTTP path
       needs `[deps.hoosh]` and a JSON parser for nested rate maps. (Referenced

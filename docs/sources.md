@@ -124,10 +124,24 @@ source. No magic numbers.
     ~493 ulps in a function whose purpose is exactness), and `exp2(log2(+Inf))`
     is NaN, so `(±Inf)^n` silently stopped being ±Inf. See
     `docs/audit/2026-08-13-fix-audit.md` R-1 / P-1.
-- **Decimal scaling (`_pow10`)** — the scale factor is built through the exact
-  10²² block (the largest power of ten f64 represents exactly), so a literal
-  needs ceil(k/22) roundings rather than k. Measured 1–3 ulp across the range.
-  IEEE 754-2019 §3.3 (the exactly-representable decimal range).
+- **Decimal scaling — error-compensated (double-double).** The scale factor
+  10^k is carried as a two-term (hi, lo) pair giving ~106 bits of significand,
+  built with Dekker's error-compensated product; the 18-digit mantissa is split
+  the same way, since it exceeds f64's exact-integer limit of 2⁵³ and would
+  otherwise spend the last ulp before scaling even begins. Measured over a
+  5000-literal corpus: 99.74% bit-exact, worst case 1 ulp.
+  - Dekker, T. J. (1971). "A floating-point technique for extending the
+    available precision." *Numerische Mathematik*, 18(3), 224–242.
+    doi:10.1007/BF01397083 (the splitting and two-product algorithms).
+  - Clinger, W. D. (1990). "How to read floating point numbers accurately."
+    *ACM SIGPLAN PLDI*, 92–101. doi:10.1145/93542.93557 — source of the fast
+    path: when the mantissa is below 2⁵³ and |exponent| ≤ 22 both operands are
+    exact in f64, so a single multiplication is provably correctly rounded and
+    no compensation is needed.
+  - IEEE 754-2019 §3.3 (the exactly-representable decimal range).
+  - Reaching 100% correctly-rounded requires a bignum fallback
+    (Clinger's slow path, or Eisel–Lemire); not implemented — the residual is
+    bounded at 1 ulp and occurs only at the rounding boundary.
 - **Totient domain cap (`ABACO_TOTIENT_MAX = 10¹²`)** — φ(n) is computed by
   trial division to √n, so the evaluator bounds n the way it already bounds
   `factorial` (170) and `fibonacci` (92); 10¹² keeps the loop under ~10⁶ steps.

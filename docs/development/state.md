@@ -4,13 +4,13 @@
 > [`../../CLAUDE.md`](../../CLAUDE.md); forward plan in [`roadmap.md`](roadmap.md);
 > per-tag history in [`../../CHANGELOG.md`](../../CHANGELOG.md).
 
-**Last updated:** 2026-08-13 (2.3.5 — a second audit run against 2.3.4's *fixes*. Two of them introduced silent NaN regressions, the H-4 JSON fix was incomplete, and six regression assertions turned out to be decorative. `eval_pow` rewritten to binary exponentiation; parse_number exponent handling corrected; three further `src/ai.cyr` defects fixed incl. a 1-byte OOB write)
+**Last updated:** 2026-08-13 (2.4.0 — closes both residuals the 2.3.5 fix audit left open. Decimal literals are now correctly rounded via error-compensated double-double scaling (DBL_MAX parses exactly; 99.74% of a 5000-literal corpus bit-exact, worst 1 ulp), and the token cap rose 512 → 1024, which makes `parse_power`'s depth guard reachable and testable for the first time)
 
 ## Versions
 
 | What | Value |
 |------|-------|
-| abaco | **2.3.5** |
+| abaco | **2.4.0** |
 | Cyrius toolchain pin | **6.5.20** |
 | License | GPL-3.0-only |
 
@@ -49,18 +49,18 @@ apart by `test_round_ties_away`. 6.5.x also enforces **call arity**, so
 
 | Artifact | Size | Notes |
 |----------|------|-------|
-| `build/abaco` | ~396 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF (395,712 B at 2.3.5/6.5.20; was 353,408 B at 2.3.3/6.4.66, 357,736 B at 2.3.1/6.3.10). The 6.5.x stdlib both NOPs more (1205 unreachable fns, 317,111 B) and leaves ~38 KB more resident |
-| `dist/abaco.cyr` | ~129 KB (~3.49k lines) | Committed consumer bundle. 6.2.x distlib is profile-based: `cyrius distlib abaco` → `dist/abaco-abaco.cyr`, renamed to `dist/abaco.cyr`. 2.3.5: 129,046 B / 3,485 lines — carries the `f64_round_half_away` rename, the evaluator bound-check fixes and string-aware JSON scanning; **not** byte-identical to 2.3.4 (consumers must re-vendor, and a consumer calling the bundle's old `f64_round` now silently gets the ties-to-even builtin) |
+| `build/abaco` | ~400 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF (399,880 B at 2.4.0/6.5.20; was 353,408 B at 2.3.3/6.4.66, 357,736 B at 2.3.1/6.3.10). The 6.5.x stdlib both NOPs more (1216 unreachable fns, 321,508 B) and leaves ~38 KB more resident |
+| `dist/abaco.cyr` | ~136 KB (~3.66k lines) | Committed consumer bundle. 6.2.x distlib is profile-based: `cyrius distlib abaco` → `dist/abaco-abaco.cyr`, renamed to `dist/abaco.cyr`. 2.4.0: 135,736 B / 3,661 lines — carries the `f64_round_half_away` rename, the evaluator bound-check fixes and string-aware JSON scanning; **not** byte-identical to 2.3.5 (consumers must re-vendor, and a consumer calling the bundle's old `f64_round` now silently gets the ties-to-even builtin) |
 
 ## Tests
 
-**631 asserts, 0 failures** across 7 `.tcyr` files:
+**643 asserts, 0 failures** across 7 `.tcyr` files:
 
 | Suite | Asserts |
 |-------|---------|
 | `test_ai` | 118 |
 | `test_dsp` | 109 |
-| `test_eval` | 226 |
+| `test_eval` | 238 |
 | `test_integration` | 27 |
 | `test_ntheory` | 107 |
 | `test_simd` | 10 |
@@ -184,7 +184,7 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
   (395,712 B, ~42 KB larger than 6.4.66); `dist/abaco.cyr` regenerated
   (123,434 B — **not** byte-identical to 2.3.3).
 
-- **2.3.5** (this release) is the **fix audit** — a second adversarial pass run
+- **2.3.5** is the **fix audit** — a second adversarial pass run
   against 2.3.4's fixes rather than the bugs they replaced
   ([`../audit/2026-08-13-fix-audit.md`](../audit/2026-08-13-fix-audit.md); 74
   findings raised, 39 confirmed). It found that:
@@ -210,6 +210,22 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
   Suite 547 → **631 asserts**; fuzz 4/4 at 20,000 iters; fmt/lint/vet clean;
   DCE build 395,712 B; `dist/abaco.cyr` 129,046 B — **not** byte-identical to
   2.3.4, consumers must re-vendor.
+
+- **2.4.0** (this release) **closes both residuals** the fix audit left open, and
+  is a minor because one of them is closed by a user-visible cap raise:
+  - **Decimal literals are correctly rounded.** `parse_number` scales through an
+    error-compensated (double-double) factor and splits the mantissa too — the
+    mantissa mattered because 18 digits exceeds f64's exact-integer limit, so
+    `f64_from(mant)` alone already cost the last ulp. `1.7976931348623157e308`
+    (DBL_MAX) now parses exactly where 2.3.4/2.3.5 returned +Inf. Over a
+    5000-literal corpus: **99.74% bit-exact, worst 1 ulp** (2.3.3 averaged
+    ~73000 ulp). A Clinger fast path — exact mantissa, |exponent| ≤ 22, one
+    provably correct rounding — plus a **cached** exact power-of-ten table makes
+    this *faster* than 2.3.5 rather than slower.
+  - **`ABACO_MAX_TOKENS` 512 → 1024**, so `parse_power`'s depth guard is
+    reachable at last: 257 `^` operators is 515 tokens, which the old cap could
+    not express. Verified discriminating — reverting the guard now fails 2
+    assertions.
 
 - **2.3.x still open** (external — needs consumer repos, not actionable from
   abaco alone): wire the first real consumers (Abacus, dhvani) to

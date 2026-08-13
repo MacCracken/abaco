@@ -34,7 +34,14 @@ enum EvalErr {
 # For NUMBER: value is f64 bits
 # For IDENT: value is pointer to null-terminated string
 
-var ABACO_MAX_TOKENS = 512;
+# Per-expression token cap. Raised 512 -> 1024 at 2.4.0: at 512, reaching
+# ABACO_MAX_DEPTH through a right-associative '^' chain needed >= 256 operators
+# at 2 tokens each = >= 513 tokens, so the token cap always fired first and
+# parse_power's depth guard was structurally UNREACHABLE (fix-audit T-1). 1024
+# makes it reachable — and accepting longer expressions is a user-visible
+# improvement, which is why 2.4.0 is a minor rather than a patch. Costs 16 KB
+# per tok_alloc.
+var ABACO_MAX_TOKENS = 1024;
 
 # tokenize() sentinel: input needs more than ABACO_MAX_TOKENS tokens. Negative so it
 # can never collide with a real token count; callers map it to ABACO_ERR_PARSE.
@@ -58,7 +65,10 @@ var ABACO_DEC_EXP_MAX = 1000000000;
 
 # Final decimal-exponent clamp. 10^309 is already +Inf and 10^-324 is already
 # below the smallest subnormal, so nothing representable survives past this —
-# it bounds `_pow10` without changing any answer.
+# it bounds the scaling loops without changing any answer. The negative side
+# additionally carries ABACO_MANT_DIGITS of headroom (see the clamp below):
+# the mantissa reaches ~1e18, so `mant * 10^-340` still lands near 1e-322,
+# inside the subnormal range.
 var ABACO_POW10_MAX = 340;
 
 # Domain cap for the evaluator's `totient(n)`. The ntheory implementation
@@ -149,44 +159,199 @@ fn is_space(c) {
     return 0;
 }
 
-# 10^k for k >= 0. f64 represents 10^0..10^22 EXACTLY; those are produced by a
-# single multiplication chain of at most 22 exact steps, so the result is exact.
-# Above 22 the value is split as 10^k = 10^22 * 10^22 * ... * 10^r, which keeps
-# the multiplication count (and therefore the accumulated rounding) to ceil(k/22)
-# instead of k.
+# ================================================================
+# Decimal scaling — error-compensated (double-double)
+# ================================================================
 #
-# Measured against the correctly-rounded reference across the range, the split
-# holds the parse to 1-3 ulp (`1e307`, `1e308`, `1.7e308` are all 1 ulp; 15- and
-# 16-digit near-max literals are 2-3). The 2.3.3 parser averaged ~73000 ulp, so
-# this is the accuracy the mantissa/exponent split exists to buy.
+# `mant * 10^k` has to be correctly rounded, and a single f64 cannot hold 10^k
+# accurately enough to get there. Building it by repeated multiplication (2.3.4)
+# or through the exact 10^22 block (2.3.5) left 1-3 ulp of error, and at the very
+# top of the f64 range 1 ulp of UPWARD error is +Inf — so the canonical DBL_MAX
+# literal `1.7976931348623157e308` parsed as infinity.
 #
-# KNOWN RESIDUAL: literals within ~2 ulp of DBL_MAX still saturate to +Inf,
-# because 1 ulp of upward error at the very top of the range IS +Inf.
-# `1.7976931348623157e308` (the canonical shortest round-trip decimal for
-# DBL_MAX) is the case that matters. Closing it needs a two-term double-double
-# scale factor rather than a single f64; tracked in
-# docs/development/roadmap.md — 2.3.x "Still open", pinned by
-# test_top_of_range_literals so it cannot silently widen.
+# 2.4.0 carries the scale factor as a two-term (hi, lo) pair with ~106 bits of
+# significand, using Dekker's error-compensated product. The residual `lo` is
+# exactly the bits a single f64 drops, so the final rounding sees them.
 #
-# Callers clamp k, so the loop is bounded.
-fn _pow10(k) {
-    var r = f64_from(1);
+# Cyrius has no tuples, so the pair travels in a 3-word buffer
+# [hi, lo, binary_exponent]. Filed upstream as
+# cyrius/docs/development/proposals/2026-08-13-tuple-multi-value-returns.md.
+
+var _DD_SPLIT = 0;      # 2^27 + 1, Dekker's splitting constant
+var _DD_E22 = 0;        # 10^22 — the largest power of ten f64 holds exactly
+var _DD_UP = 0;         # 2^256
+var _DD_DOWN = 0;       # 2^-256
+var _DD_THRESH = 0;     # ~10^200, the rescale trigger
+var _DD_P10 = 0;        # table of 10^0 .. 10^22, each EXACT in f64
+var _DD_READY = 0;
+
+# f64 holds every integer below 2^53 exactly, and every power of ten up to
+# 10^22 exactly. When both hold, `mant * 10^k` (or the matching division) is a
+# SINGLE correctly-rounded operation — no compensation needed. That is Clinger's
+# fast path, and it covers essentially every literal a human writes.
+var ABACO_EXACT_INT_MAX = 9007199254740992;   # 2^53
+var ABACO_EXACT_P10_MAX = 22;
+
+fn _dd_init() {
+    if (_DD_READY == 1) { return 0; }
+    _DD_SPLIT = f64_from(134217729);
     var ten = f64_from(10);
+    var acc = f64_from(1);
     var i = 0;
-    # Exact block: 10^22 is the largest power of ten f64 holds exactly.
-    var e22 = f64_from(1);
-    while (i < 22) { e22 = f64_mul(e22, ten); i = i + 1; }
-    var rem = k;
-    while (rem >= 22) {
-        r = f64_mul(r, e22);
-        rem = rem - 22;
-    }
+    while (i < 22) { acc = f64_mul(acc, ten); i = i + 1; }
+    _DD_E22 = acc;
+    var two = f64_from(2);
+    acc = f64_from(1);
     i = 0;
-    while (i < rem) {
-        r = f64_mul(r, ten);
+    while (i < 256) { acc = f64_mul(acc, two); i = i + 1; }
+    _DD_UP = acc;
+    _DD_DOWN = f64_div(f64_from(1), acc);
+    acc = f64_from(1);
+    i = 0;
+    while (i < 200) { acc = f64_mul(acc, ten); i = i + 1; }
+    _DD_THRESH = acc;
+    # Exact powers of ten, built once. Rebuilding these per literal is what made
+    # the 2.3.5 parser slow: every call re-ran the 10^22 chain from scratch.
+    _DD_P10 = alloc((ABACO_EXACT_P10_MAX + 1) * 8);
+    acc = f64_from(1);
+    i = 0;
+    while (i <= ABACO_EXACT_P10_MAX) {
+        store64(_DD_P10 + i * 8, acc);
+        acc = f64_mul(acc, ten);
         i = i + 1;
     }
+    _DD_READY = 1;
+    return 0;
+}
+
+# 10^k, exactly, for 0 <= k <= ABACO_EXACT_P10_MAX.
+fn _p10_exact(k) {
+    _dd_init();
+    return load64(_DD_P10 + k * 8);
+}
+
+# Dekker split: the high half of `a`, carrying ~26 significant bits, such that
+# a = hi + (a - hi) EXACTLY. Requires |a| < DBL_MAX / 2^27 (~1.3e300) or the
+# scaled product overflows — every caller below keeps values under ~1e250.
+fn _dd_hi(a) {
+    var c = f64_mul(_DD_SPLIT, a);
+    return f64_sub(c, f64_sub(c, a));
+}
+
+# The exact rounding error of `p = fl(a * b)`, i.e. a*b - p. Dekker 1971.
+fn _dd_prod_err(a, b, p) {
+    var ah = _dd_hi(a);
+    var al = f64_sub(a, ah);
+    var bh = _dd_hi(b);
+    var bl = f64_sub(b, bh);
+    var err = f64_sub(f64_mul(ah, bh), p);
+    err = f64_add(err, f64_mul(ah, bl));
+    err = f64_add(err, f64_mul(al, bh));
+    err = f64_add(err, f64_mul(al, bl));
+    return err;
+}
+
+# (hi, lo) *= d, renormalised so hi carries the leading bits. `d` must be exact.
+fn _dd_mul_d(dd, d) {
+    var hi = load64(dd);
+    var lo = load64(dd + 8);
+    var p = f64_mul(hi, d);
+    var e = _dd_prod_err(hi, d, p);
+    e = f64_add(e, f64_mul(lo, d));
+    var s = f64_add(p, e);
+    store64(dd, s);
+    store64(dd + 8, f64_sub(e, f64_sub(s, p)));
+    return 0;
+}
+
+# Keep the pair inside the range where _dd_hi's split cannot overflow, moving
+# the excess into a binary exponent. Scaling by a power of two is exact, so this
+# costs no accuracy.
+fn _dd_renorm(dd) {
+    if (f64_gt(load64(dd), _DD_THRESH) == 1) {
+        store64(dd, f64_mul(load64(dd), _DD_DOWN));
+        store64(dd + 8, f64_mul(load64(dd + 8), _DD_DOWN));
+        store64(dd + 16, load64(dd + 16) + 256);
+    }
+    return 0;
+}
+
+# 10^k as (hi, lo) * 2^bexp, written into the 3-word buffer `dd`.
+# k >= 0; callers clamp it, so the loop is bounded.
+fn _dd_pow10(k, dd) {
+    _dd_init();
+    store64(dd, f64_from(1));
+    store64(dd + 8, f64_from(0));
+    store64(dd + 16, 0);
+    var rem = k;
+    while (rem >= 22) {
+        _dd_mul_d(dd, _DD_E22);
+        _dd_renorm(dd);
+        rem = rem - 22;
+    }
+    if (rem > 0) {
+        # One exact factor rather than `rem` separate multiplications.
+        _dd_mul_d(dd, load64(_DD_P10 + rem * 8));
+        _dd_renorm(dd);
+    }
+    return 0;
+}
+
+# x * 2^n, exactly, in chunks that cannot overflow an intermediate. Underflow to
+# a subnormal (or to zero) is the correct IEEE outcome and is left to happen.
+fn _dd_scale_pow2(x, n) {
+    var r = x;
+    var k = n;
+    while (k >= 256) { r = f64_mul(r, _DD_UP); k = k - 256; }
+    while (k <= (0 - 256)) { r = f64_mul(r, _DD_DOWN); k = k + 256; }
+    var two = f64_from(2);
+    var half = f64_div(f64_from(1), two);
+    while (k > 0) { r = f64_mul(r, two); k = k - 1; }
+    while (k < 0) { r = f64_mul(r, half); k = k + 1; }
     return r;
+}
+
+# The mantissa carries up to 18 digits (~1e18), past f64's exact-integer limit
+# of 2^53, so `f64_from(mant)` ALREADY rounds before any scaling happens. Split
+# it into a two-term pair as well, or that lost bit caps the whole computation
+# at 1 ulp no matter how accurate the scale factor is — it is what kept the
+# DBL_MAX literal 1 ulp low even after the scale went double-double.
+fn _dd_mant_hi(mant) { return f64_from(mant); }
+fn _dd_mant_lo(mant, m_hi) { return f64_from(mant - f64_to(m_hi)); }
+
+# mant * 10^k for k >= 0, error-compensated on both factors.
+fn _mul_pow10(mant, k) {
+    var dd = alloc(24);
+    _dd_pow10(k, dd);
+    var hi = load64(dd);
+    var lo = load64(dd + 8);
+    var m_hi = _dd_mant_hi(mant);
+    var m_lo = _dd_mant_lo(mant, m_hi);
+    var p = f64_mul(m_hi, hi);
+    var e = _dd_prod_err(m_hi, hi, p);
+    e = f64_add(e, f64_mul(m_hi, lo));
+    e = f64_add(e, f64_mul(m_lo, hi));
+    e = f64_add(e, f64_mul(m_lo, lo));
+    return _dd_scale_pow2(f64_add(p, e), load64(dd + 16));
+}
+
+# mant / 10^k for k >= 0, error-compensated. One Newton refinement against the
+# double-double divisor turns the quotient's ~1 ulp into ~0.5.
+fn _div_pow10(mant, k) {
+    var dd = alloc(24);
+    _dd_pow10(k, dd);
+    var hi = load64(dd);
+    var lo = load64(dd + 8);
+    var m_hi = _dd_mant_hi(mant);
+    var m_lo = _dd_mant_lo(mant, m_hi);
+    var q = f64_div(m_hi, hi);
+    var p = f64_mul(q, hi);
+    var e = _dd_prod_err(q, hi, p);
+    e = f64_add(e, f64_mul(q, lo));
+    var rem = f64_sub(f64_sub(m_hi, p), e);
+    rem = f64_add(rem, m_lo);
+    q = f64_add(q, f64_div(rem, hi));
+    return _dd_scale_pow2(q, 0 - load64(dd + 16));
 }
 
 # Parse a number from input bytes, return f64 bits.
@@ -319,20 +484,31 @@ fn parse_number(input, start, len, out_end) {
     }
 
     var result = f64_from(mant);
+
+    # Fast path: both operands exact => one rounding, provably correct. This is
+    # the overwhelmingly common case (3.14, 1.5e3, 0.1), and routing it through
+    # the compensated path costs ~40% on literal-heavy parsing for no accuracy.
+    if (mant < ABACO_EXACT_INT_MAX) {
+        if (total >= 0 && total <= ABACO_EXACT_P10_MAX) {
+            store64(out_end, i);
+            return f64_mul(result, _p10_exact(total));
+        }
+        if (total < 0 && total >= (0 - ABACO_EXACT_P10_MAX)) {
+            store64(out_end, i);
+            return f64_div(result, _p10_exact(0 - total));
+        }
+    }
+
     if (total > 0) {
-        result = f64_mul(result, _pow10(total));
+        result = _mul_pow10(mant, total);
     }
     elif (total < 0) {
-        # Divide rather than multiply by 10^-k: one correctly-rounded division
-        # beats a reciprocal that is itself inexact. Step the divisor so it
-        # never reaches +Inf before the value has legitimately underflowed,
-        # which would collapse representable subnormals (e.g. 1e-320) to 0.
-        var k = 0 - total;
-        while (k > 200) {
-            result = f64_div(result, _pow10(200));
-            k = k - 200;
-        }
-        result = f64_div(result, _pow10(k));
+        # Divide rather than multiply by a reciprocal: the reciprocal is itself
+        # inexact, and _div_pow10's Newton step against the double-double
+        # divisor lands within half an ulp. The binary-exponent split also means
+        # the divisor never reaches +Inf before the value has legitimately
+        # underflowed, so representable subnormals (1e-320) survive.
+        result = _div_pow10(mant, 0 - total);
     }
 
     store64(out_end, i);

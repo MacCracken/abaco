@@ -123,8 +123,11 @@ fn _fz_pathological(which, e) {
         return 0;
     }
     if (which == 2) {
-        # Right-associative '^' chain. n operators = 2n+1 tokens, so the token
-        # cap bites at n >= 256; below that it must evaluate.
+        # Right-associative '^' chain. The depth guard tests before
+        # incrementing, so n operators reach depth n-1: n <= 256 evaluates,
+        # n >= 257 is a depth rejection. At the pre-2.4.0 token cap of 512 this
+        # window did not exist — 257 operators needed 515 tokens — which is why
+        # parse_power's guard was structurally untestable.
         n = _fz_u(400) + 1;
         buf = alloc(n * 2 + 4);
         while (i < n) {
@@ -135,10 +138,10 @@ fn _fz_pathological(which, e) {
         store8(buf + pos, 49); pos = pos + 1;
         store8(buf + pos, 0);
         Evaluator_eval(e, buf);
-        if (n * 2 + 1 <= ABACO_MAX_TOKENS) {
-            if (eval_err(e) != ABACO_ERR_NONE) { _fz_fail("'^' chain under both caps rejected"); }
+        if (n <= 256) {
+            if (eval_err(e) != ABACO_ERR_NONE) { _fz_fail("'^' chain under the depth cap rejected"); }
         } else {
-            if (eval_err(e) != ABACO_ERR_PARSE) { _fz_fail("over-cap '^' chain accepted"); }
+            if (eval_err(e) != ABACO_ERR_PARSE) { _fz_fail("over-deep '^' chain accepted"); }
         }
         return 0;
     }
