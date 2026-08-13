@@ -5,7 +5,7 @@
 1. Fork the repository.
 2. Create a branch from `main`.
 3. Make your changes. Ensure:
-   - `cyrius test` — all 509+ assertions pass
+   - `cyrius test` — all 547+ assertions pass
    - `for f in src/*.cyr; do cyrius lint "$f"; done` — clean, meaning **both**
      `0 warnings` and `0 untracked deferrals` on every file. Lint takes one path
      and silently ignores extra glob args, so `cyrius lint src/*.cyr` checks

@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.3.4] — 2026-08-13
 
 **Cyrius 6.5.20 toolchain bump — first bump that is _not_ source-neutral — plus
-four evaluator defects fixed.** The 6.5.x toolchain broke the build in two ways:
+six pre-existing defects fixed.** The 6.5.x toolchain broke the build in two ways:
 
 1. **`f64_round` became a reserved builtin.** abaco had hand-rolled
    `fn f64_round` in `src/dsp.cyr` since the port, and 6.5.x rejects that
@@ -21,17 +21,20 @@ four evaluator defects fixed.** The 6.5.x toolchain broke the build in two ways:
    though `lib/io.cyr` declares `print(msg, len)`; 6.5.20 rejects it. All three
    fuzz harnesses used the 1-arg form.
 
-Auditing the bump then surfaced four pre-existing defects in `src/eval.cyr`,
-none related to the toolchain: an **out-of-bounds heap write** in the tokenizer
+Auditing the bump then surfaced six pre-existing defects, none related to the
+toolchain. In `src/eval.cyr`: an **out-of-bounds heap write** in the tokenizer
 that produced silently wrong answers, an **unbounded exponent loop** (~81 years
 of work from 20 bytes of input), **unbounded parser recursion** past
-`ABACO_MAX_DEPTH`, and an **uncapped `totient()` domain**. All four are fixed
-here with regression tests — see *Fixed* and
+`ABACO_MAX_DEPTH`, an **uncapped `totient()` domain**, and **i64 accumulators
+that wrapped** on long numeric literals. In `src/ai.cyr`, a new `fuzz_ai`
+harness immediately found that **`CalcHistory_from_json` silently discarded the
+entire history** if any field contained a `{` or `}`. All are fixed here with
+regression tests — see *Fixed* and
 [`docs/audit/2026-08-13-audit.md`](docs/audit/2026-08-13-audit.md).
 
 **No stdlib re-batch** — the `[deps].stdlib` module list is unchanged and all 18
-declared modules still exist at 6.5.20. Suite green at **509 asserts, 0
-failures** (was 479); fuzz 3/3 at **20,000 iterations** each; fmt/lint/vet clean
+declared modules still exist at 6.5.20. Suite green at **547 asserts, 0
+failures** (was 479); fuzz **4/4** at 20,000 iterations each; fmt/lint/vet clean
 (per-file — see below); DCE build passes.
 
 ### Changed
@@ -99,11 +102,11 @@ failures** (was 479); fuzz 3/3 at **20,000 iterations** each; fmt/lint/vet clean
   `syscalls` +51, `syscalls_windows` +43, `atomic` +21, `ganita` +20,
   `syscalls_x86_64_linux` +18, `math` +8, `assert` +6, `string` +4;
   `alloc_*`, `args_*`, `hashmap`, `http`, `net`, `str` byte-identical).
-- **Smoke binary `build/abaco`** ≈ 395,688 B — up ~42 KB from 353,408 B at
+- **Smoke binary `build/abaco`** ≈ 395,712 B — up ~42 KB from 353,408 B at
   2.3.3/6.4.66 (1203 unreachable fns, 312,537 B NOPed by DCE).
-- **`dist/abaco.cyr` regenerated** — 117,233 B / 3,244 lines (was 112,517 B /
-  3,167). Carries the `f64_round_half_away` rename and the evaluator bound
-  checks, so it is **not**
+- **`dist/abaco.cyr` regenerated** — 123,434 B / 3,380 lines (was 112,517 B /
+  3,167). Carries the `f64_round_half_away` rename, the evaluator bound checks
+  and the JSON string-aware scanning, so it is **not**
   byte-identical to 2.3.3 and consumers must re-vendor. Any consumer that was
   calling the bundle's `f64_round` now silently gets the ties-to-even builtin
   instead — call `f64_round_half_away` to keep the old behaviour.
@@ -119,14 +122,32 @@ failures** (was 479); fuzz 3/3 at **20,000 iterations** each; fmt/lint/vet clean
 - **`test_token_cap`, `test_pow_exponent_cap`, `test_unary_and_power_depth`,
   `test_totient_cap`** (`tests/test_eval.tcyr`) — regression coverage for the
   four defects in *Fixed* below, each pinned either side of its boundary.
-  Suite total 479 → **509 asserts**.
+- **`test_long_literals`** (`tests/test_eval.tcyr`) — 19/20/21-digit integers
+  stay positive and keep their magnitude, 19- and 65-digit fractions stay 1.0,
+  leading zeros do not consume mantissa room, `1e-320` stays a nonzero
+  subnormal, and whole numbers stay bit-exact.
+- **`test_history_json_braces`, `test_history_json_key_confusion`**
+  (`tests/test_ai.tcyr`) — brace/bracket payloads round-trip, and a genuine key
+  wins over a lookalike inside a value.
+- **`fuzz/fuzz_ai.fcyr`** — the crate's fourth fuzz harness, covering the
+  previously unfuzzed `src/ai.cyr`: `nl_parse` on both random bytes and
+  grammar-shaped phrases, `CalcHistory` ring-buffer bounds and JSON round-trip,
+  `_ccy_load_body` on adversarial rate payloads and deep nesting, and
+  `_ccy_validate_url`. It asserts the audit's stated safety invariants directly
+  — every rate surviving the loader is finite/positive/< 10⁶ (MED-7), and no URL
+  containing a control byte is ever accepted (CRLF injection, §4.1). Confirmed
+  to discriminate: it fails on the 2.3.3 `src/ai.cyr` and passes 50,000
+  iterations against this one.
+
+  Suite total 479 → **547 asserts**.
 
 ### Fixed
 
-Four evaluator defects found by the 2026-08-13 audit
-([`docs/audit/2026-08-13-audit.md`](docs/audit/2026-08-13-audit.md)). All four
-predate this release and are unrelated to the toolchain bump; all four were
-reproduced before being fixed and have regression tests.
+Six defects found by the 2026-08-13 audit
+([`docs/audit/2026-08-13-audit.md`](docs/audit/2026-08-13-audit.md)) — five in
+`src/eval.cyr`, one in `src/ai.cyr`. All predate this release and are unrelated
+to the toolchain bump; all were reproduced before being fixed and have
+regression tests.
 
 - **`tokenize()` wrote past the end of the token array — heap corruption.**
   `ABACO_MAX_TOKENS` (512) was declared and allocated against, but the token
@@ -163,6 +184,42 @@ reproduced before being fixed and have regression tests.
   O(√n) trial-division loop while `factorial` (170) and `fibonacci` (92) were
   both bounded. Capped at `ABACO_TOTIENT_MAX` (10¹²), keeping the loop under
   ~10⁶ iterations.
+- **`parse_number`'s i64 accumulators wrapped on long literals.** `int_part`,
+  `frac_part` and `frac_div` were each multiplied by 10 per digit with no
+  guard, so a ~19-digit integer literal wrapped i64 **negative** and a ~19-digit
+  fraction wrapped `frac_div` into a nonsense divisor — both returning silent
+  garbage. Replaced with an exact 18-digit mantissa plus a decimal exponent
+  (`ABACO_MANT_DIGITS`, `ABACO_POW10_MAX`): the mantissa stops at the largest
+  count that cannot overflow, and every further digit only moves the exponent,
+  so there is no wrap point left. This is also *more* accurate for fractions —
+  `3.14` is now one correctly-rounded 314/100 rather than an accumulation of
+  inexact tenths — and it keeps whole numbers bit-exact, which `eval_pow`'s
+  integer fast path depends on.
+  Two follow-on effects: the literal's own decimal exponent and the scientific
+  exponent are now combined *before* clamping (clamping them separately let a
+  long fraction and a large exponent cancel into the wrong magnitude), and
+  negative exponents divide in steps so representable subnormals like `1e-320`
+  no longer collapse to 0. `1e400` now yields `+Inf` rather than the old finite
+  `1e308` — the correct IEEE-754 overflow result, where the old clamp turned an
+  overflow into a plausible-looking finite number.
+- **`CalcHistory_from_json` lost the entire history if any field contained a
+  brace.** Object boundaries were found by counting raw `{`/`}` without skipping
+  string contents. Braces inside a JSON string are legal and need no escaping —
+  and `CalcHistory_to_json` emits them verbatim — so one `{` or `}` in any
+  input, result or timestamp shifted the boundary and made the rest of the array
+  unparseable. A two-entry history containing `a}b` round-tripped to **zero**
+  entries, silently, meaning `save_to_file` → `load_from_file` discarded
+  everything. A `]` inside a field ended the array early by the same mechanism.
+  All structural scanning now goes through a `_jf_skip_string` helper that
+  honours backslash escapes. **Found by the new `fuzz_ai` harness on its first
+  run.**
+- **`_jf_find_value` matched key names inside values.** It searched for
+  `"key"` anywhere in the object slice, so a value whose text looked like a key
+  could be picked up as that field. It stayed benign only because
+  `CalcHistory_to_json` always writes the real key first; a hand-written or
+  attacker-supplied file carries no such ordering guarantee, and
+  `load_from_file` reads untrusted data. The scan is now string-aware and only
+  matches a string that is actually in key position (followed by `:`).
 
 - **Parser limit globals namespaced** — `MAX_TOKENS` / `MAX_DEPTH` →
   `ABACO_MAX_TOKENS` / `ABACO_MAX_DEPTH`, joining `ABACO_ERR_*`. `MAX_TOKENS`

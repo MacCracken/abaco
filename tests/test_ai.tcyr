@@ -389,6 +389,63 @@ fn test_security_fetch_accepts_localhost() {
     return 0;
 }
 
+# 2.3.4: braces inside a field are legal JSON and need no escaping, so
+# `to_json` emits them verbatim — but `from_json` used to find object
+# boundaries by counting raw braces, ignoring string context. One '{' or '}'
+# in any field shifted the boundary and made the whole remaining array
+# unparseable: a two-entry history round-tripped to ZERO entries, silently,
+# which meant save_to_file/load_from_file lost the entire history. Found by
+# `fuzz/fuzz_ai.fcyr` on its first run.
+fn test_history_json_braces() {
+    var h = CalcHistory_new(10);
+    CalcHistory_push(h, "a}b", "1", "t1");
+    CalcHistory_push(h, "a{b", "2", "t2");
+    CalcHistory_push(h, "{\"nested\":\"looking\"}", "3", "t3");
+    CalcHistory_push(h, "plain", "4", "t4");
+    var s = CalcHistory_to_json(h);
+    var h2 = CalcHistory_new(10);
+    var n = str_len(s);
+    var cbuf = alloc(n + 1);
+    memcpy(cbuf, str_data(s), n);
+    store8(cbuf + n, 0);
+    var err = CalcHistory_from_json(h2, cbuf);
+    assert_eq(err, 0, "brace roundtrip ok");
+    assert_eq(CalcHistory_len(h2), 4, "all 4 entries recovered (was 0)");
+    assert(streq(he_input(CalcHistory_get(h2, 0)), "a}b") == 1, "close brace preserved");
+    assert(streq(he_input(CalcHistory_get(h2, 1)), "a{b") == 1, "open brace preserved");
+    assert(streq(he_input(CalcHistory_get(h2, 2)), "{\"nested\":\"looking\"}") == 1,
+    "brace-and-quote payload preserved");
+    assert(streq(he_input(CalcHistory_get(h2, 3)), "plain") == 1, "trailing entry intact");
+    # A ']' inside a field must not end the array early either.
+    h = CalcHistory_new(10);
+    CalcHistory_push(h, "x]y", "1", "t1");
+    CalcHistory_push(h, "after", "2", "t2");
+    s = CalcHistory_to_json(h);
+    h2 = CalcHistory_new(10);
+    n = str_len(s);
+    cbuf = alloc(n + 1);
+    memcpy(cbuf, str_data(s), n);
+    store8(cbuf + n, 0);
+    CalcHistory_from_json(h2, cbuf);
+    assert_eq(CalcHistory_len(h2), 2, "']' in a field does not end the array");
+    return 0;
+}
+
+# 2.3.4: `_jf_find_value` matched a key name anywhere in the slice, including
+# inside a value. `to_json` always writes the real key first so this stayed
+# benign in practice, but a hand-written or attacker-supplied file has no such
+# ordering guarantee — load_from_file reads untrusted data.
+fn test_history_json_key_confusion() {
+    var h = CalcHistory_new(10);
+    # "result" carries text that looks like an "input" key/value pair.
+    var json = "[{\"result\":\"\\\"input\\\":\\\"HIJACK\\\"\",\"input\":\"REAL\",\"timestamp\":\"t\"}]";
+    CalcHistory_from_json(h, json);
+    assert_eq(CalcHistory_len(h), 1, "entry parsed");
+    var e = CalcHistory_get(h, 0);
+    assert(streq(he_input(e), "REAL") == 1, "genuine key wins over lookalike in a value");
+    return 0;
+}
+
 fn test_history_empty_json() {
     var h = CalcHistory_new(10);
     var s = CalcHistory_to_json(h);
@@ -428,6 +485,8 @@ fn main() {
     test_ccy_deep_nesting_rejected();
     test_history_json_roundtrip();
     test_history_json_escapes();
+    test_history_json_braces();
+    test_history_json_key_confusion();
     test_history_empty_json();
     test_security_percent_of_rejects_operators();
     test_security_percent_of_paren_injection();

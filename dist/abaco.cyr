@@ -1001,6 +1001,27 @@ var ABACO_MAX_TOKENS = 512;
 # can never collide with a real token count; callers map it to ABACO_ERR_PARSE.
 var ABACO_TOK_OVERFLOW = (0 - 1);
 
+# Significant digits `parse_number` accumulates into an i64 mantissa without
+# wrapping. i64 tops out at 9.22e18 (19 digits), so 18 is the largest count for
+# which `mant * 10 + digit` can never overflow.
+#
+# This bounds the *accumulator*, not the result: f64 holds integers exactly only
+# to 2^53 (~9.007e15, 16 digits), so converting an 18-digit mantissa still
+# rounds. Carrying the full 18 keeps that rounding to a single correctly-rounded
+# step at the end instead of compounding it per digit.
+var ABACO_MANT_DIGITS = 18;
+
+# Clamp on a literal's own decimal exponent, applied while scanning so the
+# counter cannot wrap on a pathological run of digits. Deliberately far larger
+# than ABACO_POW10_MAX: the scientific exponent is added afterwards, and
+# clamping tight here would let the two cancel into the wrong magnitude.
+var ABACO_DEC_EXP_MAX = 1000000000;
+
+# Final decimal-exponent clamp. 10^309 is already +Inf and 10^-324 is already
+# below the smallest subnormal, so nothing representable survives past this —
+# it bounds `_pow10` without changing any answer.
+var ABACO_POW10_MAX = 340;
+
 # Domain cap for the evaluator's `totient(n)`. The ntheory implementation
 # trial-divides to sqrt(n), so this bounds that loop at ~10^6 iterations.
 var ABACO_TOTIENT_MAX = 1000000000000;
@@ -1090,14 +1111,43 @@ fn is_space(c) {
     return 0;
 }
 
-# Parse a number from input bytes, return f64 bits
-# Sets *out_end to the position after the number
+# 10^k for k >= 0, by repeated multiplication. f64 holds 10^k exactly for
+# k <= 22; past that each step rounds, but the magnitude is already outside any
+# exact-integer range so the residual is a last-ulp effect. Callers clamp k to
+# ABACO_POW10_MAX, so the loop is bounded.
+fn _pow10(k) {
+    var r = f64_from(1);
+    var ten = f64_from(10);
+    var i = 0;
+    while (i < k) {
+        r = f64_mul(r, ten);
+        i = i + 1;
+    }
+    return r;
+}
+
+# Parse a number from input bytes, return f64 bits.
+# Sets *out_end to the position after the number.
+#
+# Significant digits accumulate into an exact i64 mantissa plus a decimal
+# exponent. The previous form kept `int_part`, `frac_part` and `frac_div` and
+# multiplied each by 10 per digit with no guard (2026-08-13 audit, M-3):
+# a ~19-digit integer literal wrapped i64 to a NEGATIVE value, and a ~19-digit
+# fraction wrapped `frac_div` into a nonsense divisor, so both silently
+# returned garbage. Splitting mantissa from exponent removes the wrap point
+# entirely — the mantissa stops at ABACO_MANT_DIGITS and every further digit
+# only moves the exponent.
+#
+# This form is also more accurate for fractions: "3.14" is one correctly-rounded
+# 314/100 rather than an accumulation of inexact tenths, and it keeps whole
+# numbers bit-exact, which `eval_pow`'s integer fast path depends on.
 fn parse_number(input, start, len, out_end) {
     var i = start;
-    var int_part = 0;
-    var frac_part = 0;
-    var frac_div = 1;
+    var mant = 0;
+    var mdigits = 0;
+    var dec_exp = 0;
     var has_dot = 0;
+    var seen_sig = 0;
 
     # Integer/fractional part
     var pgo = 1;
@@ -1106,11 +1156,26 @@ fn parse_number(input, start, len, out_end) {
         else {
             var c = load8(input + i);
             if (is_digit(c) == 1) {
-                if (has_dot == 0) {
-                    int_part = int_part * 10 + (c - 48);
-                } else {
-                    frac_part = frac_part * 10 + (c - 48);
-                    frac_div = frac_div * 10;
+                if (mdigits < ABACO_MANT_DIGITS) {
+                    # Leading zeros carry no significance — skip them so
+                    # "0.0000001" spends none of the mantissa's 18 digits.
+                    if (c != 48 || seen_sig == 1) {
+                        mant = mant * 10 + (c - 48);
+                        mdigits = mdigits + 1;
+                        seen_sig = 1;
+                    }
+                    # A fractional digit shifts the point regardless of whether
+                    # it was significant enough to accumulate.
+                    if (has_dot == 1) {
+                        if (dec_exp > (0 - ABACO_DEC_EXP_MAX)) { dec_exp = dec_exp - 1; }
+                    }
+                }
+                else {
+                    # Mantissa full. Integer digits still scale the value;
+                    # fractional digits are below f64 resolution, so drop them.
+                    if (has_dot == 0) {
+                        if (dec_exp < ABACO_DEC_EXP_MAX) { dec_exp = dec_exp + 1; }
+                    }
                 }
                 i = i + 1;
             }
@@ -1122,9 +1187,8 @@ fn parse_number(input, start, len, out_end) {
         }
     }
 
-    var result = f64_add(f64_from(int_part), f64_div(f64_from(frac_part), f64_from(frac_div)));
-
     # Scientific notation: e/E followed by optional +/- and digits
+    var sci = 0;
     if (i < len) {
         var c = load8(input + i);
         var is_exp = 0;
@@ -1147,25 +1211,45 @@ fn parse_number(input, start, len, out_end) {
                     if (is_digit(c) == 0) { ego = 0; }
                     else {
                         exp_val = exp_val * 10 + (c - 48);
-                        # Clamp early so "1e9999999999..." can't overflow exp_val.
+                        # Clamp per digit so "1e9999999999..." can't overflow
+                        # exp_val; bounded work regardless of input length.
                         if (exp_val > 400) { exp_val = 400; }
                         i = i + 1;
                     }
                 }
             }
-            # Audit MED-5: clamp the exponent at 308 (positive) / 400
-            # (digit-accumulation cap above). The f64 range hits +inf at
-            # ~1.8e308, so anything larger is +inf / 0 already; explicit
-            # clamping makes adversarial "1e9999999999..." inputs finish
-            # in bounded work instead of overflowing `exp_val` and
-            # producing nonsense.
-            if (exp_val > 308) { exp_val = 308; }
-            var exp_f = f64_mul(f64_from(exp_sign), f64_from(exp_val));
-            # 10^x = exp2(x * log2(10)) = exp2(x * 3.321928...)
-            var log2_10 = 0x400A_934F_0979_A371;
-            var pow10 = f64_exp2(f64_mul(exp_f, log2_10));
-            result = f64_mul(result, pow10);
+            sci = exp_sign * exp_val;
         }
+    }
+
+    # Combine the literal's own decimal exponent with the scientific one, THEN
+    # clamp. Clamping the two separately would let a long fraction and a large
+    # positive exponent cancel into a wrong magnitude.
+    #
+    # ABACO_POW10_MAX is behaviour-preserving: 10^309 is already +Inf and
+    # 10^-324 is already below the smallest subnormal, so no representable
+    # value survives past the bound. (This does change `1e400` from the old
+    # finite 1e308 to +Inf, which is the correct IEEE-754 overflow result —
+    # the old clamp turned an overflow into a plausible-looking finite number.)
+    var total = dec_exp + sci;
+    if (total > ABACO_POW10_MAX) { total = ABACO_POW10_MAX; }
+    if (total < (0 - ABACO_POW10_MAX)) { total = (0 - ABACO_POW10_MAX); }
+
+    var result = f64_from(mant);
+    if (total > 0) {
+        result = f64_mul(result, _pow10(total));
+    }
+    elif (total < 0) {
+        # Divide rather than multiply by 10^-k: one correctly-rounded division
+        # beats a reciprocal that is itself inexact. Step the divisor so it
+        # never reaches +Inf before the value has legitimately underflowed,
+        # which would collapse representable subnormals (e.g. 1e-320) to 0.
+        var k = 0 - total;
+        while (k > 200) {
+            result = f64_div(result, _pow10(200));
+            k = k - 200;
+        }
+        result = f64_div(result, _pow10(k));
     }
 
     store64(out_end, i);
@@ -2865,27 +2949,40 @@ fn CalcHistory_from_json(h, json_cstr) {
         if (load8(data + i) == 91) { i = i + 1; break; }
         i = i + 1;
     }
+    var c = 0;
+    var start = 0;
+    var depth = 0;
     while (i < dlen) {
         # Find next object open-brace.
         while (i < dlen) {
-            var c = load8(data + i);
+            c = load8(data + i);
             if (c == 123) { break; }
-            if (c == 93)  { return 0; }   # closing ] — done
-            i = i + 1;
+            if (c == 34)  { i = _jf_skip_string(data, dlen, i); }
+            elif (c == 93)  { return 0; }   # closing ] — done
+            else { i = i + 1; }
         }
         if (i >= dlen) { return 0; }
-        # Find matching close-brace (no nesting allowed in our shape).
-        var start = i;
-        var depth = 1;
+        # Find the matching close-brace, skipping over string contents.
+        #
+        # This scan used to count raw braces (2.3.4 fix): a single '{' or '}'
+        # inside any field — legal JSON needing no escape, and something
+        # `to_json` emits verbatim — moved the object boundary and made the
+        # whole remaining array unparseable. A two-entry history where one
+        # input contained '}' round-tripped to ZERO entries, silently, so
+        # save_to_file/load_from_file lost the lot.
+        start = i;
+        depth = 1;
         i = i + 1;
         while (i < dlen) {
-            var c = load8(data + i);
-            if (c == 123) { depth = depth + 1; }
+            c = load8(data + i);
+            if (c == 34) { i = _jf_skip_string(data, dlen, i); }
+            elif (c == 123) { depth = depth + 1; i = i + 1; }
             elif (c == 125) {
                 depth = depth - 1;
                 if (depth == 0) { break; }
+                i = i + 1;
             }
-            i = i + 1;
+            else { i = i + 1; }
         }
         if (depth != 0) { return AI_ERR_PARSE; }
         var obj = data + start;
@@ -2984,38 +3081,77 @@ fn ai_clear_err() { AI_LAST_ERR = AI_OK; return 0; }
 
 # Scan body[..len] for `"key"` followed by `:` and return the offset of the
 # first non-space byte after the colon, or -1 if not found.
+# Advance past a JSON string. `i` must index the opening quote. Honours
+# backslash escapes, so an escaped quote does not end the string. Returns the
+# index just past the closing quote, or `len` if the string is unterminated.
+#
+# Every structural scan in this module goes through this: JSON only has
+# structure *outside* strings, so a scanner that counts braces, brackets or
+# quotes without skipping string contents is reading user data as syntax.
+fn _jf_skip_string(body, len, i) {
+    i = i + 1;
+    while (i < len) {
+        var c = load8(body + i);
+        if (c == 92) { i = i + 2; }
+        elif (c == 34) { return i + 1; }
+        else { i = i + 1; }
+    }
+    return len;
+}
+
+# Find the offset of the value for `key` in the flat JSON object at
+# `body[..len]`, or -1. Returns the index of the value's first byte.
+#
+# String-aware (2.3.4): the previous version matched `"key"` anywhere in the
+# slice, so a *value* that happened to contain the text of a key name could be
+# mistaken for that key. It only stayed benign because `CalcHistory_to_json`
+# always writes input/result/timestamp in that order, putting the genuine key
+# first — a hand-written or attacker-supplied file has no such guarantee.
 fn _jf_find_value(body, len, key) {
     var klen = strlen(key);
     var i = 0;
-    while (i + klen + 3 <= len) {
-        if (load8(body + i) == 34) {
-            var j = 0;
-            var ok = 1;
-            while (j < klen) {
-                if (load8(body + i + 1 + j) != load8(key + j)) { ok = 0; break; }
-                j = j + 1;
+    var send = 0;
+    var k = 0;
+    var j = 0;
+    var ok = 0;
+    var c = 0;
+    while (i < len) {
+        c = load8(body + i);
+        if (c == 34) {
+            send = _jf_skip_string(body, len, i);
+            # A string is a KEY only if the next non-space byte is ':'.
+            k = send;
+            while (k < len) {
+                c = load8(body + k);
+                if (c == 32 || c == 9 || c == 10 || c == 13) { k = k + 1; }
+                else { break; }
             }
-            if (ok == 1) {
-                if (load8(body + i + 1 + klen) == 34) {
-                    var k = i + klen + 2;
-                    while (k < len) {
-                        var c = load8(body + k);
-                        if (c == 58) {
-                            k = k + 1;
-                            while (k < len) {
-                                var d = load8(body + k);
-                                if (d == 32) { k = k + 1; }
-                                elif (d == 9)  { k = k + 1; }
-                                elif (d == 10) { k = k + 1; }
-                                elif (d == 13) { k = k + 1; }
-                                else { return k; }
-                            }
-                        } else { k = k + 1; }
+            if (k < len && load8(body + k) == 58) {
+                ok = 0;
+                # send - i - 2 is the raw byte length between the quotes.
+                if (send - i - 2 == klen) {
+                    ok = 1;
+                    j = 0;
+                    while (j < klen) {
+                        if (load8(body + i + 1 + j) != load8(key + j)) { ok = 0; break; }
+                        j = j + 1;
                     }
                 }
+                k = k + 1;                     # step past ':'
+                if (ok == 1) {
+                    while (k < len) {
+                        c = load8(body + k);
+                        if (c == 32 || c == 9 || c == 10 || c == 13) { k = k + 1; }
+                        else { return k; }
+                    }
+                    return 0 - 1;
+                }
+                i = k;                         # wrong key — resume at its value
+            } else {
+                i = send;                      # a value string — skip it whole
             }
         }
-        i = i + 1;
+        else { i = i + 1; }
     }
     return 0 - 1;
 }

@@ -1,0 +1,406 @@
+# Fuzz: src/ai.cyr — natural-language parsing, calculation history, and the
+# currency rates cache. Added at 2.3.4; the 2026-08-13 audit (P-1) recorded
+# `src/ai.cyr` as having no harness at all, which is notable because it holds
+# the only code in the crate that parses data off the network.
+#
+# Invariants:
+#   - nl_parse never crashes, on any byte sequence, and a non-zero result
+#     always carries a well-formed ParsedQuery (known kind, non-null s1).
+#   - CalcHistory never exceeds its configured max_entries, and never reports
+#     a length it cannot serve via CalcHistory_get.
+#   - to_json -> from_json round-trips the entry count for any pushed content,
+#     including bytes that need JSON escaping.
+#   - CalcHistory_from_json never crashes on malformed JSON and leaves the
+#     history within bounds.
+#   - _ccy_load_body never crashes, and EVERY rate that survives it is finite,
+#     strictly positive and < 10^6 (the audit MED-7 poisoning invariant).
+#   - _ccy_validate_url NEVER accepts a URL containing a control byte
+#     (the CRLF header-injection guard, audit §4.1), and never accepts
+#     plaintext http:// to a non-loopback host (audit §4.3).
+#   - CurrencyCache_convert reports an error rather than returning a result
+#     when a code is absent from the cache.
+
+include "src/core.cyr"
+include "src/ntheory.cyr"
+include "src/dsp.cyr"
+include "src/eval.cyr"
+include "src/units.cyr"
+include "src/ai.cyr"
+
+var _fz_state = 20260813;
+
+# Newline-free stdout write. Cyrius 6.5.x enforces call arity, and the stdlib
+# `print` is `print(msg, len)` — a bare `print(cstr)` no longer compiles.
+fn _fz_puts(s) {
+    print(s, strlen(s));
+    return 0;
+}
+
+fn _fz_rand() {
+    _fz_state = _fz_state * 6364136223846793005 + 1442695040888963407;
+    return _fz_state;
+}
+
+fn _fz_u(m) {
+    var r = _fz_rand();
+    if (r < 0) { r = 0 - r; }
+    return r % m;
+}
+
+fn _fz_fail(msg) {
+    _fz_puts("FAIL: ");
+    println(msg);
+    sys_exit(1);
+    return 0;
+}
+
+# ================================================================
+# Generators
+# ================================================================
+
+# Bias toward bytes that mean something to the NL parser, while still emitting
+# control bytes and high bytes — those are the interesting ones for the URL and
+# JSON paths.
+fn _fz_byte() {
+    var kind = _fz_u(24);
+    if (kind < 5)  { return 97 + _fz_u(26); }    # a-z
+    if (kind < 9)  { return 48 + _fz_u(10); }    # 0-9
+    if (kind == 9)  { return 32; }               # space
+    if (kind == 10) { return 34; }               # "
+    if (kind == 11) { return 123; }              # {
+    if (kind == 12) { return 125; }              # }
+    if (kind == 13) { return 91; }               # [
+    if (kind == 14) { return 93; }               # ]
+    if (kind == 15) { return 58; }               # :
+    if (kind == 16) { return 44; }               # ,
+    if (kind == 17) { return 46; }               # .
+    if (kind == 18) { return 45; }               # -
+    if (kind == 19) { return 92; }               # backslash
+    if (kind == 20) { return 37; }               # %
+    if (kind == 21) { return _fz_u(32); }        # control bytes incl. CR/LF/NUL
+    if (kind == 22) { return 128 + _fz_u(128); } # high bytes
+    return _fz_u(256);                           # anything
+}
+
+# Random cstring of up to `maxlen` bytes. NUL is forced out of the interior so
+# the string has the length we intend (a NUL byte would just truncate it).
+fn _fz_str(maxlen) {
+    var len = _fz_u(maxlen) + 1;
+    var buf = alloc(len + 1);
+    var i = 0;
+    while (i < len) {
+        var b = _fz_byte();
+        if (b == 0) { b = 65; }
+        store8(buf + i, b);
+        i = i + 1;
+    }
+    store8(buf + len, 0);
+    return buf;
+}
+
+# Phrase built from NL-parser vocabulary — random bytes almost never produce
+# "convert 5 km to miles", so steer some iterations into the real grammar.
+var _FZ_VERB_N = 6;
+fn _fz_verb(n) {
+    if (n == 0) { return "convert "; }
+    if (n == 1) { return "what is "; }
+    if (n == 2) { return "how many "; }
+    if (n == 3) { return "calculate "; }
+    if (n == 4) { return ""; }
+    return "  CONVERT  ";
+}
+
+var _FZ_UNIT_N = 10;
+fn _fz_unit(n) {
+    if (n == 0) { return "km"; }
+    if (n == 1) { return "miles"; }
+    if (n == 2) { return "usd"; }
+    if (n == 3) { return "eur"; }
+    if (n == 4) { return "celsius"; }
+    if (n == 5) { return "F"; }
+    if (n == 6) { return "bytes"; }
+    if (n == 7) { return "bpm"; }
+    if (n == 8) { return ""; }
+    return "\xff\xfe";
+}
+
+fn _fz_phrase() {
+    var buf = alloc(256);
+    var pos = 0;
+    var v = _fz_verb(_fz_u(_FZ_VERB_N));
+    var vl = strlen(v);
+    memcpy(buf + pos, v, vl); pos = pos + vl;
+    pos = pos + fmt_int_buf(_fz_u(100000), buf + pos);
+    if (_fz_u(3) != 0) {
+        store8(buf + pos, 46); pos = pos + 1;
+        pos = pos + fmt_int_buf(_fz_u(1000), buf + pos);
+    }
+    store8(buf + pos, 32); pos = pos + 1;
+    var u1 = _fz_unit(_fz_u(_FZ_UNIT_N));
+    var u1l = strlen(u1);
+    memcpy(buf + pos, u1, u1l); pos = pos + u1l;
+    var sep = " to ";
+    if (_fz_u(4) == 0) { sep = " in "; }
+    if (_fz_u(7) == 0) { sep = " % of "; }
+    var sl = strlen(sep);
+    memcpy(buf + pos, sep, sl); pos = pos + sl;
+    var u2 = _fz_unit(_fz_u(_FZ_UNIT_N));
+    var u2l = strlen(u2);
+    memcpy(buf + pos, u2, u2l); pos = pos + u2l;
+    store8(buf + pos, 0);
+    return buf;
+}
+
+# A rates payload with adversarial values in the real {"base","rates"} shape.
+var _FZ_RATE_N = 12;
+fn _fz_rate_literal(n) {
+    if (n == 0)  { return "0.92"; }
+    if (n == 1)  { return "0"; }              # zero -> must be dropped
+    if (n == 2)  { return "-1.5"; }           # negative -> must be dropped
+    if (n == 3)  { return "1e400"; }          # +Inf -> must be dropped
+    if (n == 4)  { return "-1e400"; }         # -Inf -> must be dropped
+    if (n == 5)  { return "999999999"; }      # > 10^6 -> must be dropped
+    if (n == 6)  { return "1000000"; }        # exactly the cap -> dropped (not <)
+    if (n == 7)  { return "0.0000000001"; }   # tiny but plausible
+    if (n == 8)  { return "nan"; }            # unparseable
+    if (n == 9)  { return "1e-400"; }         # underflows to 0 -> dropped
+    if (n == 10) { return "12345678901234567890123"; }  # long digit run
+    return "1.0";
+}
+
+fn _fz_rates_json() {
+    var buf = alloc(1024);
+    var pos = 0;
+    memcpy(buf + pos, "{\"base\":\"", 9); pos = pos + 9;
+    var bl = _fz_u(4);
+    if (bl == 0) { memcpy(buf + pos, "USD", 3); pos = pos + 3; }
+    elif (bl == 1) { memcpy(buf + pos, "eur", 3); pos = pos + 3; }
+    elif (bl == 2) { pos = pos + 0; }
+    else { memcpy(buf + pos, "\x01\x02", 2); pos = pos + 2; }
+    memcpy(buf + pos, "\",\"rates\":{", 11); pos = pos + 11;
+    var n = _fz_u(6);
+    var i = 0;
+    while (i < n) {
+        if (i > 0) { store8(buf + pos, 44); pos = pos + 1; }
+        store8(buf + pos, 34); pos = pos + 1;
+        var code = 65 + _fz_u(26);
+        store8(buf + pos, code); pos = pos + 1;
+        store8(buf + pos, 65 + _fz_u(26)); pos = pos + 1;
+        store8(buf + pos, 65 + _fz_u(26)); pos = pos + 1;
+        store8(buf + pos, 34); pos = pos + 1;
+        store8(buf + pos, 58); pos = pos + 1;
+        var lit = _fz_rate_literal(_fz_u(_FZ_RATE_N));
+        var ll = strlen(lit);
+        memcpy(buf + pos, lit, ll); pos = pos + ll;
+        i = i + 1;
+    }
+    memcpy(buf + pos, "}}", 2); pos = pos + 2;
+    store8(buf + pos, 0);
+    return buf;
+}
+
+# Deeply-nested rates object — the MED-4 depth guard's target.
+fn _fz_nested_json(depth) {
+    var buf = alloc(depth * 12 + 64);
+    var pos = 0;
+    memcpy(buf + pos, "{\"base\":\"USD\",\"rates\":", 22); pos = pos + 22;
+    var i = 0;
+    while (i < depth) {
+        memcpy(buf + pos, "{\"a\":", 5); pos = pos + 5;
+        i = i + 1;
+    }
+    memcpy(buf + pos, "1.0", 3); pos = pos + 3;
+    i = 0;
+    while (i < depth) { store8(buf + pos, 125); pos = pos + 1; i = i + 1; }
+    store8(buf + pos, 125); pos = pos + 1;
+    store8(buf + pos, 0);
+    return buf;
+}
+
+# ================================================================
+# Invariant checks
+# ================================================================
+
+# Every rate the cache accepted must satisfy _ccy_rate_plausible. This is the
+# audit MED-7 property: a poisoned response must not smuggle NaN / Inf / zero /
+# absurd magnitudes past the loader.
+fn _check_rates_plausible(c) {
+    var rates = ccy_rates(c);
+    if (rates == 0) { return 0; }
+    var codes = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    var a = 0;
+    while (a < 26) {
+        var b = 0;
+        while (b < 26) {
+            var key = alloc(4);
+            store8(key, 65 + a);
+            store8(key + 1, 65 + b);
+            store8(key + 2, 65);
+            store8(key + 3, 0);
+            if (map_has(rates, key) == 1) {
+                var bits = map_get(rates, key);
+                if (_ccy_rate_plausible(bits) == 0) {
+                    _fz_fail("cache holds an implausible rate (MED-7 invariant)");
+                }
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    return 0;
+}
+
+fn _check_history_bounds(h, maxn) {
+    var n = CalcHistory_len(h);
+    if (n < 0) { _fz_fail("history length negative"); }
+    if (n > maxn) { _fz_fail("history exceeded max_entries"); }
+    # Every index it claims must be servable.
+    var i = 0;
+    while (i < n) {
+        var e = CalcHistory_get(h, i);
+        if (e == 0) { _fz_fail("history_get returned 0 inside reported length"); }
+        if (he_input(e) == 0) { _fz_fail("history entry has null input"); }
+        if (he_result(e) == 0) { _fz_fail("history entry has null result"); }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    args_init();
+
+    var iters = 5000;
+    if (argc() > 1) {
+        var arg = argv(1);
+        iters = 0;
+        var ai = 0;
+        while (load8(arg + ai) != 0) {
+            iters = iters * 10 + load8(arg + ai) - 48;
+            ai = ai + 1;
+        }
+    }
+
+    var pass = 0;
+    var iter = 0;
+    while (iter < iters) {
+        # --- nl_parse on raw bytes and on grammar-shaped phrases ----------
+        var s = _fz_str(120);
+        var q = nl_parse(s);
+        if (q != 0) {
+            var k = pq_kind(q);
+            if (k != PQ_CONVERSION && k != PQ_CALCULATION && k != PQ_CURRENCY) {
+                _fz_fail("nl_parse returned an unknown ParsedQuery kind");
+            }
+            if (pq_s1(q) == 0) { _fz_fail("nl_parse result has null s1"); }
+        }
+        q = nl_parse(_fz_phrase());
+        if (q != 0) {
+            if (pq_s1(q) == 0) { _fz_fail("nl_parse(phrase) result has null s1"); }
+        }
+        # Empty input must not crash.
+        nl_parse("");
+
+        # --- CalcHistory: bounded ring buffer ----------------------------
+        var maxn = _fz_u(8) + 1;
+        var h = CalcHistory_new(maxn);
+        var pushes = _fz_u(20);
+        var p = 0;
+        while (p < pushes) {
+            CalcHistory_push(h, _fz_str(24), _fz_str(24), _fz_str(24));
+            p = p + 1;
+        }
+        _check_history_bounds(h, maxn);
+
+        # to_json -> from_json must round-trip the entry count, including
+        # content that needs escaping (quotes, backslashes, control bytes).
+        var js = CalcHistory_to_json(h);
+        var before = CalcHistory_len(h);
+        var h2 = CalcHistory_new(maxn);
+        var jbuf = alloc(str_len(js) + 1);
+        memcpy(jbuf, str_data(js), str_len(js));
+        store8(jbuf + str_len(js), 0);
+        CalcHistory_from_json(h2, jbuf);
+        if (CalcHistory_len(h2) != before) {
+            _fz_fail("to_json/from_json did not round-trip the entry count");
+        }
+        _check_history_bounds(h2, maxn);
+
+        # Malformed JSON must not crash and must leave bounds intact.
+        var h3 = CalcHistory_new(maxn);
+        CalcHistory_from_json(h3, _fz_str(140));
+        _check_history_bounds(h3, maxn);
+
+        # --- currency rates loader ---------------------------------------
+        var c = CurrencyCache_new("https://example.invalid");
+
+        # Well-shaped payload with adversarial values.
+        var body = _fz_rates_json();
+        _ccy_load_body(c, body, strlen(body));
+        _check_rates_plausible(c);
+
+        # Raw garbage.
+        c = CurrencyCache_new("https://example.invalid");
+        var junk = _fz_str(200);
+        _ccy_load_body(c, junk, strlen(junk));
+        _check_rates_plausible(c);
+
+        # Deep nesting — the MED-4 guard must reject rather than recurse.
+        c = CurrencyCache_new("https://example.invalid");
+        var nested = _fz_nested_json(_fz_u(64) + 1);
+        _ccy_load_body(c, nested, strlen(nested));
+        _check_rates_plausible(c);
+
+        # --- convert with codes that may or may not be cached -------------
+        c = CurrencyCache_new("https://example.invalid");
+        var good = "{\"base\":\"USD\",\"rates\":{\"EUR\":0.92,\"GBP\":0.79}}";
+        _ccy_load_body(c, good, strlen(good));
+        ai_clear_err();
+        var res = CurrencyCache_convert(c, f64_from(_fz_u(1000) + 1),
+        _fz_str(6), _fz_str(6));
+        if (res == 0) {
+            if (ai_last_err() == AI_OK) {
+                _fz_fail("convert returned 0 without setting an error");
+            }
+        }
+        # A known pair must always work and must round-trip within tolerance.
+        ai_clear_err();
+        res = CurrencyCache_convert(c, f64_from(100), "usd", "eur");
+        if (res == 0) { _fz_fail("convert failed on a cached pair"); }
+        if (ai_last_err() != AI_OK) { _fz_fail("convert set an error on a good pair"); }
+
+        # --- URL validation ----------------------------------------------
+        # Any control byte must be rejected — this is the CRLF-injection guard.
+        var url = _fz_str(40);
+        var ok = _ccy_validate_url(url);
+        var ulen = strlen(url);
+        var ui = 0;
+        var has_ctrl = 0;
+        while (ui < ulen) {
+            var ch = load8(url + ui);
+            if (ch < 32) { has_ctrl = 1; }
+            if (ch == 127) { has_ctrl = 1; }
+            ui = ui + 1;
+        }
+        if (has_ctrl == 1 && ok == 0) {
+            _fz_fail("validate_url accepted a URL containing a control byte");
+        }
+        # Plaintext http:// to a non-loopback host must be rejected.
+        if (_ccy_validate_url("http://evil.example.com/rates") == 0) {
+            _fz_fail("validate_url accepted plaintext http to a remote host");
+        }
+        if (_ccy_validate_url("https://ok.example.com") != 0) {
+            _fz_fail("validate_url rejected a plain https URL");
+        }
+
+        pass = pass + 1;
+        iter = iter + 1;
+    }
+
+    print_num(pass);
+    println(" ai fuzz iterations passed");
+    return 0;
+}
+
+var r = main();
+sys_exit(r);

@@ -138,36 +138,37 @@ arc that was not source-neutral**. 6.5.x broke the build twice:
       it slipped through 2.3.1–2.3.3 because CI matched only `warn ` lines and
       `cyrius lint src/*.cyr` lints just the first path. Both holes closed.
 - [x] `test_round_ties_away` added — pins both rounding modes (479 → 486 asserts)
-- [x] **Four pre-existing evaluator defects fixed** from the 2026-08-13 audit
-      ([`../audit/2026-08-13-audit.md`](../audit/2026-08-13-audit.md)): the
-      `tokenize()` out-of-bounds heap write (silently wrong answers from ~343
-      terms), the unbounded `eval_pow` exponent loop (~81 years from 20 bytes),
-      unary/power recursion escaping `ABACO_MAX_DEPTH` (native stack overflow),
-      and an uncapped `totient()` domain. All reproduced first; all have
-      regression tests
+- [x] **Six pre-existing defects fixed** from the 2026-08-13 audit
+      ([`../audit/2026-08-13-audit.md`](../audit/2026-08-13-audit.md)). In
+      `src/eval.cyr`: the `tokenize()` out-of-bounds heap write (silently wrong
+      answers from ~343 terms), the unbounded `eval_pow` exponent loop (~81
+      years from 20 bytes), unary/power recursion escaping `ABACO_MAX_DEPTH`
+      (native stack overflow), an uncapped `totient()` domain, and
+      `parse_number`'s i64 accumulators wrapping on ~19-digit literals. In
+      `src/ai.cyr`: `CalcHistory_from_json` silently discarding the **entire**
+      history when any field contained a `{`/`}`/`]`, because object boundaries
+      were found by counting raw braces without skipping string contents.
+      All reproduced first; all have regression tests
 - [x] **Parser limits namespaced** `ABACO_MAX_TOKENS` / `ABACO_MAX_DEPTH` —
       `MAX_TOKENS` collided with stdlib `patra.cyr`, and duplicate globals only
       warn, so a consumer could silently have got 128 instead of 512
 - [x] **`fuzz_eval` extended to reach these paths** — 48 → 1200 byte cap, `^`/`!`
       promoted to biased bytes, targeted adversarial shapes every 4th iteration.
       Hangs against the 2.3.3 evaluator; passes 20,000 iters against 2.3.4
-- [x] Suite green (509 asserts, was 479); fuzz 3/3 (20,000 iters); fmt/lint/vet
-      clean; DCE build passes (395,688 B, ~42 KB larger than 6.4.66);
-      `dist/abaco.cyr` regenerated (117,233 B — **not** byte-identical to 2.3.3;
+- [x] **`fuzz/fuzz_ai.fcyr` added** — closes the audit's P-1 gap; `src/ai.cyr`
+      holds the only code in the crate that parses data off the network and had
+      no harness. Covers `nl_parse`, `CalcHistory` bounds + JSON round-trip,
+      `_ccy_load_body` and `_ccy_validate_url`, asserting the MED-7 rate and
+      §4.1 URL invariants directly. It found the history-JSON bug above on its
+      first run; fails on the 2.3.3 `src/ai.cyr`, passes 50,000 iters on 2.3.4
+- [x] Suite green (547 asserts, was 479); fuzz **4/4** (20,000 iters);
+      fmt/lint/vet clean; DCE build passes (395,712 B, ~42 KB larger than
+      6.4.66); `dist/abaco.cyr` regenerated (123,434 B — **not** byte-identical to 2.3.3;
       consumers must re-vendor, and any consumer calling the bundle's
       `f64_round` now gets the ties-to-even builtin instead)
 
 ### Still open
 
-- [ ] **`parse_number` unguarded i64 accumulators** (audit M-3, 2026-08-13) —
-      `int_part` / `frac_part` / `frac_div` are multiplied by 10 per digit with
-      no overflow guard, so ~19+ digit literals wrap to negative values. Left
-      out of 2.3.4 deliberately: it is a numeric-accuracy defect rather than a
-      memory-safety one, and the correct fix (f64 accumulation with a shrinking
-      scale, as `lib/math.cyr` does) interacts with the exactness `eval_pow`'s
-      fast path relies on. Wants a focused change, not a toolchain-bump rider.
-- [ ] **Fuzz harness for `src/ai.cyr`** (audit P-1) — the NL parser, calc
-      history and currency-rates JSON path have no harness at all.
 - [ ] Live currency-rate fetch via **hoosh** — `src/ai.cyr`'s `CurrencyCache` is
       a pure rates cache today (`set_rates` + `convert`); the live HTTP path
       needs `[deps.hoosh]` and a JSON parser for nested rate maps. (Referenced

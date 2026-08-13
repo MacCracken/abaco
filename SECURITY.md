@@ -14,12 +14,13 @@ endpoint; consumers that don't call `fetch` never open a socket.
 | Expression parsing | Stack overflow via deep nesting | `eval_depth` bounded at `ABACO_MAX_DEPTH`; **every** recursive path charges depth — parens, call arguments, unary signs and `^` chains (the last two were unbounded before 2.3.4) |
 | Expression parsing | Token-array overrun | `tokenize` / `implicit_mul` bound every write against `ABACO_MAX_TOKENS`, returning `ABACO_ERR_PARSE` (unchecked before 2.3.4 — see the 2026-08-13 audit) |
 | Expression parsing | Algorithmic-complexity DoS | `eval_pow` capped at `ABACO_POW_EXACT_MAX`, `totient` at `ABACO_TOTIENT_MAX`, scientific exponents at 308/400, `factorial` at 170, `fibonacci` at 92 |
-| Expression parsing | Integer overflow in numeric literals | Scientific exponents are clamped; **`parse_number`'s i64 digit accumulators are not yet guarded** — ~19+ digit literals wrap (audit M-3, open) |
+| Expression parsing | Integer overflow in numeric literals | `parse_number` uses an exact 18-digit mantissa plus a decimal exponent — no accumulator can wrap; both exponents are combined then clamped (the i64 accumulators wrapped before 2.3.4) |
+| History JSON | Structure smuggled through string values | All structural scanning skips string contents via `_jf_skip_string`; keys match only in key position. Before 2.3.4 a `{`, `}` or `]` in any field silently destroyed the whole history on reload |
 | Division by zero | Undefined / inf propagation | Explicit zero checks in eval + units, returns `ABACO_ERR_MATH` / `UERR_CONVERT` |
 | NaN / Infinity | Silent propagation | `sanitize_sample` scrubs inputs in DSP; eval detects and returns error |
 | Unit lookup | Malformed query | Hashmap-based, constant work per lookup; unknown → `UERR_UNKNOWN`, never panics |
 | AI currency fetch | Malicious response body | Nested JSON extractor bounds-checks every offset; malformed response → `AI_ERR_CURRENCY`, no crash (covered by `fuzz_eval` / explicit tests) |
-| Natural-language parse | Adversarial input | `fuzz_eval.fcyr` runs 20k+ inputs through `Evaluator_eval`; **`src/ai.cyr` has no harness of its own** (audit P-1, open) |
+| Natural-language parse | Adversarial input | `fuzz_ai.fcyr` runs 20k+ inputs through `nl_parse`, `CalcHistory_*`, `_ccy_load_body` and `_ccy_validate_url`, asserting the MED-7 rate and §4.1 URL invariants directly |
 | ntheory primality | Timing side-channel | `mod_mul` / `mod_pow` are data-independent in control flow; Miller–Rabin loop iterates a fixed witness set |
 
 ## Fuzz coverage
@@ -27,6 +28,7 @@ endpoint; consumers that don't call `fetch` never open a socket.
 - `fuzz/fuzz_eval.fcyr`    — random expression strings (up to 1200 bytes) → `Evaluator_eval` + `Evaluator_eval_partial`, plus targeted adversarial shapes every 4th iteration: long exponent digit-runs, deep unary-sign chains, deep `^` chains, and token-array overruns
 - `fuzz/fuzz_ntheory.fcyr` — random i64 → `is_prime`, `factor`, `totient`, `next_prime`; cross-checks `is_prime` against trial division for n < 10⁶
 - `fuzz/fuzz_units.fcyr`   — random cstrings → `UnitRegistry_find`, `UnitRegistry_convert`
+- `fuzz/fuzz_ai.fcyr`      — `nl_parse` on random bytes and grammar-shaped phrases; `CalcHistory` ring-buffer bounds and JSON round-trip; `_ccy_load_body` on adversarial rate payloads and deep nesting; `_ccy_validate_url`. Asserts that every cached rate is finite/positive/< 10⁶ and that no URL with a control byte is ever accepted
 
 Run with `./fuzz/run.sh [iters]`. Each harness has passed 20k+ iterations with
 no crashes or invariant violations.

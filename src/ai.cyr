@@ -568,27 +568,40 @@ fn CalcHistory_from_json(h, json_cstr) {
         if (load8(data + i) == 91) { i = i + 1; break; }
         i = i + 1;
     }
+    var c = 0;
+    var start = 0;
+    var depth = 0;
     while (i < dlen) {
         # Find next object open-brace.
         while (i < dlen) {
-            var c = load8(data + i);
+            c = load8(data + i);
             if (c == 123) { break; }
-            if (c == 93)  { return 0; }   # closing ] — done
-            i = i + 1;
+            if (c == 34)  { i = _jf_skip_string(data, dlen, i); }
+            elif (c == 93)  { return 0; }   # closing ] — done
+            else { i = i + 1; }
         }
         if (i >= dlen) { return 0; }
-        # Find matching close-brace (no nesting allowed in our shape).
-        var start = i;
-        var depth = 1;
+        # Find the matching close-brace, skipping over string contents.
+        #
+        # This scan used to count raw braces (2.3.4 fix): a single '{' or '}'
+        # inside any field — legal JSON needing no escape, and something
+        # `to_json` emits verbatim — moved the object boundary and made the
+        # whole remaining array unparseable. A two-entry history where one
+        # input contained '}' round-tripped to ZERO entries, silently, so
+        # save_to_file/load_from_file lost the lot.
+        start = i;
+        depth = 1;
         i = i + 1;
         while (i < dlen) {
-            var c = load8(data + i);
-            if (c == 123) { depth = depth + 1; }
+            c = load8(data + i);
+            if (c == 34) { i = _jf_skip_string(data, dlen, i); }
+            elif (c == 123) { depth = depth + 1; i = i + 1; }
             elif (c == 125) {
                 depth = depth - 1;
                 if (depth == 0) { break; }
+                i = i + 1;
             }
-            i = i + 1;
+            else { i = i + 1; }
         }
         if (depth != 0) { return AI_ERR_PARSE; }
         var obj = data + start;
@@ -687,38 +700,77 @@ fn ai_clear_err() { AI_LAST_ERR = AI_OK; return 0; }
 
 # Scan body[..len] for `"key"` followed by `:` and return the offset of the
 # first non-space byte after the colon, or -1 if not found.
+# Advance past a JSON string. `i` must index the opening quote. Honours
+# backslash escapes, so an escaped quote does not end the string. Returns the
+# index just past the closing quote, or `len` if the string is unterminated.
+#
+# Every structural scan in this module goes through this: JSON only has
+# structure *outside* strings, so a scanner that counts braces, brackets or
+# quotes without skipping string contents is reading user data as syntax.
+fn _jf_skip_string(body, len, i) {
+    i = i + 1;
+    while (i < len) {
+        var c = load8(body + i);
+        if (c == 92) { i = i + 2; }
+        elif (c == 34) { return i + 1; }
+        else { i = i + 1; }
+    }
+    return len;
+}
+
+# Find the offset of the value for `key` in the flat JSON object at
+# `body[..len]`, or -1. Returns the index of the value's first byte.
+#
+# String-aware (2.3.4): the previous version matched `"key"` anywhere in the
+# slice, so a *value* that happened to contain the text of a key name could be
+# mistaken for that key. It only stayed benign because `CalcHistory_to_json`
+# always writes input/result/timestamp in that order, putting the genuine key
+# first — a hand-written or attacker-supplied file has no such guarantee.
 fn _jf_find_value(body, len, key) {
     var klen = strlen(key);
     var i = 0;
-    while (i + klen + 3 <= len) {
-        if (load8(body + i) == 34) {
-            var j = 0;
-            var ok = 1;
-            while (j < klen) {
-                if (load8(body + i + 1 + j) != load8(key + j)) { ok = 0; break; }
-                j = j + 1;
+    var send = 0;
+    var k = 0;
+    var j = 0;
+    var ok = 0;
+    var c = 0;
+    while (i < len) {
+        c = load8(body + i);
+        if (c == 34) {
+            send = _jf_skip_string(body, len, i);
+            # A string is a KEY only if the next non-space byte is ':'.
+            k = send;
+            while (k < len) {
+                c = load8(body + k);
+                if (c == 32 || c == 9 || c == 10 || c == 13) { k = k + 1; }
+                else { break; }
             }
-            if (ok == 1) {
-                if (load8(body + i + 1 + klen) == 34) {
-                    var k = i + klen + 2;
-                    while (k < len) {
-                        var c = load8(body + k);
-                        if (c == 58) {
-                            k = k + 1;
-                            while (k < len) {
-                                var d = load8(body + k);
-                                if (d == 32) { k = k + 1; }
-                                elif (d == 9)  { k = k + 1; }
-                                elif (d == 10) { k = k + 1; }
-                                elif (d == 13) { k = k + 1; }
-                                else { return k; }
-                            }
-                        } else { k = k + 1; }
+            if (k < len && load8(body + k) == 58) {
+                ok = 0;
+                # send - i - 2 is the raw byte length between the quotes.
+                if (send - i - 2 == klen) {
+                    ok = 1;
+                    j = 0;
+                    while (j < klen) {
+                        if (load8(body + i + 1 + j) != load8(key + j)) { ok = 0; break; }
+                        j = j + 1;
                     }
                 }
+                k = k + 1;                     # step past ':'
+                if (ok == 1) {
+                    while (k < len) {
+                        c = load8(body + k);
+                        if (c == 32 || c == 9 || c == 10 || c == 13) { k = k + 1; }
+                        else { return k; }
+                    }
+                    return 0 - 1;
+                }
+                i = k;                         # wrong key — resume at its value
+            } else {
+                i = send;                      # a value string — skip it whole
             }
         }
-        i = i + 1;
+        else { i = i + 1; }
     }
     return 0 - 1;
 }

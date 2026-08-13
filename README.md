@@ -134,8 +134,8 @@ headless, stable, and reusable.
 ## Status
 
 - **v2.0.0** — Rust → Cyrius port complete (breaking: not a Rust crate anymore)
-- **509 asserts** passing across 7 suites (`cyrius test`)
-- **3 fuzz harnesses** (eval, ntheory, units) — run clean at 20k+ iters
+- **547 asserts** passing across 7 suites (`cyrius test`)
+- **4 fuzz harnesses** (eval, ntheory, units, ai) — run clean at 20k+ iters
 - **77 benchmarks** — CSV history tracked in `bench-history.csv`
 - **100% of the public API** is documented (`cyrius doc --check`)
 

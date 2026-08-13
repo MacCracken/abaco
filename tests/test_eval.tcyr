@@ -385,6 +385,80 @@ fn test_totient_cap() {
     return 0;
 }
 
+# Compare two f64 values directly (ev_near takes an expression string).
+fn near_f(actual, expected, tol_milli, name) {
+    var diff = f64_abs(f64_sub(actual, expected));
+    var tol_f = f64_div(f64_from(tol_milli), f64_from(1000));
+    assert(f64_lt(diff, tol_f) == 1, name);
+    return 0;
+}
+
+# 2.3.4 audit M-3: parse_number's i64 accumulators were multiplied by 10 per
+# digit with no guard, so long literals wrapped. Pre-fix behaviour:
+#   "12345678901234567890"   -> int_part wrapped NEGATIVE
+#   "1.0000000000000000000"  -> frac_div wrapped into a nonsense divisor
+# Both now go through an exact 18-digit mantissa plus a decimal exponent.
+fn test_long_literals() {
+    var e = Evaluator_new();
+
+    # Exactness that eval_pow's integer fast path depends on must survive.
+    ev_int("1000", 1000, "1000 exact");
+    ev_int("0", 0, "0 exact");
+    # f64 holds integers exactly only up to 2^53; past that the *conversion*
+    # rounds no matter how the digits were accumulated. What the mantissa buys
+    # is that nothing wraps and the magnitude stays right.
+    ev_int("9007199254740992", 9007199254740992, "2^53 exact");
+    ev_int("9007199254740991", 9007199254740991, "2^53-1 exact");
+    var big = Evaluator_eval(e, "123456789012345678");
+    near_f(f64_div(big, _pow10(17)), f64_div(f64_from(123456789), _pow10(8)), 1,
+    "18-digit literal keeps its value to f64 precision");
+
+    # 19, 20, 21 digits: must stay positive and keep their magnitude.
+    # f64 cannot hold these exactly; the point is that they no longer wrap.
+    var r = Evaluator_eval(e, "1234567890123456789");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "19-digit literal parses");
+    assert(f64_gt(r, f64_from(0)) == 1, "19-digit literal positive (was negative)");
+    assert(f64_gt(r, f64_from(1000000000000000000)) == 1, "19-digit magnitude held");
+
+    r = Evaluator_eval(e, "12345678901234567890");
+    assert(f64_gt(r, f64_from(0)) == 1, "20-digit literal positive (was negative)");
+    r = Evaluator_eval(e, "999999999999999999999");
+    assert(f64_gt(r, f64_from(0)) == 1, "21-digit literal positive");
+
+    # 10^19 as plain digits — one past the i64 wrap point.
+    r = Evaluator_eval(e, "10000000000000000000");
+    near_f(f64_div(r, _pow10(19)), f64_from(1), 1, "1e19 as digits has right magnitude");
+
+    # Long fractions: frac_div used to wrap. Value must stay 1.0, not garbage.
+    ev_near("1.0000000000000000000", f64_from(1), 1, "19 fractional digits = 1.0");
+    ev_near("1.00000000000000000000000000000000000000000000000000000000000000000",
+    f64_from(1), 1, "65 fractional digits = 1.0");
+
+    # Leading zeros must not consume mantissa room: 1e-19 written out longhand
+    # still carries its single significant digit.
+    r = Evaluator_eval(e, "0.0000000000000000001");
+    near_f(f64_mul(r, _pow10(19)), f64_from(1), 1, "1e-19 longhand keeps its digit");
+
+    # Small fractions stay correctly rounded.
+    ev_near("3.14", f64_div(f64_from(314), f64_from(100)), 1, "3.14 correctly rounded");
+    ev_int("1.5e3", 1500, "1.5e3 = 1500");
+
+    # A long fraction plus a large positive exponent must not let the two
+    # clamps cancel into the wrong magnitude.
+    ev_near("0.00000000000000000000000000001e30", f64_from(10), 1, "1e-29 * 1e30 = 10");
+
+    # Subnormal range: 1e-320 is representable and must not collapse to 0.
+    r = Evaluator_eval(e, "1e-320");
+    assert(f64_gt(r, f64_from(0)) == 1, "1e-320 is a nonzero subnormal");
+
+    # Adversarial digit runs terminate in bounded work.
+    Evaluator_eval(e, "1e9999999999");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "pathological exponent parses");
+    Evaluator_eval(e, "1e-9999999999");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "pathological negative exponent parses");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco eval tests ===");
@@ -407,6 +481,7 @@ fn main() {
     test_pow_exponent_cap();
     test_unary_and_power_depth();
     test_totient_cap();
+    test_long_literals();
     assert_summary();
     return 0;
 }
