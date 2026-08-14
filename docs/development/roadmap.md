@@ -270,6 +270,11 @@ recorded, and worth keeping here: premise-check a capability claim against a
 - [x] Suite 643 → **657 asserts**; fuzz 4/4 at 20,000 iters; fmt/lint/vet clean;
       DCE build 399,872 B; `dist/abaco.cyr` 137,620 B (**not** byte-identical to
       2.4.0 — consumers must re-vendor)
+- [x] Benchmarks on a quiet box (load 0.87; a load-3.4 reading was discarded, not
+      recorded): flat-to-faster everywhere. `tok_simple` 1.96 → 1.89 µs,
+      `tok_complex` 3.06 → 2.96 µs — the direction the removed per-literal
+      `alloc(8)` predicts. Timer floor moved 1.35 → 1.21 µs between runs, so
+      sub-100 ns deltas are noise
 
 ### Still open
 

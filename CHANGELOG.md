@@ -40,6 +40,15 @@ Suite **657 asserts** (was 643); fuzz 4/4 at 20,000 iterations; fmt/lint/vet
 clean; parse accuracy **unchanged** (13/5000 corpus literals at 1 ulp, identical
 before and after the refactor).
 
+Benchmarks, measured on a quiet box (load 0.87, no competing compiles — a first
+reading at load 3.4 was discarded rather than recorded): flat-to-faster on every
+parser path. `tok_simple` 1.96 → 1.89 µs and `tok_complex` 3.06 → 2.96 µs, which
+is the direction the removed per-literal `alloc(8)` predicts; `sci_add` /
+`sci_mul` / `parentheses` / `pow` unchanged within noise. Nothing regressed.
+⚠ The measured timer floor differed between the two runs (1.35 → 1.21 µs), and
+the stdlib documents that floor as per-boot and non-deterministic, so treat
+sub-100 ns deltas here as noise rather than signal.
+
 ### Changed
 
 - **Toolchain pin 6.5.20 → 6.5.21.** Stdlib re-vendored; only `sandhi` changed
