@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - The Cyrius toolchain installed at `$CYRIUS_HOME` (default `~/.cyrius`),
-  at the version pinned in `cyrius.cyml` (`[package].cyrius`, currently `6.5.20`)
+  at the version pinned in `cyrius.cyml` (`[package].cyrius`, currently `6.5.21`)
 - `~/.cyrius/bin/cyrius` on `PATH`
 - The vendored stdlib in `lib/` (gitignored) is populated via `cyrius deps`
 
@@ -34,7 +34,7 @@ cyrius test
 cyrius test tests/test_ai.tcyr
 ```
 
-Expected output: 7 files passed, 0 failed, **643 assertions** (or higher).
+Expected output: 7 files passed, 0 failed, **657 assertions** (or higher).
 Each suite prints its own `N passed, 0 failed (N total)` line.
 
 ## Bench

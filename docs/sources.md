@@ -133,6 +133,8 @@ source. No magic numbers.
   - Dekker, T. J. (1971). "A floating-point technique for extending the
     available precision." *Numerische Mathematik*, 18(3), 224–242.
     doi:10.1007/BF01397083 (the splitting and two-product algorithms).
+    Implemented as `_two_product(a, b): (f64, f64)` — a genuine two-valued
+    function since 2.4.1, on the Cyrius 6.5.21 tuples abaco proposed for it.
   - Clinger, W. D. (1990). "How to read floating point numbers accurately."
     *ACM SIGPLAN PLDI*, 92–101. doi:10.1145/93542.93557 — source of the fast
     path: when the mantissa is below 2⁵³ and |exponent| ≤ 22 both operands are

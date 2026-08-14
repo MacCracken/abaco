@@ -5,6 +5,85 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.1] — 2026-08-13
+
+**Cyrius 6.5.21 — and abaco adopts the tuples it asked for.** The proposal abaco
+filed at 2.4.0 (`2026-08-13-tuple-multi-value-returns`) shipped in 6.5.21 as
+declared multi-value returns with arity 2 and 3, typed element signatures, and a
+destructure contract. Every error-compensated primitive here is now written as
+the two- or three-valued function it actually is, rather than an out-parameter.
+
+⛔ **Correction: that proposal's premise was partly FALSE, and the error was
+abaco's.** Two-value multi-value return with destructuring had shipped at
+Cyrius **v3.7.2** — four majors before the filing. The proposal's capability
+table tested `return a, b;` and `var (x, y) = f();` and recorded both as parse
+errors; the working forms are `return (a, b);` and `var q, r = f();`, differing
+only in where the parens go. So the 2.4.0 out-parameter workarounds in this
+crate were never necessary — `_two_product` could have been a real two-valued
+function all along. (Upstream notes their own vidya entry documented the
+paren-less form under a heading reading "NATIVE MULTI-RETURN", so the
+authoritative source pointed the wrong way; that mitigates the miss but does not
+undo it.) What was genuinely missing and did ship at 6.5.21: **arity 3** — the
+one real capability gap, and `_dd_pow10` is the motivating case — a declared
+return type making arity checkable at a forward call, and a destructure contract
+(there was none: `var q, r = 42;` compiled).
+
+⭐ **Implementing it surfaced three silent miscompiles in Cyrius's own
+multi-value return** — shipped since v3.7.2 with three lines of integer-only
+coverage and nothing cross-platform. One of them corrupted **precisely this
+crate's shape**: a `: f64` fn returning a tuple lost its FIRST value on x86/PE,
+so `two_product(3.0, 4.0)` returned 7 for both slots instead of 12 and 7. Their
+`crossos/multi_return.tcyr` now covers it and names `_dd_pow10` as the
+motivating arity-3 primitive.
+
+Suite **657 asserts** (was 643); fuzz 4/4 at 20,000 iterations; fmt/lint/vet
+clean; parse accuracy **unchanged** (13/5000 corpus literals at 1 ulp, identical
+before and after the refactor).
+
+### Changed
+
+- **Toolchain pin 6.5.20 → 6.5.21.** Stdlib re-vendored; only `sandhi` changed
+  upstream and abaco does not declare it, so no source impact.
+- **`_two_product(a, b): (f64, f64)`** replaces `_dd_prod_err(a, b, p)` — Dekker's
+  error-compensated product returns the product *and* the exact residual, which
+  is what it always was.
+- **`_dd_pow10(k): (f64, f64, i64)`** replaces the 3-word out-buffer. Mixed
+  element types, arity 3 — the case 6.5.21 added.
+- **`_dd_mul_d`, `_dd_renorm`, `_dd_split_mant`** likewise return their pairs
+  directly; `_dd_renorm` in particular is now a pure function instead of a
+  buffer mutator.
+- **`parse_number(input, start, len): (f64, i64)`** returns the value and the
+  index after it. This **removes an `alloc(8)` per numeric literal** — the
+  tokenizer was allocating a scratch cell for every number, from a bump
+  allocator with no free, so a 500-literal expression leaked a few hundred bytes
+  of scratch per parse.
+- **`tokenize` / `implicit_mul` return `(count, ok)`** instead of smuggling
+  overflow back as a **negative count**. `ABACO_TOK_OVERFLOW = -1` is deleted.
+  That sentinel existed only because there was no way to return "count **and**
+  did-it-overflow", and a caller that skipped the check would have used −1 as a
+  length — the specific hazard the proposal cited.
+
+### Added
+
+- **`test_two_product_exact`** — covers the shape 6.5.21 fixed, deliberately
+  order-sensitive: the two slots must be distinguishable or first-value-twice
+  passes unnoticed. Asserts the exact product/residual pair, a genuinely inexact
+  product whose residual is sub-ulp, the arity-3 `_dd_pow10` including a case
+  where the binary-exponent slot is nonzero (the slot an arity-2 return could
+  not have carried), and the mantissa split past 2⁵³.
+
+### Notes
+
+- **Ergonomic wrinkle worth recording:** a destructured binding carries its
+  declared element type, and re-assigning it from an untyped expression warns
+  (`assigning non-pointer to typed pointer`). Accumulating into a fresh local
+  is the workaround used throughout. Destructuring also cannot re-bind — only
+  `var a, b = f();` is accepted, not `a, b = f();` — so loops that carry a pair
+  across iterations destructure into fresh names and assign across.
+- Parse accuracy is byte-identical to 2.4.0: the same 13 of 5000 corpus literals
+  land 1 ulp low. The refactor is a shape change, not a numeric one, and was
+  verified as such rather than assumed.
+
 ## [2.4.0] — 2026-08-13
 
 **Closes both residuals the 2.3.5 fix audit left open.** Minor rather than patch
@@ -64,11 +143,13 @@ added precision.
 
 ### Notes
 
-- Cyrius has no tuples, so the double-double pair travels in a 3-word buffer and
-  every error-compensated primitive returns through an out-parameter. Filed
+- The double-double pair travels in a 3-word buffer and every error-compensated
+  primitive returns through an out-parameter, because this crate believed Cyrius
+  had no multi-value return. **That was wrong** — see the 2.4.1 correction: the
+  2-value form had shipped at v3.7.2 and abaco tested the wrong syntax. Filed
   upstream as
-  `cyrius/docs/development/proposals/2026-08-13-tuple-multi-value-returns.md`,
-  registered in that repo's potential backlog.
+  `cyrius/docs/development/proposals/2026-08-13-tuple-multi-value-returns.md`;
+  arity 3 (which `_dd_pow10` needs) was the one genuine gap.
 - 13 of 5000 corpus literals remain 1 ulp low. Reaching 100% correctly-rounded
   needs a bignum fallback (Clinger/Eisel-Lemire); not pursued — the remaining
   error is at the rounding boundary and bounded at 1 ulp.

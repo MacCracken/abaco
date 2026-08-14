@@ -236,6 +236,41 @@ cap, which is user-visible.
       tuples, so every error-compensated primitive here returns through an
       out-parameter or a heap buffer
 
+### 2.4.1 — Cyrius 6.5.21; adopt the proposed tuples ✅ (2026-08-13)
+
+The proposal abaco filed at 2.4.0 shipped upstream, so the out-parameter
+workarounds it described are retired.
+
+⛔ **The proposal's premise was partly false, and the error was ours.** Two-value
+multi-value return had shipped at Cyrius **v3.7.2**; abaco's capability table
+tested `return a, b;` / `var (x, y) = f();` when the working forms are
+`return (a, b);` / `var q, r = f();`. The 2.4.0 out-parameter workarounds were
+therefore unnecessary. **Arity 3** was the one real gap. Lesson upstream
+recorded, and worth keeping here: premise-check a capability claim against a
+*run binary*, not against the docs.
+
+- [x] Cyrius pin 6.5.20 → 6.5.21; stdlib re-vendored (only `sandhi` changed
+      upstream, which abaco does not declare — no source impact)
+- [x] **`_two_product(a, b): (f64, f64)`** — Dekker's product returns the product
+      and the exact residual, as it always logically did
+- [x] **`_dd_pow10(k): (f64, f64, i64)`** — arity 3 with mixed element types, the
+      case 6.5.21 added; their `crossos/multi_return.tcyr` names this function
+- [x] **`parse_number(input, start, len): (f64, i64)`** — **removes an `alloc(8)`
+      per numeric literal** from a bump allocator with no free
+- [x] **`tokenize` / `implicit_mul` return `(count, ok)`** — `ABACO_TOK_OVERFLOW`
+      deleted; the negative-count sentinel existed only because the honest shape
+      was inexpressible
+- [x] ⭐ **Three silent miscompiles found upstream.** Multi-value return had
+      shipped since v3.7.2 with three lines of integer-only coverage and nothing
+      cross-platform. One defect corrupted abaco's exact shape — a `: f64` fn
+      returning a tuple lost its FIRST value on x86/PE. `test_two_product_exact`
+      covers it here, order-sensitively
+- [x] Parse accuracy **byte-identical** to 2.4.0 (same 13/5000 corpus literals at
+      1 ulp) — verified against the reference, not assumed
+- [x] Suite 643 → **657 asserts**; fuzz 4/4 at 20,000 iters; fmt/lint/vet clean;
+      DCE build 399,872 B; `dist/abaco.cyr` 137,620 B (**not** byte-identical to
+      2.4.0 — consumers must re-vendor)
+
 ### Still open
 
 > The two residuals the 2.3.5 fix audit left open were closed in 2.4.0.

@@ -4,14 +4,14 @@
 > [`../../CLAUDE.md`](../../CLAUDE.md); forward plan in [`roadmap.md`](roadmap.md);
 > per-tag history in [`../../CHANGELOG.md`](../../CHANGELOG.md).
 
-**Last updated:** 2026-08-13 (2.4.0 — closes both residuals the 2.3.5 fix audit left open. Decimal literals are now correctly rounded via error-compensated double-double scaling (DBL_MAX parses exactly; 99.74% of a 5000-literal corpus bit-exact, worst 1 ulp), and the token cap rose 512 → 1024, which makes `parse_power`'s depth guard reachable and testable for the first time)
+**Last updated:** 2026-08-13 (2.4.1 — Cyrius 6.5.21 pin, and abaco adopts the tuples it proposed at 2.4.0. Every error-compensated primitive is now a real multi-value function; `parse_number` returning `(value, end)` removes an `alloc(8)` per numeric literal, and `tokenize` returning `(count, ok)` retires the negative-count sentinel. Implementing it surfaced three silent miscompiles in Cyrius's multi-value return, one of which corrupted this crate's exact `: f64` tuple shape)
 
 ## Versions
 
 | What | Value |
 |------|-------|
-| abaco | **2.4.0** |
-| Cyrius toolchain pin | **6.5.20** |
+| abaco | **2.4.1** |
+| Cyrius toolchain pin | **6.5.21** |
 | License | GPL-3.0-only |
 
 ## Stdlib (6.2.x batching — unchanged through 6.5.x)
@@ -49,18 +49,18 @@ apart by `test_round_ties_away`. 6.5.x also enforces **call arity**, so
 
 | Artifact | Size | Notes |
 |----------|------|-------|
-| `build/abaco` | ~400 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF (399,880 B at 2.4.0/6.5.20; was 353,408 B at 2.3.3/6.4.66, 357,736 B at 2.3.1/6.3.10). The 6.5.x stdlib both NOPs more (1216 unreachable fns, 321,508 B) and leaves ~38 KB more resident |
-| `dist/abaco.cyr` | ~136 KB (~3.66k lines) | Committed consumer bundle. 6.2.x distlib is profile-based: `cyrius distlib abaco` → `dist/abaco-abaco.cyr`, renamed to `dist/abaco.cyr`. 2.4.0: 135,736 B / 3,661 lines — carries the `f64_round_half_away` rename, the evaluator bound-check fixes and string-aware JSON scanning; **not** byte-identical to 2.3.5 (consumers must re-vendor, and a consumer calling the bundle's old `f64_round` now silently gets the ties-to-even builtin) |
+| `build/abaco` | ~400 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF (399,872 B at 2.4.1/6.5.21; was 353,408 B at 2.3.3/6.4.66, 357,736 B at 2.3.1/6.3.10). The 6.5.x stdlib both NOPs more (1215 unreachable fns, 321,298 B) and leaves ~38 KB more resident |
+| `dist/abaco.cyr` | ~137 KB (~3.67k lines) | Committed consumer bundle. 6.2.x distlib is profile-based: `cyrius distlib abaco` → `dist/abaco-abaco.cyr`, renamed to `dist/abaco.cyr`. 2.4.1: 137,620 B / 3,678 lines — carries the `f64_round_half_away` rename, the evaluator bound-check fixes and string-aware JSON scanning; **not** byte-identical to 2.4.0 (consumers must re-vendor, and a consumer calling the bundle's old `f64_round` now silently gets the ties-to-even builtin) |
 
 ## Tests
 
-**643 asserts, 0 failures** across 7 `.tcyr` files:
+**657 asserts, 0 failures** across 7 `.tcyr` files:
 
 | Suite | Asserts |
 |-------|---------|
 | `test_ai` | 118 |
 | `test_dsp` | 109 |
-| `test_eval` | 238 |
+| `test_eval` | 252 |
 | `test_integration` | 27 |
 | `test_ntheory` | 107 |
 | `test_simd` | 10 |
@@ -211,7 +211,7 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
   DCE build 395,712 B; `dist/abaco.cyr` 129,046 B — **not** byte-identical to
   2.3.4, consumers must re-vendor.
 
-- **2.4.0** (this release) **closes both residuals** the fix audit left open, and
+- **2.4.0** **closes both residuals** the fix audit left open, and
   is a minor because one of them is closed by a user-visible cap raise:
   - **Decimal literals are correctly rounded.** `parse_number` scales through an
     error-compensated (double-double) factor and splits the mantissa too — the
@@ -226,6 +226,24 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
     reachable at last: 257 `^` operators is 515 tokens, which the old cap could
     not express. Verified discriminating — reverting the guard now fails 2
     assertions.
+
+- **2.4.1** (this release) pins **Cyrius 6.5.21** and adopts the **tuples abaco
+  proposed at 2.4.0**. `_two_product` is `: (f64, f64)`, `_dd_pow10` is
+  `: (f64, f64, i64)` (the arity-3 case 6.5.21 added, and the one their
+  `crossos/multi_return.tcyr` names), `parse_number` returns `(value, end)` —
+  removing an `alloc(8)` per numeric literal — and `tokenize` returns
+  `(count, ok)`, retiring the negative-count sentinel.
+  ⛔ The proposal's premise was partly **false**, and that was abaco's error: the
+  2-value form had shipped at Cyrius v3.7.2 and this crate tested the wrong
+  syntax, so 2.4.0's out-parameter workarounds were never needed. **Arity 3**
+  (`_dd_pow10`) was the one genuine gap, alongside declared return types and a
+  destructure contract.
+  ⭐ Implementing it surfaced **three silent miscompiles** in Cyrius's own
+  multi-value return, shipped since v3.7.2 with three lines of integer-only
+  coverage. One corrupted this crate's exact shape: a `: f64` fn returning a
+  tuple lost its FIRST value on x86/PE. `test_two_product_exact` covers it here,
+  order-sensitively, rather than assuming the fix.
+  Parse accuracy is byte-identical to 2.4.0 — verified, not assumed.
 
 - **2.3.x still open** (external — needs consumer repos, not actionable from
   abaco alone): wire the first real consumers (Abacus, dhvani) to

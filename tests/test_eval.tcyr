@@ -759,6 +759,59 @@ fn test_top_of_range_literals() {
     return 0;
 }
 
+# 2.4.1: the Dekker primitive is now a real two-valued function
+# (`: (f64, f64)`) rather than an out-parameter, using the tuples Cyrius 6.5.21
+# shipped in response to the proposal abaco filed for this exact shape.
+#
+# That release also FIXED THREE SILENT MISCOMPILES in multi-value return, one of
+# which corrupted precisely this signature — a `: f64` fn returning a tuple lost
+# its FIRST value on x86/PE, so `two_product(3.0, 4.0)` returned 7 for both
+# slots instead of 12 and 7. abaco is the reason that path is covered upstream,
+# so it verifies rather than assumes: the two slots must be DISTINGUISHABLE and
+# ORDER-SENSITIVE, or first-value-twice passes unnoticed.
+fn test_two_product_exact() {
+    # 3 * 4 = 12 exactly, so the residual is 0 — and 12 != 0 makes the slots
+    # tell each other apart.
+    var p1, e1 = _two_product(f64_from(3), f64_from(4));
+    assert_eq(f64_to(p1), 12, "two_product(3,4): product slot");
+    assert_eq(f64_to(e1), 0, "two_product(3,4): exact, residual slot is 0");
+
+    # A product that does NOT fit in 53 bits: the residual must be nonzero and
+    # must reconstruct the exact value. 2^30+1 squared needs 61 bits.
+    var big = f64_add(_p10_exact(0), f64_from(1073741825));   # 2^30 + 1
+    var p2, e2 = _two_product(big, big);
+    assert(f64_eq(e2, f64_from(0)) == 0, "inexact product has a nonzero residual");
+    # p + e must reconstruct the true product to better than the product alone.
+    var recomposed = f64_add(p2, e2);
+    assert(f64_eq(recomposed, p2) == 1, "p + e rounds back to p (residual is sub-ulp)");
+
+    # Order sensitivity: swapping the slots must be detectable.
+    assert(f64_eq(p1, e1) == 0, "product and residual slots are distinguishable");
+
+    # The 3-valued primitive: arity 3, mixed element types (f64, f64, i64).
+    # 10^0 = 1 exactly, with no binary-exponent rescale.
+    var h0, l0, b0 = _dd_pow10(0);
+    assert_eq(f64_to(h0), 1, "_dd_pow10(0) hi = 1");
+    assert_eq(f64_to(l0), 0, "_dd_pow10(0) lo = 0");
+    assert_eq(b0, 0, "_dd_pow10(0) bexp = 0");
+    # 10^22 is the largest exact power; hi must equal the table entry exactly.
+    var h22, l22, b22 = _dd_pow10(22);
+    assert_eq(h22, _p10_exact(22), "_dd_pow10(22) hi is the exact 10^22");
+    assert_eq(b22, 0, "_dd_pow10(22) needs no rescale");
+    # A large exponent DOES rescale, so the third slot must be nonzero — the
+    # slot an arity-2 return could not have carried at all.
+    var hb, lb, bb = _dd_pow10(300);
+    assert(bb > 0, "_dd_pow10(300) carries a binary exponent in slot 3");
+    assert(f64_gt(hb, f64_from(0)) == 1, "_dd_pow10(300) hi is positive");
+
+    # The mantissa split: 2^53 + 1 is not representable, so the pair must carry
+    # what the single f64 dropped.
+    var mh, ml = _dd_split_mant(9007199254740993);
+    assert(f64_eq(ml, f64_from(0)) == 0, "mantissa past 2^53 has a nonzero low term");
+    assert_eq(f64_to(mh) + f64_to(ml), 9007199254740993, "hi + lo reconstructs the mantissa");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco eval tests ===");
@@ -787,6 +840,7 @@ fn main() {
     test_pow_nonfinite_and_parity();
     test_zero_mantissa_and_range();
     test_top_of_range_literals();
+    test_two_product_exact();
     assert_summary();
     return 0;
 }
