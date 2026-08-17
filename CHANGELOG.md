@@ -5,6 +5,110 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.2] — 2026-08-14
+
+**Cyrius 6.5.27 — both issues abaco filed at 2.4.1 are fixed, and the workaround
+one of them forced is reverted.** A maintenance patch: no abaco behaviour
+changes, no API changes, parse accuracy byte-identical.
+
+Suite **657 asserts**; fuzz 4/4 at 20,000 iterations; fmt/lint/vet clean;
+abaco's own sources now build with **zero warnings**.
+
+### Changed
+
+- **Toolchain pin 6.5.21 → 6.5.27.** Stdlib re-vendored: `ganita` +146 lines,
+  `syscalls_windows` +58, `syscalls_macos` +25, `syscalls_aarch64_linux` +19,
+  `net` +8; every other declared module byte-identical. No re-batch, no symbol
+  moves — the `[deps].stdlib` list is unchanged.
+- **Reverted the fresh-local workaround in `src/eval.cyr`.** 2.4.1 wrote
+  `var p, e0 = _two_product(…); var e = f64_add(e0, …);` to dodge a spurious
+  `assigning non-pointer to typed pointer` warning on the destructured binding.
+  6.5.27 fixed that warning, so the natural form is back:
+
+  ```cyr
+  var p, e = _two_product(hi, d);
+  e = f64_add(e, f64_mul(lo, d));
+  ```
+
+  Three sites in `_dd_mul_d`, `_mul_pow10` and `_div_pow10`. Behaviour-neutral —
+  the corpus below is the check, not the assumption.
+
+### Fixed upstream (both abaco filings, both resolved at 6.5.27)
+
+- **`assigning non-pointer to typed pointer` fired on every float-annotated
+  local.** The check gated on `lt > 0`, but a positive local type is a *width*
+  or a *float tag*; the pointer-like case is stored **negative**. It was
+  inverted in both directions at once — firing where it should not and never
+  firing where it should — while the global arm of the same warning had always
+  used the correct sign. abaco saw 5 of these; it now sees 0.
+  ⭐ Upstream notes the float half "gated a consumer feature": the same warning
+  would have fired in every f32 loop of the incoming math tier.
+- **`<source>` diagnostic lines shifted by one per prepended line.** Fixed with
+  a `#@srcline` marker that carries no count (cycc derives the bias from the
+  marker's own position). Confirmed here: a warning on line 11 of a test file now
+  reports `:11`, where at 6.5.21 abaco's 18-module `[deps].stdlib` shifted it by
+  **+17**, past EOF on short files.
+  ⚠ Not the remedy abaco proposed — re-emitting `#@file` was foreclosed by the
+  6.5.21 hardening against forged `#@file` markers bypassing `private`.
+
+### Known — 7 stdlib warnings, not abaco's
+
+With the sign corrected, the warning now reaches real typed-pointer locals and
+fires **7 times inside `lib/bayan.cyr`** (`bayan_toml_parse`), on lines like
+`cur_name = str_new(…)` where `str_new` is declared `: Str`. Assignment does not
+consult the callee's declared return type; declaration does, which is why
+`var t = str_new(…)` is clean and `t = str_new(…)` is not.
+
+These are in vendored stdlib source, so abaco cannot fix them and they will
+appear on any consumer build touching `bayan`. Filed as
+`cyrius/docs/development/issues/2026-08-14-typed-ptr-warn-ignores-declared-return-type.md`
+with a minimal repro. **Diagnostic only — values verified correct.**
+
+### Benchmarks — and a correction to 2.4.1's
+
+The 2.4.2 run came out ~30% faster than 2.4.1's across **every** benchmark,
+including `registry_creation`, which touches no code this release changed. A
+uniform delta across unrelated benchmarks is a machine-state signature, not a
+speedup, so it was isolated with a three-way A/B — all three built and measured
+back-to-back on the same idle box:
+
+| benchmark | 2.4.1 src + 6.5.21 | 2.4.1 src + 6.5.27 | 2.4.2 + 6.5.27 | 2.4.1 *as recorded* |
+|---|---|---|---|---|
+| `addition` | 1.412 µs | 1.422 | 1.44 | 2.16 |
+| `sci_add` | 1.500 | 1.559 | 1.52 | 2.21 |
+| `tok_simple` | 1.285 | 1.297 | 1.30 | 1.89 |
+| `tok_complex` | 2.104 | 2.109 | 2.11 | 2.96 |
+| `long_addition` | 2.874 | 2.878 | 2.89 | 3.71 |
+
+All three configurations are identical within noise. **The toolchain contributes
+nothing and this release's code contributes nothing** — the entire ~30% is the
+machine, which had sat at load 3–4.5 for an extended stretch before the earlier
+runs and was cool for this one. Nominal load was already < 1.2 when the 2.4.1
+numbers were taken, so load alone was not a sufficient guard.
+
+⛔ **This retroactively corrects 2.4.1's benchmark note**, which reported
+`tok_simple` 1.96 → 1.89 µs and `tok_complex` 3.06 → 2.96 µs as "the direction
+the removed per-literal `alloc(8)` predicts". Those deltas were ~70–100 ns,
+right at the noise floor that entry itself flagged, and the A/B above shows the
+allocation removal is not measurable at this granularity. The change is still
+correct and still removes the allocation; the *performance claim* was reading
+noise as signal and should not have been made.
+
+**Consequence for the CSV:** `bench-history.csv` rows for 2.4.0 / 2.4.1 and for
+2.4.2 were taken in different machine states, so the 3-point trend spans that
+boundary and cross-version deltas there are not meaningful. Same caveat class as
+the 6.5.19 timer-floor note.
+
+### Verified unchanged
+
+- Parse accuracy over the same 5000-literal corpus, same seed: **13 not
+  bit-exact (0.260%), worst 1 ulp** — identical to 2.4.1, so `ganita`'s +146
+  lines did not move any f64 result abaco depends on.
+- Suite 657 asserts, fuzz 4/4 at 20,000 iters, dist freshness byte-identical.
+- Binary 403,968 B (was 399,872 — the growth is the re-vendored stdlib);
+  `dist/abaco.cyr` 137,343 B / 3,674 lines, **not** byte-identical to 2.4.1
+  (the reverted workaround), so consumers must re-vendor.
+
 ## [2.4.1] — 2026-08-13
 
 **Cyrius 6.5.21 — and abaco adopts the tuples it asked for.** The proposal abaco
@@ -41,13 +145,15 @@ clean; parse accuracy **unchanged** (13/5000 corpus literals at 1 ulp, identical
 before and after the refactor).
 
 Benchmarks, measured on a quiet box (load 0.87, no competing compiles — a first
-reading at load 3.4 was discarded rather than recorded): flat-to-faster on every
-parser path. `tok_simple` 1.96 → 1.89 µs and `tok_complex` 3.06 → 2.96 µs, which
-is the direction the removed per-literal `alloc(8)` predicts; `sci_add` /
-`sci_mul` / `parentheses` / `pow` unchanged within noise. Nothing regressed.
-⚠ The measured timer floor differed between the two runs (1.35 → 1.21 µs), and
-the stdlib documents that floor as per-boot and non-deterministic, so treat
-sub-100 ns deltas here as noise rather than signal.
+reading at load 3.4 was discarded rather than recorded): nothing regressed.
+
+⛔ **Corrected at 2.4.2.** This entry originally read `tok_simple` 1.96 → 1.89 µs
+and `tok_complex` 3.06 → 2.96 µs as "the direction the removed per-literal
+`alloc(8)` predicts". A controlled A/B at 2.4.2 — 2.4.1 source on both 6.5.21 and
+6.5.27, against 2.4.2, all measured back-to-back on one idle box — showed those
+deltas were **machine state**, not the change. The allocation removal is real and
+still worth having; it is simply not measurable at this granularity. See the
+2.4.2 benchmark section.
 
 ### Changed
 

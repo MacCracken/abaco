@@ -4,28 +4,27 @@
 > [`../../CLAUDE.md`](../../CLAUDE.md); forward plan in [`roadmap.md`](roadmap.md);
 > per-tag history in [`../../CHANGELOG.md`](../../CHANGELOG.md).
 
-**Last updated:** 2026-08-13 (2.4.1 — Cyrius 6.5.21 pin, and abaco adopts the tuples it proposed at 2.4.0. Every error-compensated primitive is now a real multi-value function; `parse_number` returning `(value, end)` removes an `alloc(8)` per numeric literal, and `tokenize` returning `(count, ok)` retires the negative-count sentinel. Implementing it surfaced three silent miscompiles in Cyrius's multi-value return, one of which corrupted this crate's exact `: f64` tuple shape)
+**Last updated:** 2026-08-14 (2.4.2 — Cyrius 6.5.27. Both issues abaco filed at 2.4.1 are fixed upstream: the typed-pointer warning was testing the wrong sign, and `<source>` diagnostic lines shifted by one per prepended line. The fresh-local workaround the first one forced is reverted. No abaco behaviour change; parse accuracy byte-identical over the same 5000-literal corpus)
 
 ## Versions
 
 | What | Value |
 |------|-------|
-| abaco | **2.4.1** |
-| Cyrius toolchain pin | **6.5.21** |
+| abaco | **2.4.2** |
+| Cyrius toolchain pin | **6.5.27** |
 | License | GPL-3.0-only |
 
 ## Stdlib (6.2.x batching — unchanged through 6.5.x)
 
 The 6.2.x stdlib re-batched several modules; abaco's `[deps].stdlib` list
-adjusted accordingly at 2.2.5. **6.3.x (2.3.1), 6.4.x (2.3.3) and 6.5.x (2.3.4)
+adjusted accordingly at 2.2.5. **6.3.x (2.3.1) through 6.5.x (2.3.4, 2.4.1, 2.4.2)
 keep the same layout** — no re-batch, so the dependency list is unchanged and all
-18 declared modules still exist; the newer bundles only grew internally (at
-6.5.20: `bayan` +774 lines, `syscalls_x86_64_agnos` +442, `alloc` +241, `io`
-+203, `vec` +187, `bench` +185, `syscalls_aarch64_linux` +138,
-`syscalls_linux_common` +92, `syscalls_macos` +65, `fmt` +61, `syscalls` +51,
-`syscalls_windows` +43, `atomic` +21, `ganita` +20, `syscalls_x86_64_linux` +18,
-`math` +8, `assert` +6, `string` +4 vs 6.4.66; `alloc_*`, `args_*`, `hashmap`,
-`http`, `net`, `str` byte-identical). As of 2.3.0 abaco calls the **canonical
+18 declared modules still exist; the bundles only grow internally. At 6.5.27 vs
+6.5.21: `ganita` +146 lines, `syscalls_windows` +58, `syscalls_macos` +25,
+`syscalls_aarch64_linux` +19, `net` +8 — every other declared module
+byte-identical. (For reference, 6.5.20 vs 6.4.66 was the larger step: `bayan`
++774, `syscalls_x86_64_agnos` +442, `alloc` +241, `io` +203, `vec` +187,
+`bench` +185, …) As of 2.3.0 abaco calls the **canonical
 `bayan_*` API directly** — no longer the deprecated back-compat aliases:
 
 | Was (6.0.x) | Now (6.2.x) | Canonical symbols abaco uses |
@@ -49,8 +48,8 @@ apart by `test_round_ties_away`. 6.5.x also enforces **call arity**, so
 
 | Artifact | Size | Notes |
 |----------|------|-------|
-| `build/abaco` | ~400 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF (399,872 B at 2.4.1/6.5.21; was 353,408 B at 2.3.3/6.4.66, 357,736 B at 2.3.1/6.3.10). The 6.5.x stdlib both NOPs more (1215 unreachable fns, 321,298 B) and leaves ~38 KB more resident |
-| `dist/abaco.cyr` | ~137 KB (~3.67k lines) | Committed consumer bundle. 6.2.x distlib is profile-based: `cyrius distlib abaco` → `dist/abaco-abaco.cyr`, renamed to `dist/abaco.cyr`. 2.4.1: 137,620 B / 3,678 lines — carries the `f64_round_half_away` rename, the evaluator bound-check fixes and string-aware JSON scanning; **not** byte-identical to 2.4.0 (consumers must re-vendor, and a consumer calling the bundle's old `f64_round` now silently gets the ties-to-even builtin) |
+| `build/abaco` | ~404 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF (403,968 B at 2.4.2/6.5.27; was 353,408 B at 2.3.3/6.4.66, 357,736 B at 2.3.1/6.3.10). The 6.5.x stdlib both NOPs more (1239 unreachable fns, 323,339 B) and leaves ~38 KB more resident |
+| `dist/abaco.cyr` | ~137 KB (~3.67k lines) | Committed consumer bundle. 6.2.x distlib is profile-based: `cyrius distlib abaco` → `dist/abaco-abaco.cyr`, renamed to `dist/abaco.cyr`. 2.4.2: 137,343 B / 3,674 lines — carries the `f64_round_half_away` rename, the evaluator bound-check fixes and string-aware JSON scanning; **not** byte-identical to 2.4.1 (consumers must re-vendor, and a consumer calling the bundle's old `f64_round` now silently gets the ties-to-even builtin) |
 
 ## Tests
 
@@ -227,7 +226,7 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
     not express. Verified discriminating — reverting the guard now fails 2
     assertions.
 
-- **2.4.1** (this release) pins **Cyrius 6.5.21** and adopts the **tuples abaco
+- **2.4.1** pins **Cyrius 6.5.21** and adopts the **tuples abaco
   proposed at 2.4.0**. `_two_product` is `: (f64, f64)`, `_dd_pow10` is
   `: (f64, f64, i64)` (the arity-3 case 6.5.21 added, and the one their
   `crossos/multi_return.tcyr` names), `parse_number` returns `(value, end)` —
@@ -244,6 +243,31 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
   tuple lost its FIRST value on x86/PE. `test_two_product_exact` covers it here,
   order-sensitively, rather than assuming the fix.
   Parse accuracy is byte-identical to 2.4.0 — verified, not assumed.
+
+- **2.4.2** (this release) pins **Cyrius 6.5.27**. Both issues abaco filed at
+  2.4.1 are fixed upstream, and the workaround one of them forced is reverted:
+  - **The typed-pointer warning tested the wrong sign** — it gated on `lt > 0`,
+    but a positive local type is a width or a float tag while pointer-like is
+    stored negative. Inverted in both directions at once. abaco's 5 spurious
+    warnings are gone and the fresh-local dance in `_dd_mul_d` / `_mul_pow10` /
+    `_div_pow10` is reverted to the natural `e = f64_add(e, …)`.
+  - **`<source>` lines shifted +1 per prepended line** — abaco's 18-module
+    `[deps].stdlib` made that +17, pointing past EOF on short files. Fixed with
+    a `#@srcline` marker; confirmed here.
+  - ⚠ **7 warnings now fire inside `lib/bayan.cyr`** — the corrected check
+    reaches real typed-pointer locals, and assignment does not consult the
+    callee's declared return type (`str_new` is `: Str`). Vendored stdlib, not
+    abaco's to fix; filed upstream with a repro. Diagnostic only.
+
+  Parse accuracy byte-identical to 2.4.1 over the same corpus (13/5000 at 1 ulp),
+  so `ganita`'s +146 lines moved nothing abaco relies on.
+  ⛔ **Benchmarks: neither the toolchain nor this release moves them.** The run
+  read ~30% faster across everything including `registry_creation`; a three-way
+  A/B on one idle box (2.4.1 src on 6.5.21 and on 6.5.27, vs 2.4.2 on 6.5.27)
+  came out identical within noise, so the delta is machine state. This corrects
+  2.4.1's claim that the removed per-literal `alloc(8)` was visible — it is not
+  at this granularity. `bench-history.csv` rows either side of this boundary are
+  not comparable.
 
 - **2.3.x still open** (external — needs consumer repos, not actionable from
   abaco alone): wire the first real consumers (Abacus, dhvani) to

@@ -5,7 +5,7 @@ description = "Math engine — expression evaluation, unit conversion, DSP math"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/abaco"
 language = "cyrius"
-cyrius = "6.5.21"
+cyrius = "6.5.27"
 
 [build]
 entry = "src/main.cyr"

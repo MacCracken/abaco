@@ -276,6 +276,35 @@ recorded, and worth keeping here: premise-check a capability claim against a
       `alloc(8)` predicts. Timer floor moved 1.35 → 1.21 µs between runs, so
       sub-100 ns deltas are noise
 
+### 2.4.2 — Cyrius 6.5.27; both filed issues fixed ✅ (2026-08-14)
+
+Maintenance patch. No abaco behaviour change, no API change:
+
+- [x] Cyrius pin 6.5.21 → 6.5.27; stdlib re-vendored (`ganita` +146, `syscalls_*`
+      +102 combined, `net` +8; the rest byte-identical, no re-batch)
+- [x] **Both issues abaco filed at 2.4.1 are fixed upstream.** The typed-pointer
+      warning tested the wrong SIGN (positive = width/float tag, pointer-like is
+      negative — inverted in both directions at once), and `<source>` diagnostic
+      lines shifted by one per prepended line (+17 at abaco's 18 modules)
+- [x] **Workaround reverted** — the fresh-local dance in `_dd_mul_d`,
+      `_mul_pow10` and `_div_pow10` is back to the natural
+      `e = f64_add(e, …)`; abaco's sources build with zero warnings
+- [x] ⚠ **7 warnings now fire in `lib/bayan.cyr`** — the corrected check reaches
+      real typed pointers and assignment does not consult the callee's declared
+      return type. Vendored stdlib, not abaco's to fix; filed upstream with a
+      repro. Diagnostic only, values verified correct
+- [x] **Benchmarks: the toolchain and this release both contribute ~0.** The run
+      came out ~30% faster across every benchmark including `registry_creation`,
+      which nothing here touches — a machine-state signature. Isolated with a
+      three-way A/B on one idle box (2.4.1 src on 6.5.21, 2.4.1 src on 6.5.27,
+      2.4.2 on 6.5.27): all identical within noise. ⛔ This retroactively
+      corrects 2.4.1's note, which read a ~70-100 ns `tok_simple`/`tok_complex`
+      delta as the removed `alloc(8)`; it was machine state. CSV rows either
+      side of this boundary are not comparable
+- [x] Parse accuracy **byte-identical** to 2.4.1 (13/5000 at 1 ulp, same seed);
+      suite 657 asserts; fuzz 4/4 at 20,000 iters; fmt/lint/vet clean; DCE build
+      403,968 B; `dist/abaco.cyr` 137,343 B (**not** byte-identical to 2.4.1)
+
 ### Still open
 
 > The two residuals the 2.3.5 fix audit left open were closed in 2.4.0.
