@@ -193,6 +193,10 @@ var _DD_READY = 0;
 # SINGLE correctly-rounded operation — no compensation needed. That is Clinger's
 # fast path, and it covers essentially every literal a human writes.
 var ABACO_EXACT_INT_MAX = 9007199254740992;   # 2^53
+# 2^63 as an f64 bit pattern — the point where f64_to saturates and the
+# is_int round-trip in eval_pow stops working. Every f64 at or above it is an
+# even integer (ulp >= 2 from 2^53 up), which is what makes the shortcut sound.
+var ABACO_POW_INT_HUGE = 0x43E0_0000_0000_0000;
 var ABACO_EXACT_P10_MAX = 22;
 
 fn _dd_init() {
@@ -797,8 +801,62 @@ fn parse_term(e) {
 fn eval_pow(base, exp) {
     var zero = f64_from(0);
     var one = f64_from(1);
+    # Canonical non-finite patterns, inlined the way dsp.cyr inlines its own.
+    # Hoisted to the top at 2.4.4 because the zero-base rows below need them.
+    var qnan = 0x7FF8_0000_0000_0000;
+    var pos_inf = 0x7FF0_0000_0000_0000;
+    var neg_inf = 0xFFF0_0000_0000_0000;
+    var neg_zero = 0x8000_0000_0000_0000;
+
     if (f64_eq(exp, zero) == 1) { return one; }
-    if (f64_eq(base, zero) == 1) { return zero; }
+
+    # pow(+/-0, y). C99 F.10.4.4 splits on the SIGN of y first. Through 2.4.3
+    # this returned +0 for EVERY y, so 0^(0-1) answered +0 where C99, IEEE
+    # 754-2019 §9.2 and ganita all say +Inf — with eval_err = NONE, and
+    # internally inconsistent besides, since an overflowing 2^10000 already
+    # returns +Inf here.
+    #   y < 0, odd integer -> +/-Inf carrying the zero's sign
+    #   y < 0, otherwise   -> +Inf
+    #   y > 0, odd integer -> +/-0  carrying the zero's sign
+    #   y > 0, otherwise   -> +0
+    # y == 0 returned 1 above, which is the row C99 puts ahead of all of these.
+    # -0 is reachable (e.g. (0-1)*0) and f64_eq(-0, +0) is 1, so the sign has
+    # to come from the bit pattern rather than a comparison.
+    #
+    # NOT ABACO_ERR_DIV_ZERO, though `1/0` does raise it: eval_pow takes no
+    # evaluator handle to set an error on, and the 2.4.3 precedent for this
+    # function is to answer the IEEE value. The asymmetry with `/` is
+    # deliberate and pinned by test_pow_zero_base.
+    if (f64_eq(base, zero) == 1) {
+        # NaN propagates. C99 exempts exactly two rows from that — pow(x, +/-0)
+        # = 1 and pow(+1, y) = 1 — and pow(+/-0, NaN) is neither, so it must be
+        # NaN. This block returns before the general NaN rows further down, so
+        # without this line a NaN exponent fell through every test below (f64_to
+        # saturates, so the round-trip fails and `zodd` stays 0; f64_lt(NaN, 0)
+        # is 0 because the comparison is unordered) and landed on `return zero`,
+        # silently turning NaN into an exact +0. Reachable from ordinary text:
+        # `0^(sqrt(0-1))`. Pre-dates 2.4.4 — 2.4.3's one-line zero-base return
+        # did the same — but this release rewrote the block and claims the C99
+        # table, so it is closed here.
+        if (f64_eq(exp, exp) == 0) { return qnan; }
+        var zsign = 0;
+        if (base == neg_zero) { zsign = 1; }
+        var zodd = 0;
+        var zei = f64_to(exp);
+        if (f64_eq(exp, f64_from(zei)) == 1) {
+            if (zei % 2 != 0) { zodd = 1; }
+        }
+        if (f64_lt(exp, zero) == 1) {
+            if (zodd == 1) {
+                if (zsign == 1) { return neg_inf; }
+            }
+            return pos_inf;
+        }
+        if (zodd == 1) {
+            if (zsign == 1) { return neg_zero; }
+        }
+        return zero;
+    }
 
     var exp_i = f64_to(exp);
     var exp_back = f64_from(exp_i);
@@ -817,11 +875,21 @@ fn eval_pow(base, exp) {
     if (is_int == 1) {
         var n = exp_i;
         var neg = 0;
-        # (0 - i64_MIN) overflows back to i64_MIN, so peel one off the
-        # magnitude. |base| == 1 is already handled above, and at |exp| ~9.2e18
-        # every other base has saturated to 0 or +/-Inf long before, so the
-        # peeled factor cannot change the result.
-        if (n == ABACO_I64_MIN) { n = n + 1; }
+        # (0 - i64_MIN) overflows back to i64_MIN, so peel off the magnitude.
+        # |base| == 1 is already handled above, and at |exp| ~9.2e18 every other
+        # base has saturated to 0 or +/-Inf long before, so the peeled factor
+        # cannot change the MAGNITUDE.
+        #
+        # ⚠ Peel TWO, not one — parity is not free. exp = -(2^63) is the single
+        # exponent of magnitude >= 2^63 that still round-trips through i64
+        # (f64_to gives i64_MIN and f64_from gives it straight back), so it
+        # reaches this path instead of the huge-exponent block below. Peeling
+        # ONE turned that even exponent odd and square-and-multiply carried the
+        # wrong parity into the SIGN: through 2.4.3, (0-2)^(0-2^63) gave -0 for
+        # +0 and, worse, (0-0.5)^(0-2^63) gave -Inf where C99 and glibc give
+        # +Inf. i64_MIN + 2 is still even and still negatable, and the magnitude
+        # argument above covers base^2 exactly as it covers base^1.
+        if (n == ABACO_I64_MIN) { n = n + 2; }
         if (n < 0) { neg = 1; n = 0 - n; }
         var result = one;
         var b = base;
@@ -834,13 +902,9 @@ fn eval_pow(base, exp) {
         return result;
     }
 
-    # Non-integer exponent: exp2(exp * log2(|base|)) — but three families of
-    # operand have to be answered before that line ever runs. 0x7FF8… is the
-    # canonical quiet NaN, inlined the way dsp.cyr inlines its non-finite
-    # patterns.
-    var qnan = 0x7FF8_0000_0000_0000;
-    var pos_inf = 0x7FF0_0000_0000_0000;
-    var neg_inf = 0xFFF0_0000_0000_0000;
+    # Non-integer exponent: exp2(exp * log2(|base|)) — but four families of
+    # operand have to be answered before that line ever runs. The non-finite
+    # patterns are declared at the top of this function.
 
     # ---- Non-finite operands: C99 F.10.4.4 / IEEE 754-2019 §9.2 ----
     #
@@ -898,6 +962,34 @@ fn eval_pow(base, exp) {
         return pos_inf;
     }
 
+    # ---- Finite exponent too large to round-trip through i64 ----
+    #
+    # |y| >= 2^63 saturates f64_to, so the is_int round-trip above fails and
+    # these land here — yet they are not non-integers. (One exception: exactly
+    # -(2^63) round-trips, because i64_MIN is representable, so it takes the
+    # integer path above and never reaches this test. That is the value the peel
+    # up there has to keep even.) Every f64 at or above
+    # 2^53 has an ulp of 2 or more and is therefore an EVEN INTEGER, so every
+    # exponent reaching this test is even, and the negative-base guard below
+    # must not claim it. Through 2.4.3 it did: (0-2)^1e300 answered NaN where
+    # C99 wants +Inf.
+    #
+    # The magnitude table is the y = +/-Inf one verbatim, because a result has
+    # saturated to 0 or Inf long before |y| reaches 2^63 — for |x| != 1 the
+    # nearest f64 to |x|^(2^63) is 0 or +Inf for every representable x. The
+    # sign is always positive, the exponent being even. |x| == 1 is settled
+    # first: it is exact for every exponent, and x == +1 already returned above,
+    # so this row is x == -1 raised to an even power, which is +1.
+    if (f64_ge(f64_abs(exp), ABACO_POW_INT_HUGE) == 1) {
+        if (f64_eq(mag, one) == 1) { return one; }
+        if (f64_lt(mag, one) == 1) {
+            if (f64_lt(zero, exp) == 1) { return zero; }
+            return pos_inf;
+        }
+        if (f64_lt(zero, exp) == 1) { return pos_inf; }
+        return zero;
+    }
+
     # ---- Finite negative base, non-integer exponent ----
     #
     # log2 needs a positive argument, hence |base| — but a negative base with a
@@ -915,12 +1007,9 @@ fn eval_pow(base, exp) {
     # fib>92), never an f64 one. Integer exponents return above with their sign
     # parity intact and never reach this line.
     #
-    # ⚠ Known gap, tracked in CHANGELOG / docs/development/state.md: an exponent
-    # at or above 2^63 misses the is_int round-trip even though every such f64
-    # is an even integer, so (-2)^1e300 takes this guard and answers NaN where
-    # C99 wants +Inf. Only the ±Inf base is corrected for that above; the finite
-    # negative base needs the round-trip itself widened, which is the integer
-    # path's business and a separate change.
+    # An exponent at or above 2^63 is an even integer, not a non-integer, and
+    # is intercepted by the block directly above rather than falling in here
+    # (closed at 2.4.4; it answered NaN through 2.4.3).
     if (f64_lt(base, zero) == 1) { return qnan; }
     return f64_exp2(f64_mul(exp, f64_log2(f64_abs(base))));
 }

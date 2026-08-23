@@ -82,7 +82,16 @@ jobs:
         run: |
           awk "/^## \\[${GITHUB_REF_NAME}\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" \
             CHANGELOG.md > /tmp/body.md
-          [ -s /tmp/body.md ] || echo "No changelog entry for ${GITHUB_REF_NAME}." > /tmp/body.md
+          # `[ -s ]` alone cannot see an UNFILLED stub: scripts/version-bump.sh
+          # emits bare "### Changed/Added/Fixed" headings, which are ~36
+          # non-empty bytes, so the file is non-empty and the fallback never
+          # fired — a release could ship with three empty headings as its notes.
+          # Strip blank lines and heading-only lines before deciding.
+          if [ -z "$(sed -e 's/^[[:space:]]*//' -e '/^#\{1,\}[[:space:]]*[A-Za-z]*[[:space:]]*$/d' \
+                       -e '/^$/d' /tmp/body.md)" ]; then
+            echo "::error::CHANGELOG [${GITHUB_REF_NAME}] is missing or an unfilled stub — fill it before tagging"
+            exit 1
+          fi
 
       - uses: softprops/action-gh-release@v2
         with:

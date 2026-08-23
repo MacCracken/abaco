@@ -23,7 +23,10 @@ source. No magic numbers.
     "Prime and Prejudice: Primality Testing Under Adversarial Conditions"
     (ACM CCS 2018) — abaco's witness set is fixed and exact.
 - **Modular exponentiation / multiplication** — right-to-left binary method,
-  delegated to stdlib `u64_powmod` / `u64_mulmod`.
+  delegated to stdlib `bayan_u64_powmod` / `bayan_u64_mulmod`. (The bare
+  `u64_powmod` / `u64_mulmod` spellings named here through 2.4.3 are the
+  pre-6.2.x `lib/u128.cyr` names; they survive only as back-compat aliases, and
+  abaco has called the canonical `bayan_*` symbols since 2.3.0.)
   - Knuth, D. E. *The Art of Computer Programming, Vol. 2: Seminumerical
     Algorithms* (3rd ed.), §4.6.3.
 - **Euler's totient φ(n)** via prime-factor product form.

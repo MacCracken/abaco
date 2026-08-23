@@ -5,6 +5,309 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.4] — 2026-08-22
+
+**The gate that could not fail, and the nine findings behind it.** 2.4.3's audit
+opened ten follow-ups; this release closes nine of them. The headline is that
+**abaco's CI could not fail on a failing assertion** — every `.tcyr` discarded
+the failure count and returned 0, so a red suite exited 0 and shipped green.
+Everything else here was found by the same audit: two more silent wrong answers
+in `eval_pow`, a `Value_to_latex` that printed the integer part of every float,
+a security comment whose stated mechanism does not exist, and three release-
+process gates that were checking nothing.
+
+A deliberate cleanup batch rather than the usual one-change-at-a-time release.
+Each fix is independently discrimination-proven — reverting it fails a named,
+counted set of assertions and nothing else.
+
+Suite **813 asserts** (was 729); fuzz 4/4 at 20,000 iterations; fmt clean under
+a **widened** gate; lint/vet clean; zero warnings across all 15 build targets.
+`dist/abaco.cyr` is **not** byte-identical to 2.4.3 — consumers must re-vendor.
+
+### Fixed — ⛔ CI could not fail on a failing assertion
+
+`lib/assert.cyr`'s `assert_summary()` **returns** `_assert_fail`. All seven
+`.tcyr` files called it and then `return 0;`, throwing that value away, and
+`main`'s result is what reaches `syscall(SYS_EXIT, r)`. `.github/workflows/ci.yml`
+gates on the exit code and otherwise greps only for `'[0-9]+ passed'` — never
+for `failed`. So a suite with failing assertions exited **0** and CI reported
+success, with the failure text sitting inside a collapsed `::group::`.
+
+Measured on the committed 2.4.3 tree with one deliberately failing assertion
+injected: `10 passed, 1 failed` → **exit 0**. The same probe on 2.4.4 →
+**exit 1**.
+
+Fixed at the source in all seven files, and the gate now carries an
+**independent second mechanism**: CI also parses the `N failed` count, and
+treats a missing or unparseable summary line as a failure rather than a pass.
+Either alone would have caught this; a single stray `return 0;` creeping back
+cannot silently disarm both.
+
+⭐ **The exit code is collapsed to 1, not returned raw.** Returning the failure
+count directly — the obvious fix, and this release's first cut — reintroduces
+the same silent-green bug in a narrower window: a Linux exit code is 8 bits, so
+EXACTLY 256 failures (or 512, …) exits 0. Verified directly: a program returning
+256 exits 0. `test_eval` alone carries 379 assertions, so that window is
+reachable by a bad enough regression. The count stays visible on the summary
+line, which CI now parses anyway.
+
+⚠ Compile errors, SIGSEGVs and timeouts *did* still gate throughout — this was
+never a hole for those, only for assertion failures.
+
+### Fixed — `0^(0-1)` returned `+0` instead of `+Inf`
+
+`eval_pow` tested the base for zero **before** any sign test on the exponent and
+returned `+0` for every `y`, so all of `0^(0-1)`, `0^(0-2)`, `0^(0-0.5)` and
+both `pow(...)` spellings answered `+0` with `eval_err = NONE`. C99 F.10.4.4 and
+IEEE 754-2019 §9.2 both split these rows on the **sign** of `y`, and abaco was
+already internally inconsistent: an overflowing `2^10000` returns `+Inf` here.
+
+The zero-base rows now follow the standard table in full, including the
+odd-integer rows that carry a negative zero's sign — `(-0)^(0-3)` is `-Inf`,
+`(-0)^3` is `-0`, while the even cases stay unsigned. `-0` is not reachable
+through the tokenizer (a literal `-0` parses as `0 - 0` = `+0`), so those four
+rows drive `eval_pow` directly with the bit pattern.
+
+**Not `ABACO_ERR_DIV_ZERO`, though `1/0` does raise it.** `eval_pow` takes no
+evaluator handle to set an error on, and the 2.4.3 precedent for this function
+is to answer the IEEE value. The asymmetry is deliberate and is itself pinned by
+an assertion.
+
+### Fixed — an exponent at or above 2^63 answered NaN
+
+`f64_to` saturates for `|y| >= 2^63`, so the `f64_from(f64_to(y))` round-trip
+that classifies the exponent failed and these fell into the non-integer branch,
+where 2.4.3's negative-base guard claimed them: `(0-2)^1e300` answered NaN where
+C99 wants `+Inf`. But they are not non-integers — every f64 at or above 2^53 has
+an ulp of 2 or more and is therefore an **even integer**.
+
+They now take the same magnitude table as the `y = ±Inf` rows, which is exact
+here because for `|x| != 1` the nearest f64 to `|x|^(2^63)` is already 0 or
+`+Inf`; the sign is always positive, the exponent being even. `(0-1)^1e300` is
+`1`. Threshold `ABACO_POW_INT_HUGE` (2^63) sits with the other numeric limits.
+
+### Fixed — `Value_to_latex` printed the integer part of every float
+
+Exported in `dist/abaco.cyr`, advertised as working, and with **zero tests and
+zero call sites**. Through 2.4.3 the general-float path was
+`fmt_int_buf(f64_to(d1))` — the integer part only:
+
+| input | 2.4.3 | 2.4.4 |
+|-------|-------|-------|
+| `0.25` | `0` | `0.250000` |
+| `-0.25` | `0` (sign lost too) | `-0.250000` |
+| `3.75` | `3` | `3.750000` |
+| `+Inf` | `-9223372036854775808` | `{\infty}` |
+| `-Inf` | `-9223372036854775808` | `{-\infty}` |
+| `NaN` | `-9223372036854775808` | `\mathrm{NaN}` |
+| `1e300` | `-9223372036854775808` | `1.000000 \times 10^{300}` |
+| `1e-7` | `0` | `1.000000 \times 10^{-7}` |
+| `1.5 + 2.5i` | `1 + 2i` | `1.500000 + 2.500000i` |
+| `0 - 0.25i` | `0 + 0i` (wrong sign) | `0.000000 - 0.250000i` |
+
+Finite floats delegate to `lib/fmt.cyr`'s `fmt_float_buf`, which is sign-correct
+and — since Cyrius 6.5.30 — carry-correct when the rounded fraction reaches a
+full unit. Non-finite values get real LaTeX symbols. Magnitudes fixed notation
+cannot show go to `m \times 10^{e}`: `fmt_float_buf` guards Inf/NaN but still
+does `f64_to(f64_floor(val))` for finite input, so it saturates too once
+`|x| >= 2^63`, and at the other end six decimals turn every `|x| < 1e-6` into
+`0.000000`.
+
+The COMPLEX branch carried the identical defect and is fixed with it — including
+its sign test, which read a **truncated i64**, so any imaginary part in `(-1, 0)`
+took the `+` arm and printed `0 + 0i`.
+
+⛔ **This release's first cut fixed only the FLOAT branch**, so a complex part of
+`1e300` still printed `i64_MIN` and one of `1e-9` still printed `0.000000` —
+the very defect being closed, left in half the function. Caught in self-review
+before tagging. Both branches now go through one shared renderer, and the
+complex cases are pinned by their own assertions.
+
+**The TEXT branch's `memcpy` was unbounded** — it copied a caller-controlled
+string into the same 128-byte buffer with no length check, so any TEXT value
+over 120 bytes ran off the allocation. It pre-dates this release; found while
+rewriting the numeric branches and fixed here rather than left behind in a
+function this release rewrites. It now truncates to the buffer, and the buffer
+size is a named constant (`ABACO_LATEX_BUF`) carrying the worst-case arithmetic:
+the widest output is COMPLEX with both parts in **scientific** notation and a
+4-digit exponent, measured at 55 bytes (56 with the NUL) — the fixed-notation
+pair is shorter at 51, because the 1e16 cutoff caps that path at 16 integer
+digits. The write high-water is higher again, ~72 bytes, since `fmt_int_buf`
+renders backward from a 23-byte scratch base; that is the figure to size
+against, and it is still comfortably inside 128.
+
+⭐ **The mantissa renormalisation is the subtle part.** `v / 10^e` comes back a
+hair under 10 for `1e300` (`f64_pow(10, 299)` is inexact), which *rounds* to
+`10.000000` at six decimals. The obvious `[1, 10)` fix cancels itself: dividing
+gives `0.9999999999999998`, and an independent `< 1` test multiplies it straight
+back, leaving `10.000000 \times 10^{299}`. Both bounds are therefore
+display-aware (half an ulp of the last shown digit) and the two arms are
+mutually exclusive.
+
+### Fixed — a security comment whose mechanism does not exist
+
+`src/ai.cyr`'s MED-4 depth guard justified itself with *"`bayan_json_parse` …
+recurses once per nesting level with no depth cap"*, and called itself a
+stack-exhaustion guard. It is not one, and never was: `bayan_json_parse` is a
+**flat single-pass scanner** — five `while` loops, no self-call, no call into
+the recursive parser — in both the 6.5.27 and 6.5.35 stdlib. The recursive JSON
+parser there is `_jp_parse_value_a`, which abaco never calls and which has
+carried `_JP_MAX_DEPTH = 128` since before 6.5.27.
+
+**The guard stays; only the rationale was wrong.** What it actually buys is
+real: a legitimate fiat-rate map is flat (depth 1), so a payload nested past 8
+is not a rates object whatever else it is, and rejecting it up front is O(n)
+input validation on the only data in this crate that arrives off the network.
+The same false claim appeared at the call site and in `tests/test_ai.tcyr`; all
+three are corrected, with the assertion itself unchanged.
+
+This is the failure mode abaco's own history keeps recording — a load-bearing
+comment reasoning from a premise nobody re-checked. The 2.4.1 note calls out the
+same shape.
+
+### Fixed — release-process gates that checked nothing
+
+- **CI's format gate covered `src/*.cyr` only.** Three files sat `fmt --check`
+  DIRTY across releases while the gate reported clean: `tests/test_ai.tcyr`,
+  `tests/test_eval.tcyr`, `fuzz/fuzz_ai.fcyr` (6.5.x made continuation indent 2
+  spaces per open paren; these used 4). The loop now covers `tests/`, `benches/`
+  and `fuzz/` as well, and all three files are formatted — verified
+  whitespace-only by comparing with all whitespace stripped.
+- **`release.yml`'s empty-body guard could not see an unfilled stub.**
+  `scripts/version-bump.sh` emits three bare `### Changed/Added/Fixed` headings,
+  which are 36 non-empty bytes, so `[ -s /tmp/body.md ]` passed and a release
+  could ship with empty headings as its notes. The guard now strips blank and
+  heading-only lines before deciding, and **fails the release** rather than
+  substituting a placeholder.
+- **`scripts/version-bump.sh` warned about `SECURITY.md` only on a MAJOR bump**,
+  though that table's rows are minor-granularity (`2.4.x`, `2.3.x`) — which is
+  why it still read `2.3.x` four releases after 2.4.0. Now compares minors. It
+  also self-healed the consumer-snippet tag in `README.md` alone, so
+  `docs/guides/consuming-abaco.md` silently drifted a release behind and had to
+  be fixed by hand at 2.4.3; it now heals both. Both changes verified by running
+  the script end-to-end on a throwaway tree.
+
+### Fixed — four more, found by adversarially reviewing this release
+
+A multi-agent review of the 2.4.4 diff confirmed 16 findings. Four were real
+defects and are fixed here; the rest were documentation claims, corrected above
+and below.
+
+- **`pow(±0, NaN)` returned `+0` instead of NaN.** The rewritten zero-base block
+  returns before `eval_pow`'s general NaN rows, and a NaN exponent passed every
+  test inside it — `f64_to` saturates so the round-trip fails and the odd-parity
+  flag stays 0, and `f64_lt(NaN, 0)` is 0 because the comparison is unordered —
+  landing on `return zero`. C99 exempts exactly two rows from NaN propagation
+  (`pow(x, ±0)` and `pow(+1, y)`) and this is neither. Reachable from ordinary
+  text: `0^(sqrt(0-1))` answered `0` with `eval_err = NONE`. Pre-dates this
+  release — 2.4.3's one-line zero-base return did the same — but 2.4.4 rewrote
+  that block and claims the C99 table, so it is closed here.
+- **An exponent of exactly `-(2^63)` flipped the sign for every negative base.**
+  `-(2^63)` is the one magnitude ≥ 2^63 that still round-trips through i64, so
+  it takes the integer path rather than the new huge-exponent block — and the
+  `i64_MIN` peel that avoids `(0 - i64_MIN)` overflow subtracted **one**,
+  turning an even exponent odd. Square-and-multiply then carried the wrong
+  parity into the sign: `(0-0.5)^(0-2^63)` answered **-Inf** where C99 and glibc
+  answer `+Inf`, and `(0-2)^(0-2^63)` answered `-0` for `+0`. The peel is now
+  two — still even, still negatable, and the magnitude argument that justified
+  peeling one covers `base^2` exactly as it covers `base^1`. Also pre-existing;
+  the comment claiming "the peeled factor cannot change the result" was true of
+  the magnitude and false of the sign.
+- **An infinite complex part emitted `\inftyi`, which is not valid LaTeX.** TeX
+  scans a control word greedily over letters, so a bare `\infty` followed by the
+  imaginary unit is one undefined macro and the document fails to typeset. Both
+  infinity rows are now braced (`{\infty}`, `{-\infty}`); the `\mathrm{NaN}` row
+  was already safe, its closing brace terminating the control word. Introduced
+  by this release's own non-finite rendering — 2.4.3 printed a wrong number
+  here, but a typesettable one.
+- **A negative-zero imaginary part printed `+ -0.000000i`.** The sign test used
+  `f64_lt(d2, 0)`, which is false for `-0`, so the `" + "` arm ran while the
+  value kept its sign bit and `fmt_float_buf` emitted its own `-`. Now tests the
+  sign bit — the same idiom the zero-base `pow` rows in `src/eval.cyr` use, and
+  for the same reason.
+- **The two smallest subnormals rendered as `inf \times 10^{-323}`** — a finite
+  number printed as infinity, in the function this release rewrote to stop
+  printing garbage for finite floats. `f64_pow(10, e)` itself underflows to `+0`
+  for `e ≤ -324`, so the division gave Inf. The mantissa is now computed against
+  a pre-scaled value when that happens. 2.4.3 printed `0` for these and for
+  every `|x| < 1e-6`, so this shrinks the wrong-render class rather than
+  creating it.
+- **Three of the six CI security-scan patterns had never matched anything.**
+  `syscall\(\s*59`, `syscall\(\s*57` and `\bsys_system\s*\(` were run through
+  `grep` in its default BRE mode, where `\(` opens a **group** rather than
+  matching a literal paren — so all three died with `Unmatched ( or \(` and
+  rc=2, which `2>/dev/null` swallowed, leaving `hits` empty and the step green.
+  Confirmed against GNU grep 3.12. The scan now uses `-E`, under which the same
+  pattern strings work unchanged, and treats rc > 1 as a failure so a malformed
+  pattern cannot go quiet again. Verified both ways: clean against the real
+  `src/`, and it now catches a planted `syscall(59, 0)` / `sys_system("rm")`
+  that it previously could not. Nothing was ever missed — `src/` contains only
+  `sys_exit`.
+
+### Added
+
+- **`test_pow_zero_base`** (15 asserts) and **`test_pow_huge_integer_exponent`**
+  (14) in `tests/test_eval.tcyr`. Reverting the zero-base fix alone fails
+  exactly **8**; reverting the huge-exponent block alone fails exactly **5**;
+  neither revert disturbs the other's assertions or the integer-path controls.
+- **`test_transcendental_coverage`** (23 asserts) — the nine ganita
+  transcendentals abaco exposes with no coverage at all through 2.4.3: `sinh`,
+  `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `asin`, `acos`, `atan2`. Anchored
+  values **and** identities, because neither alone is sufficient: a round-trip
+  like `asinh(sinh(x))` still passes if `asinh` is the true inverse of a wrong
+  `sinh`, and an anchor alone cannot show the functions agree with each other.
+  `atan2` is checked in all four quadrants — the whole reason it exists over
+  `atan(y/x)`. Tolerance is 1e-9, not `near_f`'s thousandths, so a stdlib fold
+  that moves these cannot sleep through the gate.
+- **`test_value_to_latex`** (19 asserts) in `tests/test_integration.tcyr`, for a
+  function that had none — including the large/tiny/non-finite complex parts and
+  a 400-byte TEXT value against the buffer bound. Reverting `src/core.cyr` fails exactly **16** — the 3
+  that stay green are the unchanged controls (`3.0`, `-3.0`, `42`).
+- **`SECURITY.md`** gains a note that 2.4.3's `mod_pow` SIGFPE fix arrives
+  through the **stdlib**, so pinning abaco 2.4.x does not by itself close it —
+  the consumer's own `cyrius.cyml` must pin ≥ 6.5.35.
+
+### Changed
+
+- `docs/sources.md`'s modular-arithmetic entry named the pre-6.2.x
+  `u64_powmod` / `u64_mulmod`; the canonical symbols are `bayan_`-prefixed and
+  abaco has called them directly since 2.3.0. The old spellings survive only as
+  back-compat aliases.
+- `dist/abaco.cyr` 141,990 → 156,430 B / 3,759 → 4,027 lines. DCE smoke binary
+  619,480 → 619,576 B. `pow` benchmark 2.07 us, flat — every new guard sits on a
+  branch the benchmark's `pow(2, 10)` returns before reaching.
+
+- **13 further asserts** pin the six fixes above (suite 800 → 813). Each was
+  reverted alone to prove it discriminates: removing the NaN row fails 3,
+  putting the `i64_MIN` peel back to `+1` fails 2, unbracing the infinity rows
+  fails 5, reverting the sign-bit test fails 1, and dropping the subnormal guard
+  fails 2 — with no cross-contamination and every control assert staying green.
+
+### Corrections to earlier entries
+
+- ⚠ **2.4.3 said consumers must pin ≥ 6.5.35 to get the `mod_pow` SIGFPE fix.
+  The true floor is 6.5.34.** `lib/bayan.cyr` is byte-identical between 6.5.34
+  and 6.5.35 (`md5` `17bb46bf…` for both, versus `619d0833…` at 6.5.32/6.5.33),
+  and the `wide` guards that constitute the fix appear at 6.5.34. abaco itself
+  pins 6.5.35, but requiring it of consumers was one release too strict.
+  `SECURITY.md` carries the corrected floor; 2.4.3's entry is left as written,
+  as history.
+- ⚠ **2.4.3's `Value_to_latex` did not render `1e300` as
+  `-9223372036854775808.-9223372036854775808`.** Its general-float path was a
+  bare `fmt_int_buf`, so the output was the single token
+  `-9223372036854775808` — the same string it gave for ±Inf and NaN. The
+  doubled form is what `fmt_float_buf` produces, i.e. what delegating to it
+  *unguarded* would have produced. The before/after table above is corrected;
+  the fix and its value are unaffected.
+
+### Still open
+
+- **`bayan_u64_mulmod_reduced` has not been filed upstream.** It is the one
+  2.4.3 follow-up not closed here: a fast path for callers that can guarantee
+  reduced operands, which would recover the 1.53× Miller-Rabin regression 2.4.3
+  documented. Filing it is an outward-facing action and is left to the
+  maintainer.
+
 ## [2.4.3] — 2026-08-22
 
 **Cyrius 6.5.35 — and two silent wrong answers the bump surfaced.** The pin half
@@ -94,7 +397,7 @@ against the old stdlib, and passes 112/112 against the new one.
 bayan — consumers supply it from their own `[deps].stdlib` — so exposure is a
 function of the *consumer's* pin, not abaco's version. A consumer on 6.5.27 is
 still exposed even against the 2.4.3 bundle; one already on 6.5.35 was never
-exposed at 2.4.2. **Consumers must pin ≥ 6.5.35.** `is_prime` itself was never
+exposed at 2.4.2. **Consumers must pin ≥ 6.5.34**, where bayan 1.5.2 lands (abaco pins 6.5.35; the module is byte-identical between the two). `is_prime` itself was never
 at risk: it passes small witnesses and a positive, pre-reduced `n`, which is why
 107 ntheory asserts and 20,000 fuzz iterations stayed green over a primitive
 that could trap.

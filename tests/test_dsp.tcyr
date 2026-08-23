@@ -397,7 +397,16 @@ fn main() {
     test_chromagram();
     test_audio_conv();
     test_dbfs();
-    assert_summary();
+    # Propagate failure to the process exit code. assert_summary() RETURNS
+    # _assert_fail; discarding it and returning 0 made a red suite exit 0, and
+    # CI gates on the exit code — so failures shipped green (fixed 2.4.4).
+    #
+    # Collapsed to 1 rather than returned raw: a Linux exit code is 8 bits, so
+    # returning the count directly would make EXACTLY 256 failures (or 512, ...)
+    # exit 0 — the same silent-green bug in a narrower window. Verified: a
+    # program returning 256 exits 0. The count itself stays visible on the
+    # summary line, which CI also parses.
+    if (assert_summary() != 0) { return 1; }
     return 0;
 }
 

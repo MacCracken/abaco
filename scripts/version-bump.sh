@@ -76,21 +76,29 @@ if ! grep -q "^## \[$NEW\]" CHANGELOG.md 2>/dev/null; then
     echo "  CHANGELOG.md: stub [$NEW] section inserted"
 fi
 
-# 4. README.md — the consumer-snippet `tag = "X.Y.Z"` should point at the release
-#    just cut. Self-healing: replaces whatever semver is there, not just $OLD.
-if grep -qE '^[[:space:]]*tag = "[0-9]+\.[0-9]+\.[0-9]+"' README.md 2>/dev/null; then
-    OLD_TAG=$(grep -oE 'tag = "[0-9]+\.[0-9]+\.[0-9]+"' README.md | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-    if [ "$OLD_TAG" != "$NEW" ]; then
-        sed -i -E "s/^([[:space:]]*tag = \")[0-9]+\.[0-9]+\.[0-9]+(\")/\1$NEW\2/" README.md
-        CHANGED="$CHANGED README.md"
-        echo "  README.md: consumer-snippet tag $OLD_TAG -> $NEW"
+# 4. Consumer-snippet `tag = "X.Y.Z"` — should point at the release just cut.
+#    Self-healing: replaces whatever semver is there, not just $OLD.
+#    Every file carrying such a tag, not just README.md — through
+#    2.4.3 this healed README alone, so docs/guides/consuming-abaco.md
+#    silently drifted a release behind and had to be fixed by hand at 2.4.3.
+for TAGFILE in README.md docs/guides/consuming-abaco.md; do
+    [ -f "$TAGFILE" ] || continue
+    if grep -qE '^[[:space:]]*tag = "[0-9]+\.[0-9]+\.[0-9]+"' "$TAGFILE" 2>/dev/null; then
+        OLD_TAG=$(grep -oE 'tag = "[0-9]+\.[0-9]+\.[0-9]+"' "$TAGFILE" | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+        if [ "$OLD_TAG" != "$NEW" ]; then
+            sed -i -E "s/^([[:space:]]*tag = \")[0-9]+\.[0-9]+\.[0-9]+(\")/\1$NEW\2/" "$TAGFILE"
+            CHANGED="$CHANGED $TAGFILE"
+            echo "  $TAGFILE: consumer-snippet tag $OLD_TAG -> $NEW"
+        fi
     fi
-fi
+done
 
-# 5. SECURITY.md — supported-versions table is major-track only; a patch/minor
-#    bump within a major needs no table change. Warn on a major bump.
-OLD_MAJOR="${OLD%%.*}"
-NEW_MAJOR="${NEW%%.*}"
+# 5. SECURITY.md — the supported-versions table is written at MINOR
+#    granularity (rows read "2.4.x", "2.3.x"), so a minor bump needs a table
+#    edit. Through 2.4.3 this only warned on a MAJOR bump, which is why the
+#    table still said 2.3.x four releases after 2.4.0 shipped.
+OLD_MINOR="${OLD%.*}"
+NEW_MINOR="${NEW%.*}"
 
 echo ""
 echo "$OLD -> $NEW"
@@ -101,7 +109,7 @@ echo "  - Fill the CHANGELOG.md [$NEW] Changed/Added/Fixed sections"
 echo "  - docs/development/{state,roadmap}.md — bump version + add a release note"
 echo "  - Regenerate the bundle if source changed:"
 echo "      cyrius distlib abaco && mv dist/abaco-abaco.cyr dist/abaco.cyr"
-if [ "$OLD_MAJOR" != "$NEW_MAJOR" ]; then
-    echo "  - SECURITY.md supported-versions table (major bump $OLD_MAJOR -> $NEW_MAJOR)"
+if [ "$OLD_MINOR" != "$NEW_MINOR" ]; then
+    echo "  - SECURITY.md supported-versions table (minor bump $OLD_MINOR -> $NEW_MINOR)"
 fi
 echo "  - Commit, tag, push (user does this): git tag $NEW && git push --tags"

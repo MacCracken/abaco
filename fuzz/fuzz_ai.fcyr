@@ -408,7 +408,7 @@ fn main() {
         _ccy_load_body(c, good, strlen(good));
         ai_clear_err();
         var res = CurrencyCache_convert(c, f64_from(_fz_u(1000) + 1),
-        _fz_str(6), _fz_str(6));
+          _fz_str(6), _fz_str(6));
         if (res == 0) {
             if (ai_last_err() == AI_OK) {
                 _fz_fail("convert returned 0 without setting an error");

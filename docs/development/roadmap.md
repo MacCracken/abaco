@@ -335,37 +335,37 @@ Maintenance patch. No abaco behaviour change, no API change:
       warnings across all 15 build targets; DCE build 619,480 B;
       `dist/abaco.cyr` 141,990 B / 3,759 lines (**not** byte-identical to 2.4.2)
 
-#### Opened by the 2.4.3 audit — not actionable in this release
+#### Opened by the 2.4.3 audit — nine of ten closed at 2.4.4
 
-- [ ] **`0^(-1)` returns `+0` with `eval_err = NONE`** while `1/0` raises
+- [x] ✅ 2.4.4 — **`0^(-1)` returns `+0` with `eval_err = NONE`** while `1/0` raises
       `ABACO_ERR_DIV_ZERO`. `eval_pow` tests the base for zero before any sign
       test on the exponent. IEEE/C and ganita both say `+∞`, and abaco already
       emits `+∞` for `2^10000`. `0^(-0.5)` needs it too
-- [ ] **An exponent ≥ 2⁶³ misses the `is_int` round-trip** though every such f64
+- [x] ✅ 2.4.4 — **An exponent ≥ 2⁶³ misses the `is_int` round-trip** though every such f64
       is an even integer, so `(-2)^1e300` answers NaN where C99 wants `+∞`.
       Widening the round-trip is the integer path's business
-- [ ] **CI's test gate cannot fail on an assertion failure.** All 7 `.tcyr` call
+- [x] ✅ 2.4.4 — **CI's test gate cannot fail on an assertion failure.** All 7 `.tcyr` call
       `assert_summary();` then `return 0;`, and `ci.yml` gates on the exit code
       while grepping only for `passed`. A red suite would ship green. Fix:
       `return assert_summary();` in all seven. Compile errors, SIGSEGVs and
       timeouts do still gate
-- [ ] **`release.yml`'s empty-body guard cannot see an empty CHANGELOG stub** —
+- [x] ✅ 2.4.4 — **`release.yml`'s empty-body guard cannot see an empty CHANGELOG stub** —
       three bare `###` headings are 36 non-empty bytes, so `[ -s ]` passes
-- [ ] **The MED-4 guard comment in `src/ai.cyr` is factually wrong** —
+- [x] ✅ 2.4.4 — **The MED-4 guard comment in `src/ai.cyr` is factually wrong** —
       `bayan_json_parse` is a flat single-loop scanner and always has been; the
       recursive parser is `_jp_parse_value_a`, which abaco never calls and which
       has had a depth cap since before 6.5.27. Keep the guard, fix the rationale
-- [ ] **`Value_to_latex` truncates every non-integral float** and renders
+- [x] ✅ 2.4.4 — **`Value_to_latex` truncates every non-integral float** and renders
       `inf`/`nan` as `i64_MIN`; `-0.25` loses its sign. Zero tests, zero call
       sites, but exported in the bundle
-- [ ] **Nine of the eleven ganita transcendentals abaco exposes have no
+- [x] ✅ 2.4.4 — **Nine of the eleven ganita transcendentals abaco exposes have no
       assertions** (`sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `asin`,
       `acos`, `atan2`) — all verified correct today, but the next fold has no net
-- [ ] **`SECURITY.md`'s supported-versions table still names 2.3.x**, stale since
+- [x] ✅ 2.4.4 — **`SECURITY.md`'s supported-versions table still names 2.3.x**, stale since
       2.4.0; `scripts/version-bump.sh` only warns on a *major* bump though the
       table is minor-granularity, and self-heals the tag in `README.md` only, not
       in `docs/guides/consuming-abaco.md`
-- [ ] **Three files are `cyrius fmt --check` DIRTY at the baseline** —
+- [x] ✅ 2.4.4 — **Three files are `cyrius fmt --check` DIRTY at the baseline** —
       `tests/test_ai.tcyr` (2 hunks), `tests/test_eval.tcyr` (6),
       `fuzz/fuzz_ai.fcyr` (1). 6.5.x made continuation indent 2 spaces per open
       paren and these use 4. Pre-existing, and **CI does not gate it** — the
@@ -373,8 +373,49 @@ Maintenance patch. No abaco behaviour change, no API change:
       alone at 2.4.3 rather than bundling a whole-file reformat; worth a pass of
       its own, possibly widening the CI loop to `tests/`, `benches/` and `fuzz/`
       at the same time
-- [ ] **File `bayan_u64_mulmod_reduced` upstream** — a fast path for callers that
+- [ ] ⚠ STILL OPEN — **File `bayan_u64_mulmod_reduced` upstream** — a fast path for callers that
       can guarantee reduced operands, which would recover the 1.53×
+
+### 2.4.4 — close the 2.4.3 audit follow-ups ✅ (2026-08-22)
+
+- [x] ⛔ **CI could not fail on a failing assertion** — all seven `.tcyr`
+      discarded `assert_summary()`'s return value, so a red suite exited 0.
+      Proven on the 2.4.3 tree (injected failure -> exit 0; same probe on
+      2.4.4 -> exit 1). Fixed at the source AND with an independent
+      failure-count check in `ci.yml`. ⚠ NOT the `return assert_summary();`
+      the 2.4.3 note above proposes — a raw count wraps at 256 on an 8-bit
+      exit code, so all seven use `if (assert_summary() != 0) { return 1; }`
+- [x] **`0^(0-1)` returned `+0`** — zero-base test ran ahead of the exponent's
+      sign test. Full C99 F.10.4.4 table now, negative-zero rows included
+- [x] **Exponent >= 2^63 answered NaN** — `f64_to` saturates, so these missed
+      the is_int round-trip and 2.4.3's negative-base guard claimed them,
+      though every such f64 is an even integer
+- [x] **`Value_to_latex` printed the integer part of every float**, rendered
+      Inf/NaN/1e300 as i64_MIN, and lost the sign of a small negative imaginary
+      part. Rewritten with `fmt_float_buf`, LaTeX symbols and scientific
+      notation; had zero tests and zero call sites
+- [x] **The MED-4 security comment's mechanism does not exist** —
+      `bayan_json_parse` is a flat scanner, not recursive. Guard kept,
+      rationale rewritten in all three places
+- [x] **CI's fmt gate covered `src/` only** — widened to `tests/`, `benches/`,
+      `fuzz/`; the three long-dirty files formatted
+- [x] **`release.yml`'s empty-body guard could not see a 36-byte stub** — now
+      strips headings/blank lines and fails the release
+- [x] **`SECURITY.md` still said 2.3.x**; `version-bump.sh` warned only on a
+      major bump and self-healed `README.md` alone. Both fixed and verified
+      end-to-end
+- [x] **`docs/sources.md` named the pre-6.2.x `u64_powmod` / `u64_mulmod`**
+- [x] **Nine ganita transcendentals had zero assertions** —
+      `test_transcendental_coverage` adds 23, anchors plus identities plus
+      four-quadrant `atan2`, at 1e-9 rather than `near_f`'s thousandths
+- [x] Suite 729 -> **813 asserts**; fuzz 4/4 at 20,000 iters; fmt/lint/vet
+      clean; zero warnings across all 15 targets; DCE build 619,576 B;
+      `dist/abaco.cyr` 156,430 B / 4,027 lines (**not** byte-identical to 2.4.3)
+- [x] Self-review caught two defects in this release's own first cut: the
+      `Value_to_latex` rewrite fixed only the FLOAT branch (COMPLEX still
+      printed `i64_MIN` for a 1e300 part), and returning the raw failure count
+      as an 8-bit exit code goes silent-green again at exactly 256 failures.
+      Also bounded the TEXT branch's previously unbounded `memcpy`
 
 ### Still open
 

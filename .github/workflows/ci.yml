@@ -34,9 +34,14 @@ jobs:
         run: cyrius deps
 
       - name: Format check
+        # Every source kind, not just src/ — through 2.4.3 this loop covered
+        # src/*.cyr alone, so three test/fuzz files sat fmt-dirty for releases
+        # while the gate reported clean. `cyrius fmt` takes ONE path; extra glob
+        # args are silently dropped, hence the loop.
         run: |
-          for f in src/*.cyr; do
-            cyrius fmt "$f" --check || { echo "::error::fmt drift in $f — run 'cyrius fmt'"; exit 1; }
+          for f in src/*.cyr tests/*.tcyr benches/*.bcyr fuzz/*.fcyr; do
+            [ -f "$f" ] || continue
+            cyrius fmt "$f" --check || { echo "::error::fmt drift in $f — run 'cyrius fmt \"$f\"'"; exit 1; }
           done
 
       - name: Lint
@@ -93,9 +98,21 @@ jobs:
             out=$(cyrius test "$t" 2>&1); rc=$?
             echo "$out"
             echo "::endgroup::"
-            if [ $rc -ne 0 ]; then echo "FAIL: $name"; fail=1; fi
+            if [ $rc -ne 0 ]; then echo "FAIL: $name (exit $rc)"; fail=1; fi
             n=$(echo "$out" | grep -oE '[0-9]+ passed' | head -1 | awk '{print $1}')
             total=$((total + ${n:-0}))
+            # Second, INDEPENDENT gate on the reported failure count. Until
+            # 2.4.4 every .tcyr called assert_summary() and then `return 0;`,
+            # discarding the failure count it returns — so a red suite exited 0
+            # and the rc check above passed it. That is fixed at the source
+            # (each suite now returns 1 when assert_summary() is non-zero;
+            # collapsed rather than raw because an exit code is 8 bits and
+            # exactly 256 failures would wrap back to 0). A single `return 0;`
+            # creeping back would silently disarm that again, so also read the
+            # summary line. Absent/unparseable counts as a failure, not a pass.
+            f=$(echo "$out" | grep -oE '[0-9]+ failed' | head -1 | awk '{print $1}')
+            if [ -z "$f" ]; then echo "FAIL: $name — no 'N failed' summary line"; fail=1
+            elif [ "$f" -ne 0 ]; then echo "FAIL: $name ($f assertions failed)"; fail=1; fi
           done
           echo "asserts passed: $total"
           [ $fail -eq 0 ] || { echo "test failures"; exit 1; }
@@ -139,11 +156,26 @@ jobs:
       - name: Scan for dangerous patterns
         run: |
           FAIL=0
+          # -E, not the default BRE. Through 2.4.4 this ran plain `grep -rn`,
+          # where `\(` opens a GROUP rather than matching a literal paren — so
+          # `syscall\(\s*59`, `syscall\(\s*57` and `\bsys_system\s*\(` all died
+          # with "Unmatched ( or \(" and rc=2. `2>/dev/null` swallowed the
+          # error, `hits` came back empty, and the step reported clean: THREE OF
+          # SIX patterns had never matched anything. Verified against GNU grep
+          # 3.12 — the same pattern strings work unchanged under -E. rc=2 is now
+          # a failure rather than a pass, so a future malformed pattern cannot
+          # go quiet the same way.
           scan() {
             local label="$1"; shift
             local pat="$1"; shift
-            local hits
-            hits=$(grep -rn "$pat" src/ 2>/dev/null | awk -F: '
+            local hits rc
+            hits=$(grep -rnE "$pat" src/ 2>/dev/null); rc=$?
+            if [ $rc -gt 1 ]; then
+              echo "::error::security scan pattern is invalid (grep rc=$rc): $label -- $pat"
+              FAIL=1
+              return
+            fi
+            hits=$(printf '%s' "$hits" | awk -F: '
               { line=$3; for(i=4;i<=NF;i++) line=line":"$i;
                 sub(/^[[:space:]]+/,"",line);
                 if (substr(line,1,1) != "#") print $1":"$2":"line }')

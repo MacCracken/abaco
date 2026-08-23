@@ -4,7 +4,9 @@
 > [`../../CLAUDE.md`](../../CLAUDE.md); forward plan in [`roadmap.md`](roadmap.md);
 > per-tag history in [`../../CHANGELOG.md`](../../CHANGELOG.md).
 
-**Last updated:** 2026-08-22 (2.4.3 — Cyrius 6.5.35. A pin bump that surfaced two silent wrong answers in `eval_pow`: `(-2)^0.5` returned `+√2` and every non-finite `pow` row returned NaN, all with `eval_err = NONE`. Both fixed per IEEE 754-2019 §9.2 / C99 F.10.4.4, cited and pinned by 67 new asserts. A SIGFPE also leaves `mod_pow`'s public surface via bayan 1.5.2 — but that fix rides the *consumer's* pin, not abaco's tag. ⛔ Miller–Rabin primality is **1.53× slower**, the measured price of that same SIGFPE fix. `dist/abaco.cyr` is **not** byte-identical to 2.4.2)
+**Last updated:** 2026-08-22 (2.4.4 — nine of the ten follow-ups 2.4.3's audit opened, closed. Headline: **abaco's CI could not fail on a failing assertion** — every `.tcyr` discarded `assert_summary()`'s return value, so a red suite exited 0 and shipped green; proven on the 2.4.3 tree and fixed twice over. Plus two more `eval_pow` silent wrong answers (`0^(0-1)` = `+0`, and any exponent >= 2^63 = NaN), a `Value_to_latex` that printed the integer part of every float, a security comment whose stated mechanism does not exist, and three release gates that were checking nothing. Suite 729 -> **813**. `dist/abaco.cyr` **not** byte-identical to 2.4.3)
+
+**Previous:** 2026-08-22 (2.4.3 — Cyrius 6.5.35. A pin bump that surfaced two silent wrong answers in `eval_pow`: `(-2)^0.5` returned `+√2` and every non-finite `pow` row returned NaN, all with `eval_err = NONE`. Both fixed per IEEE 754-2019 §9.2 / C99 F.10.4.4, cited and pinned by 67 new asserts. A SIGFPE also leaves `mod_pow`'s public surface via bayan 1.5.2 — but that fix rides the *consumer's* pin, not abaco's tag. ⛔ Miller–Rabin primality is **1.53× slower**, the measured price of that same SIGFPE fix. `dist/abaco.cyr` is **not** byte-identical to 2.4.2)
 
 **Previous:** 2026-08-14 (2.4.2 — Cyrius 6.5.27. Both issues abaco filed at 2.4.1 are fixed upstream: the typed-pointer warning was testing the wrong sign, and `<source>` diagnostic lines shifted by one per prepended line. The fresh-local workaround the first one forced is reverted. No abaco behaviour change; parse accuracy byte-identical over the same 5000-literal corpus)
 
@@ -12,7 +14,7 @@
 
 | What | Value |
 |------|-------|
-| abaco | **2.4.3** |
+| abaco | **2.4.4** |
 | Cyrius toolchain pin | **6.5.35** |
 | License | GPL-3.0-only |
 
@@ -54,26 +56,27 @@ apart by `test_round_ties_away`. 6.5.x also enforces **call arity**, so
 
 | Artifact | Size | Notes |
 |----------|------|-------|
-| `build/abaco` | ~619 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF (619,480 B at 2.4.3/6.5.35; was 403,968 B at 2.4.2/6.5.27, 353,408 B at 2.3.3/6.4.66). The +211 KB is the bayan 1.4.1 → 1.5.2 fold, not abaco: unreachable fns 1239 → 1609, NOPed 323,339 → 475,575 B, and all 367 functions bayan gained land in the dead list. A 2×2 of compiler × stdlib splits it as stdlib **+219,608 B**, compiler **−8,192 B** (6.5.35's codegen is a net size win), with the `eval_pow` fix the remaining 4,096 B |
-| `dist/abaco.cyr` | ~142 KB (~3.76k lines) | Committed consumer bundle. 6.2.x distlib is profile-based: `cyrius distlib abaco` → `dist/abaco-abaco.cyr`, renamed to `dist/abaco.cyr`. **2.4.3: 141,990 B / 3,759 lines** — carries the `eval_pow` domain + non-finite fixes, so **not** byte-identical to 2.4.2 and consumers must re-vendor for *behaviour*. The `dist/abaco-abaco.deps` sidecar distlib now also emits is gitignored, not shipped (its name can never match the consumer path, and its 12-leaf list prunes `net`, which `lib/http.cyr` needs). 2.4.2: 137,343 B / 3,674 lines — carries the `f64_round_half_away` rename, the evaluator bound-check fixes and string-aware JSON scanning; **not** byte-identical to 2.4.1 (consumers must re-vendor, and a consumer calling the bundle's old `f64_round` now silently gets the ties-to-even builtin) |
+| `build/abaco` | ~620 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF (619,576 B at 2.4.4/6.5.35, 619,480 B at 2.4.3; was 403,968 B at 2.4.2/6.5.27, 353,408 B at 2.3.3/6.4.66). The +211 KB is the bayan 1.4.1 → 1.5.2 fold, not abaco: unreachable fns 1239 → 1609, NOPed 323,339 → 475,575 B, and all 367 functions bayan gained land in the dead list. A 2×2 of compiler × stdlib splits it as stdlib **+219,608 B**, compiler **−8,192 B** (6.5.35's codegen is a net size win), with the `eval_pow` fix the remaining 4,096 B |
+| `dist/abaco.cyr` | ~153 KB (~3.97k lines) | Committed consumer bundle. 6.2.x distlib is profile-based: `cyrius distlib abaco` → `dist/abaco-abaco.cyr`, renamed to `dist/abaco.cyr`. **2.4.4: 156,430 B / 4,027 lines** — adds the `eval_pow` zero-base and huge-exponent rows and the rewritten `Value_to_latex`; **not** byte-identical to 2.4.3. (2.4.3: 141,990 B / 3,759 lines) — carries the `eval_pow` domain + non-finite fixes, so **not** byte-identical to 2.4.2 and consumers must re-vendor for *behaviour*. The `dist/abaco-abaco.deps` sidecar distlib now also emits is gitignored, not shipped (its name can never match the consumer path, and its 12-leaf list prunes `net`, which `lib/http.cyr` needs). 2.4.2: 137,343 B / 3,674 lines — carries the `f64_round_half_away` rename, the evaluator bound-check fixes and string-aware JSON scanning; **not** byte-identical to 2.4.1 (consumers must re-vendor, and a consumer calling the bundle's old `f64_round` now silently gets the ties-to-even builtin) |
 
 ## Tests
 
-**729 asserts, 0 failures** across 7 `.tcyr` files:
+**813 asserts, 0 failures** across 7 `.tcyr` files:
 
 | Suite | Asserts |
 |-------|---------|
 | `test_ai` | 118 |
 | `test_dsp` | 109 |
-| `test_eval` | 319 |
-| `test_integration` | 27 |
+| `test_eval` | 379 |
+| `test_integration` | 51 |
 | `test_ntheory` | 112 |
 | `test_simd` | 10 |
 | `test_units` | 34 |
 
 - Fuzz harnesses: **4** (`fuzz/fuzz_{eval,ntheory,units,ai}.fcyr`) — clean at 20,000 iters
 - Benchmarks: 3 (`bench`, `bench_eval`, `bench_units`)
-- fmt / lint / vet: clean
+- fmt / lint / vet: clean — fmt now checked across `tests/`, `benches/` and
+  `fuzz/` as well as `src/`, which is how three long-dirty files were found
 
 ## Library surface
 
@@ -281,7 +284,7 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
   at this granularity. `bench-history.csv` rows either side of this boundary are
   not comparable.
 
-- **2.4.3** (this release) pins **Cyrius 6.5.35**, and the bump turned into a
+- **2.4.3** pins **Cyrius 6.5.35**, and the bump turned into a
   correctness release because auditing it surfaced two silent wrong answers that
   were abaco's own, not the toolchain's:
   - **`eval_pow` returned `+√2` for `(-2)^0.5`** and `+2` for `(-8)^(1/3)`, with
@@ -334,6 +337,91 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
     collision this window; 6.5.28's decimal-literal fix cannot reach abaco, whose
     executable code holds zero bare decimal float literals (every f64 constant is
     a hex bit pattern — the habit the 2.3.2 dB fix established).
+
+- **2.4.4** (this release) closes **nine of the ten** follow-ups 2.4.3's audit
+  opened. A deliberate cleanup batch rather than the usual one-change-at-a-time
+  release; every fix is discrimination-proven with a named, counted revert.
+  - ⛔ **CI could not fail on a failing assertion.** `assert_summary()` RETURNS
+    `_assert_fail`, and all seven `.tcyr` called it then `return 0;`, throwing
+    that value away — so a red suite exited 0 and `ci.yml`, which gates on the
+    exit code and otherwise greps only for `passed`, reported success with the
+    failure text inside a collapsed `::group::`. Proven on the committed 2.4.3
+    tree: one injected failing assertion gives `10 passed, 1 failed` and
+    **exit 0**; the same probe on 2.4.4 gives **exit 1**. Fixed at the source in
+    all seven files AND backed by an independent second mechanism in CI, which
+    now parses the `N failed` count and treats a missing summary line as a
+    failure. Compile errors, SIGSEGVs and timeouts always did gate.
+  - **`0^(0-1)` returned `+0`.** The zero-base test ran ahead of any sign test
+    on the exponent, so every `0^y` answered `+0` with `eval_err = NONE` — while
+    an overflowing `2^10000` already returned `+Inf`, so it was internally
+    inconsistent too. Now the full C99 F.10.4.4 table, negative-zero sign rows
+    included (`(-0)^(0-3)` = `-Inf`, `(-0)^3` = `-0`). Not `ABACO_ERR_DIV_ZERO`
+    despite `1/0` raising it: `eval_pow` holds no evaluator handle, per the
+    2.4.3 precedent, and the asymmetry is pinned by its own assertion.
+  - **Any exponent >= 2^63 answered NaN.** `f64_to` saturates, so the round-trip
+    that classifies the exponent failed and 2.4.3's negative-base guard claimed
+    them — yet every f64 at or above 2^53 is an even integer. `(0-2)^1e300` is
+    `+Inf` again. Closes the gap 2.4.3 filed against itself.
+  - **`Value_to_latex` printed the integer part of every float** — `0.25` as
+    `0`, `-0.25` as `0` with the sign gone, `+/-Inf` and NaN as the literal
+    `-9223372036854775808`, `1e300` as that same token. Zero tests
+    and zero call sites, but exported in the bundle. Finite floats now delegate
+    to `fmt_float_buf`; non-finite get LaTeX symbols; magnitudes outside
+    `[1e-6, 1e16)` go to `m \times 10^{e}`. The COMPLEX branch had the same
+    defect plus a sign test reading a TRUNCATED i64, so any imaginary part in
+    `(-1, 0)` printed `0 + 0i`. ⭐ The mantissa renormalisation needs both bounds
+    display-aware and the arms mutually exclusive — the obvious `[1, 10)` version
+    cancels itself and leaves `10.000000 \times 10^{299}`.
+  - **A security comment whose mechanism does not exist.** `src/ai.cyr`'s MED-4
+    guard called itself a stack-exhaustion guard against a recursive
+    `bayan_json_parse`. That parser is a FLAT single-pass scanner in both the
+    6.5.27 and 6.5.35 stdlib — five `while` loops, no self-call. The recursive
+    one is `_jp_parse_value_a`, which abaco never calls and which has capped
+    itself at 128 since before 6.5.27. The guard stays (a flat fiat-rate map
+    nested past 8 is not a rates object, and this is the only network-facing
+    data in the crate); the rationale is rewritten in all three places it
+    appeared. Same failure shape state.md already records at 2.4.1 — a
+    load-bearing claim nobody re-checked.
+  - **Three release gates were checking nothing:** CI's fmt loop covered
+    `src/*.cyr` only, so three files sat dirty across releases (now widened, and
+    all three formatted — verified whitespace-only); `release.yml`'s
+    `[ -s body.md ]` could not see an unfilled 36-byte CHANGELOG stub (now
+    strips headings and blank lines, and FAILS rather than substituting a
+    placeholder); and `scripts/version-bump.sh` warned about `SECURITY.md` only
+    on a MAJOR bump though that table is minor-granularity — which is why it
+    still read `2.3.x` four releases after 2.4.0 — while self-healing the
+    consumer tag in `README.md` alone, letting the guide drift.
+  - Coverage: `test_pow_zero_base` (15), `test_pow_huge_integer_exponent` (14),
+    `test_transcendental_coverage` (23 — the nine ganita transcendentals that
+    had none, with anchors AND identities, since neither alone suffices), and
+    `test_value_to_latex` (19). Suite 729 -> **813**.
+  - ⭐ **An adversarial review of this release's own diff confirmed 16 findings;
+    six were real defects, all fixed before tagging.** `pow(+/-0, NaN)` returned
+    `+0` instead of NaN (the rewritten zero-base block returns ahead of the
+    general NaN rows, and a NaN exponent passed every test inside it); an
+    exponent of exactly `-(2^63)` — the one magnitude >= 2^63 that still
+    round-trips through i64, so it meets the `i64_MIN` peel — had its parity
+    flipped by peeling ONE, so `(0-0.5)^(0-2^63)` answered **-Inf** where C99
+    answers `+Inf`; an infinite complex part emitted `\inftyi`, an undefined
+    LaTeX control sequence, because TeX scans control words greedily over
+    letters; a negative-zero imaginary part printed `+ -0.000000i`; the two
+    smallest subnormals printed as `inf` because `f64_pow(10, e)` underflows for
+    `e <= -324`; and **three of the six CI security-scan patterns had never
+    matched anything**, dying with `Unmatched ( or \(` under grep's default BRE
+    with the error swallowed by `2>/dev/null`. The first two are pre-existing;
+    the middle three are this release's own; the last has never missed anything
+    because `src/` contains only `sys_exit`.
+  - ⭐ **Two more defects in this release's first cut, caught earlier in
+    self-review.** The `Value_to_latex` rewrite fixed only the FLOAT branch,
+    leaving COMPLEX still printing `i64_MIN` for a 1e300 part — the very bug
+    being closed, left in half the function. And returning the raw failure count
+    as the exit code reintroduces silent-green at EXACTLY 256 failures, an exit
+    code being 8 bits; it is collapsed to 1. Also fixed in passing: the TEXT
+    branch's `memcpy` was unbounded against its 128-byte buffer, pre-dating this
+    release.
+  - ⚠ **Not closed:** filing `bayan_u64_mulmod_reduced` upstream, which would
+    recover 2.4.3's 1.53x Miller-Rabin regression. Outward-facing; left to the
+    maintainer.
 
 - **2.3.x still open** (external — needs consumer repos, not actionable from
   abaco alone): wire the first real consumers (Abacus, dhvani) to

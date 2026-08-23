@@ -43,10 +43,17 @@ no crashes or invariant violations.
 
 | Version | Supported |
 |---------|-----------|
-| 2.3.x   | Yes (current — Cyrius 6.5.x) |
-| 2.2.x   | Security fixes only |
-| 2.0.x – 2.1.x | Security fixes only |
+| 2.4.x   | Yes (current — Cyrius 6.5.x) |
+| 2.3.x   | Security fixes only |
+| 2.0.x – 2.2.x | Security fixes only |
 | 1.x     | No (Rust crate, unmaintained) |
+
+⚠ The `mod_pow` SIGFPE fixed at 2.4.3 arrives through the **stdlib**, not
+through abaco's own source: `dist/abaco.cyr` bundles no `bayan`, so a consumer
+supplies it from their own `[deps].stdlib`. Pinning abaco 2.4.x does not by
+itself close it — the consumer's own `cyrius.cyml` must pin **≥ 6.5.34**, where
+bayan 1.5.2 lands. (abaco itself pins 6.5.35; `lib/bayan.cyr` is byte-identical
+between 6.5.34 and 6.5.35, so 6.5.34 is the true floor.)
 
 ## Reporting vulnerabilities
 

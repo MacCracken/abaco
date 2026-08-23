@@ -144,6 +144,97 @@ fn test_unparseable_safe() {
     return 0;
 }
 
+fn test_value_to_latex() {
+    # Value_to_latex had NO coverage before 2.4.4 despite being exported in
+    # dist/abaco.cyr. Every non-whole float printed only its integer part, and
+    # every non-finite printed i64_MIN as a literal.
+    var q = f64_div(f64_from(1), f64_from(4));
+
+    # Fractions survive. Through 2.4.3 all three of these rendered as "0"/"3".
+    assert_streq(Value_to_latex(Value_float(q)), "0.250000", "0.25 keeps its fraction (was \"0\")");
+    assert_streq(Value_to_latex(Value_float(f64_neg(q))), "-0.250000",
+      "-0.25 keeps fraction AND sign (was \"0\")");
+    assert_streq(Value_to_latex(Value_float(f64_div(f64_from(15), f64_from(4)))), "3.750000",
+      "3.75 keeps its fraction (was \"3\")");
+
+    # Whole floats keep the N.0 form — untouched by the fix.
+    assert_streq(Value_to_latex(Value_float(f64_from(3))), "3.0", "3.0 stays N.0");
+    assert_streq(Value_to_latex(Value_float(f64_from(0 - 3))), "-3.0", "-3.0 stays N.0");
+    assert_streq(Value_to_latex(Value_integer(42)), "42", "integers unchanged");
+
+    # Non-finite. f64_to saturates to i64_MIN for all three, which fmt_int_buf
+    # printed verbatim as -9223372036854775808.
+    assert_streq(Value_to_latex(Value_float(0x7FF0000000000000)), "{\\infty}",
+      "+Inf is {\\infty} (was -9223372036854775808)");
+    assert_streq(Value_to_latex(Value_float(0xFFF0000000000000)), "{-\\infty}",
+      "-Inf is {-\\infty} (was -9223372036854775808)");
+    assert_streq(Value_to_latex(Value_float(0x7FF8000000000000)), "\\mathrm{NaN}",
+      "NaN is \\mathrm{NaN} (was -9223372036854775808)");
+
+    # Finite but outside the range fixed notation can show. 1e300 is finite, so
+    # the non-finite guard does not catch it, and lib/fmt.cyr's fmt_float_buf
+    # saturates on it too — hence the scientific path.
+    assert_streq(Value_to_latex(Value_float(0x7E37E43C8800759C)), "1.000000 \\times 10^{300}",
+      "1e300 goes scientific (was -9223372036854775808)");
+    assert_streq(Value_to_latex(Value_float(0xFE37E43C8800759C)), "-1.000000 \\times 10^{300}",
+      "-1e300 keeps its sign through the scientific path");
+    assert_streq(Value_to_latex(Value_float(0x3E7AD7F29ABCAF48)), "1.000000 \\times 10^{-7}",
+      "1e-7 goes scientific rather than rendering as 0.000000");
+    # The mantissa must not come back as 10.000000 x 10^{299}: v/10^e lands a
+    # hair under 10 for 1e300, and a naive [1,10) renormalisation cancels itself.
+    assert_streq(Value_to_latex(Value_float(0x4341C37937E08000)), "1.000000 \\times 10^{16}",
+      "1e16, exactly at the threshold, normalises to a 1.x mantissa");
+
+    # Complex carried the same truncation, and its sign test read a truncated
+    # i64 — so a small negative imaginary part took the "+" arm.
+    assert_streq(Value_to_latex(Value_complex(f64_div(f64_from(3), f64_from(2)),
+          f64_div(f64_from(5), f64_from(2)))), "1.500000 + 2.500000i",
+      "complex keeps both fractions (was \"1 + 2i\")");
+    assert_streq(Value_to_latex(Value_complex(f64_from(0), f64_neg(q))), "0.000000 - 0.250000i",
+      "small negative imaginary takes the minus arm (was \"0 + 0i\")");
+
+    # A complex part outside fixed notation's range needs the SAME treatment as
+    # a bare float. 2.4.4's first cut routed only the FLOAT branch through the
+    # scientific path, so a 1e300 part still printed i64_MIN here and a 1e-9 one
+    # printed 0.000000 — the very bug the release claims to close.
+    assert_streq(Value_to_latex(Value_complex(0x7E37E43C8800759C, f64_from(1))),
+      "1.000000 \\times 10^{300} + 1.000000i", "large complex part goes scientific too");
+    assert_streq(Value_to_latex(Value_complex(0x3E112E0BE826D695, f64_from(1))),
+      "1.000000 \\times 10^{-9} + 1.000000i", "tiny complex part goes scientific too");
+    assert_streq(Value_to_latex(Value_complex(0x7FF0000000000000, f64_from(1))),
+      "{\\infty} + 1.000000i", "non-finite complex part gets the LaTeX symbol");
+
+    # The TEXT branch memcpy'd a caller-controlled string into this 128-byte
+    # buffer unbounded. 400 bytes in must not run off the allocation.
+    var big = alloc(512);
+    var bi = 0;
+    while (bi < 400) { store8(big + bi, 65); bi = bi + 1; }
+    store8(big + 400, 0);
+    assert_lte(strlen(Value_to_latex(Value_text(big))), 127,
+      "TEXT is truncated to the buffer, not written past it");
+
+    # TeX scans a control word greedily over letters, so a bare \\infty followed
+    # by the imaginary unit is the single undefined macro \\inftyi and the
+    # document fails to typeset. Braces terminate it.
+    assert_streq(Value_to_latex(Value_complex(f64_from(1), 0x7FF0000000000000)),
+      "1.000000 + {\\infty}i", "infinite imaginary part is braced, not \\inftyi");
+    assert_streq(Value_to_latex(Value_complex(f64_from(1), 0xFFF0000000000000)),
+      "1.000000 - {\\infty}i", "negative infinite imaginary part too");
+
+    # f64_lt(-0, 0) is 0, so a negative-zero imaginary part took the "+" arm
+    # while keeping its sign bit, and fmt_float_buf added its own "-".
+    assert_streq(Value_to_latex(Value_complex(f64_from(1), 0x8000000000000000)),
+      "1.000000 - 0.000000i", "negative-zero imaginary does not print \"+ -\"");
+
+    # f64_pow(10, e) underflows to +0 for e <= -324, so dividing by it gave Inf
+    # and the two smallest subnormals printed as infinity.
+    assert_streq(Value_to_latex(Value_float(0x0000000000000001)),
+      "4.940656 \\times 10^{-324}", "smallest subnormal is finite, not inf");
+    assert_streq(Value_to_latex(Value_float(0x0000000000000002)),
+      "9.881313 \\times 10^{-324}", "second subnormal likewise");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco integration tests ===");
@@ -156,7 +247,17 @@ fn main() {
     test_history_roundtrip_with_eval();
     test_bpm_two_ways();
     test_unparseable_safe();
-    assert_summary();
+    test_value_to_latex();
+    # Propagate failure to the process exit code. assert_summary() RETURNS
+    # _assert_fail; discarding it and returning 0 made a red suite exit 0, and
+    # CI gates on the exit code — so failures shipped green (fixed 2.4.4).
+    #
+    # Collapsed to 1 rather than returned raw: a Linux exit code is 8 bits, so
+    # returning the count directly would make EXACTLY 256 failures (or 512, ...)
+    # exit 0 — the same silent-green bug in a narrower window. Verified: a
+    # program returning 256 exits 0. The count itself stays visible on the
+    # summary line, which CI also parses.
+    if (assert_summary() != 0) { return 1; }
     return 0;
 }
 

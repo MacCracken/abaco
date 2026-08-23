@@ -245,8 +245,11 @@ fn test_ccy_truncated_body() {
 
 fn test_ccy_deep_nesting_rejected() {
     # MED-4 regression: a rates object nested past CCY_MAX_JSON_DEPTH (8) must be
-    # rejected before bayan_json_parse recurses — a compromised endpoint could
-    # otherwise exhaust the native stack. Depth here is 9 ('rates' + 8 inner).
+    # rejected. A legitimate fiat-rate map is flat (depth 1), so this payload is
+    # not a rates object whatever else it is. Depth here is 9 ('rates' + 8
+    # inner). (Corrected at 2.4.4: this said "before bayan_json_parse recurses"
+    # and called it a stack-exhaustion guard — that parser is a flat scanner and
+    # does not recurse. The assertion is unchanged; only the reason was wrong.)
     var deep = "{\"base\":\"USD\",\"rates\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":0.5}}}}}}}}}";
     var c = CurrencyCache_new("http://localhost:8088");
     assert_eq(_ccy_load_body(c, deep, strlen(deep)), AI_ERR_CURRENCY, "deep nesting rejected");
@@ -414,7 +417,7 @@ fn test_history_json_braces() {
     assert(streq(he_input(CalcHistory_get(h2, 0)), "a}b") == 1, "close brace preserved");
     assert(streq(he_input(CalcHistory_get(h2, 1)), "a{b") == 1, "open brace preserved");
     assert(streq(he_input(CalcHistory_get(h2, 2)), "{\"nested\":\"looking\"}") == 1,
-    "brace-and-quote payload preserved");
+      "brace-and-quote payload preserved");
     assert(streq(he_input(CalcHistory_get(h2, 3)), "plain") == 1, "trailing entry intact");
     # A ']' inside a field must not end the array early either.
     h = CalcHistory_new(10);
@@ -519,7 +522,7 @@ fn test_ccy_depth_guard_clamp() {
     while (i < pad) { store8(padded + i, 93); i = i + 1; }   # ']'
     memcpy(padded + pad, buf, pos);
     assert_eq(_ccy_json_depth_ok(str_new(padded, pad + pos)), 0,
-    "']' padding does not buy free depth (false-accept guard)");
+      "']' padding does not buy free depth (false-accept guard)");
     return 0;
 }
 
@@ -575,7 +578,16 @@ fn main() {
     test_security_rate_sanity_rejects_nan();
     test_security_rate_sanity_rejects_negative();
     test_security_rate_sanity_all_bad();
-    assert_summary();
+    # Propagate failure to the process exit code. assert_summary() RETURNS
+    # _assert_fail; discarding it and returning 0 made a red suite exit 0, and
+    # CI gates on the exit code — so failures shipped green (fixed 2.4.4).
+    #
+    # Collapsed to 1 rather than returned raw: a Linux exit code is 8 bits, so
+    # returning the count directly would make EXACTLY 256 failures (or 512, ...)
+    # exit 0 — the same silent-green bug in a narrower window. Verified: a
+    # program returning 256 exits 0. The count itself stays visible on the
+    # summary line, which CI also parses.
+    if (assert_summary() != 0) { return 1; }
     return 0;
 }
 

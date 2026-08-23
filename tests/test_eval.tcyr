@@ -548,7 +548,7 @@ fn test_long_literals() {
     ev_int("9007199254740991", 9007199254740991, "2^53-1 exact");
     var big = Evaluator_eval(e, "123456789012345678");
     near_f(_div_pow10(f64_to(big), 17), _div_pow10(123456789, 8), 1,
-    "18-digit literal keeps its value to f64 precision");
+      "18-digit literal keeps its value to f64 precision");
 
     # 19, 20, 21 digits: must stay positive and keep their magnitude.
     # f64 cannot hold these exactly; the point is that they no longer wrap.
@@ -569,7 +569,7 @@ fn test_long_literals() {
     # Long fractions: frac_div used to wrap. Value must stay 1.0, not garbage.
     ev_near("1.0000000000000000000", f64_from(1), 1, "19 fractional digits = 1.0");
     ev_near("1.00000000000000000000000000000000000000000000000000000000000000000",
-    f64_from(1), 1, "65 fractional digits = 1.0");
+      f64_from(1), 1, "65 fractional digits = 1.0");
 
     # Leading zeros must not consume mantissa room: 1e-19 written out longhand
     # still carries its single significant digit.
@@ -870,7 +870,7 @@ fn test_zero_mantissa_and_range() {
     # The literal's own decimal exponent and the written exponent must combine
     # BEFORE clamping. 1e-94 * 1e101 = 1e7.
     ev_int("0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001e101",
-    10000000, "long fraction + large exponent combine correctly");
+      10000000, "long fraction + large exponent combine correctly");
 
     # Subnormal range must survive the lower clamp: mant carries ~1e18, so a
     # -340 clamp would round genuine underflows up to nonzero.
@@ -895,11 +895,11 @@ fn test_top_of_range_literals() {
     # The canonical shortest round-trip decimal for DBL_MAX must parse to
     # DBL_MAX exactly — it returned +Inf at 2.3.4 and 2.3.5.
     assert_eq(Evaluator_eval(e, "1.7976931348623157e308"), 0x7FEFFFFFFFFFFFFF,
-    "DBL_MAX literal is bit-exact (was +Inf)");
+      "DBL_MAX literal is bit-exact (was +Inf)");
     assert_eq(Evaluator_eval(e, "1.7976931348623156e308"), 9218868437227405310,
-    "one ulp below DBL_MAX is bit-exact");
+      "one ulp below DBL_MAX is bit-exact");
     assert_eq(Evaluator_eval(e, "1.797693134862315e308"), 9218868437227405307,
-    "16-digit near-max bit-exact");
+      "16-digit near-max bit-exact");
     assert_eq(Evaluator_eval(e, "1.7e308"), 9218378953502702454, "1.7e308 bit-exact");
     assert_eq(Evaluator_eval(e, "1e308"), 9214871658872686752, "1e308 bit-exact");
     assert_eq(Evaluator_eval(e, "1e307"), 9199863512903218227, "1e307 bit-exact");
@@ -976,6 +976,177 @@ fn test_two_product_exact() {
     return 0;
 }
 
+fn test_pow_zero_base() {
+    var e = Evaluator_new();
+    var inf = 0x7FF0000000000000;
+    var ninf = 0xFFF0000000000000;
+    var nzero = 0x8000000000000000;
+    var one = 0x3FF0000000000000;
+
+    # C99 F.10.4.4 splits pow(+/-0, y) on the SIGN of y. Through 2.4.3 abaco
+    # returned +0 for EVERY y, so these five answered +0 instead of +Inf, with
+    # eval_err = NONE.
+    assert_eq(Evaluator_eval(e, "0^(0-1)"), inf, "0^-1 = +Inf (was +0)");
+    assert_eq(Evaluator_eval(e, "0^(0-2)"), inf, "0^-2 = +Inf (was +0)");
+    assert_eq(Evaluator_eval(e, "0^(0-0.5)"), inf, "0^-0.5 = +Inf (was +0)");
+    assert_eq(Evaluator_eval(e, "pow(0, 0-1)"), inf, "pow(0,-1) = +Inf, both spellings");
+    assert_eq(Evaluator_eval(e, "pow(0, 0-3)"), inf, "pow(0,-3) = +Inf");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "zero-base pow sets no evaluator error");
+
+    # Positive exponents keep returning zero, and y == 0 keeps returning 1 —
+    # the rows C99 puts ahead of the others. Untouched by the fix.
+    assert_eq(Evaluator_eval(e, "0^2"), 0, "0^2 = +0, unchanged");
+    assert_eq(Evaluator_eval(e, "0^3"), 0, "0^3 = +0, unchanged");
+    assert_eq(Evaluator_eval(e, "0^0.5"), 0, "0^0.5 = +0, unchanged");
+    assert_eq(Evaluator_eval(e, "0^0"), one, "0^0 = 1, the row ahead of all of these");
+
+    # -0 carries its sign through the ODD-integer rows only. Unreachable from
+    # the tokenizer (a literal "-0" parses as 0 - 0 = +0), so drive eval_pow
+    # directly with the bit pattern.
+    assert_eq(eval_pow(nzero, f64_from(0 - 3)), ninf, "(-0)^-3 = -Inf, odd carries the sign");
+    assert_eq(eval_pow(nzero, f64_from(0 - 2)), inf, "(-0)^-2 = +Inf, even does not");
+    assert_eq(eval_pow(nzero, f64_from(3)), nzero, "(-0)^3 = -0, odd carries the sign");
+    assert_eq(eval_pow(nzero, f64_from(2)), 0, "(-0)^2 = +0, even does not");
+
+    # Deliberate asymmetry with `/`, which DOES raise an evaluator error.
+    # eval_pow takes no evaluator handle; see the comment on the zero-base rows.
+    e = Evaluator_new();
+    Evaluator_eval(e, "1/0");
+    assert_eq(eval_err(e), ABACO_ERR_DIV_ZERO, "1/0 still raises DIV_ZERO, unlike 0^-1");
+
+    # C99's NaN row. The zero-base block returns before eval_pow's general NaN
+    # rows, so without an explicit test here a NaN exponent passed every check
+    # inside it (f64_to saturates, and f64_lt(NaN, 0) is 0 because the compare
+    # is unordered) and landed on `return zero` — silently turning NaN into an
+    # exact +0. Reachable from ordinary text, hence the last two.
+    var qn = 0x7FF8000000000000;
+    var rn = eval_pow(f64_from(0), qn);
+    assert(f64_eq(rn, rn) == 0, "pow(+0, NaN) = NaN (was +0)");
+    rn = eval_pow(nzero, qn);
+    assert(f64_eq(rn, rn) == 0, "pow(-0, NaN) = NaN (was +0)");
+    assert_eq(eval_pow(qn, f64_from(0)), one, "pow(NaN, 0) = 1, the C99 row that outranks it");
+    e = Evaluator_new();
+    rn = Evaluator_eval(e, "0^(sqrt(0-1))");
+    assert(f64_eq(rn, rn) == 0, "0^(sqrt(-1)) = NaN through the parser too");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "and sets no evaluator error");
+    return 0;
+}
+
+fn test_pow_huge_integer_exponent() {
+    var e = Evaluator_new();
+    var inf = 0x7FF0000000000000;
+    var one = 0x3FF0000000000000;
+
+    # |y| >= 2^63 saturates f64_to, so the is_int round-trip fails and these
+    # reach the non-integer branch — but every f64 at or above 2^53 has an ulp
+    # of 2 or more and is therefore an EVEN INTEGER. Through 2.4.3 the
+    # negative-base NaN guard claimed them and (0-2)^1e300 answered NaN.
+    assert_eq(Evaluator_eval(e, "(0-2)^1e300"), inf, "(-2)^1e300 = +Inf (was NaN)");
+    assert_eq(Evaluator_eval(e, "(0-2)^(0-1e300)"), 0, "(-2)^-1e300 = +0 (was NaN)");
+    assert_eq(Evaluator_eval(e, "(0-0.5)^1e300"), 0, "(-0.5)^1e300 = +0 (was NaN)");
+    assert_eq(Evaluator_eval(e, "(0-0.5)^(0-1e300)"), inf, "(-0.5)^-1e300 = +Inf (was NaN)");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "huge-exponent pow sets no evaluator error");
+
+    # |x| == 1 is exact for every exponent; -1 to an even power is +1.
+    assert_eq(Evaluator_eval(e, "(0-1)^1e300"), one, "(-1)^1e300 = 1, even exponent");
+    assert_eq(Evaluator_eval(e, "1^1e300"), one, "1^1e300 = 1");
+
+    # Positive bases took the same wrong branch and were already correct by
+    # accident; pin them so the new block cannot regress them.
+    assert_eq(Evaluator_eval(e, "2^1e300"), inf, "2^1e300 = +Inf");
+    assert_eq(Evaluator_eval(e, "0.5^1e300"), 0, "0.5^1e300 = +0");
+    assert_eq(Evaluator_eval(e, "0.5^(0-1e300)"), inf, "0.5^-1e300 = +Inf");
+
+    # Just BELOW the threshold the ordinary integer path still runs and still
+    # carries sign parity — the new block must not swallow these.
+    assert_eq(Evaluator_eval(e, "(0-2)^3"), 0xC020000000000000, "(-2)^3 = -8, integer path intact");
+    assert_eq(Evaluator_eval(e, "(0-2)^2"), 0x4010000000000000, "(-2)^2 = 4, integer path intact");
+    assert_eq(Evaluator_eval(e, "2^10"), 0x4090000000000000, "2^10 = 1024, integer path intact");
+    # And a genuine non-integer exponent still yields NaN for a negative base.
+    var r = Evaluator_eval(e, "(0-2)^0.5");
+    assert(f64_eq(r, r) == 0, "(-2)^0.5 still NaN — the huge-exponent block did not swallow it");
+
+    # exp = -(2^63) is the ONE magnitude >= 2^63 that still round-trips through
+    # i64, so it takes the integer path and meets the i64_MIN peel. Peeling one
+    # turned that even exponent ODD and square-and-multiply carried the wrong
+    # parity into the sign: through 2.4.4's first cut, (-0.5)^-(2^63) answered
+    # -Inf where C99 and glibc answer +Inf. Nothing else in this file reaches
+    # the peel — the rows above stop at 1e300.
+    var minexp = f64_sub(f64_from(0 - 9223372036854775807), f64_from(1));
+    assert_eq(eval_pow(f64_from(0 - 2), minexp), 0,
+      "(-2)^-(2^63) = +0, not -0 — the peel keeps the exponent even");
+    assert_eq(eval_pow(f64_neg(f64_div(f64_from(1), f64_from(2))), minexp), inf,
+      "(-0.5)^-(2^63) = +Inf, not -Inf");
+    assert_eq(eval_pow(f64_from(0 - 2), f64_neg(minexp)), inf,
+      "(-2)^+(2^63) = +Inf via the huge-exponent block");
+    return 0;
+}
+
+# Tighter than near_f, whose tolerance is in thousandths. These functions come
+# straight from ganita, so the point of the net is to catch a fold that moves
+# them — 0.001 would sleep through most of that.
+fn near_tight(actual, expected, name) {
+    var diff = f64_abs(f64_sub(actual, expected));
+    assert(f64_lt(diff, f64_div(f64_from(1), f64_from(1000000000))) == 1, name);
+    return 0;
+}
+
+fn test_transcendental_coverage() {
+    var e = Evaluator_new();
+    # Nine of the eleven ganita transcendentals abaco routes to user-facing
+    # names had ZERO assertions through 2.4.3 — verified correct at the time,
+    # but with no net under the next stdlib fold. Anchors AND identities: the
+    # anchors catch a uniformly wrong function, which a round-trip identity
+    # cannot (asinh being the true inverse of a wrong sinh still round-trips).
+
+    # -- Anchored values --
+    near_tight(Evaluator_eval(e, "sinh(1)"), 0x3FF2CD9FC44EB982, "sinh(1)");
+    near_tight(Evaluator_eval(e, "cosh(1)"), 0x3FF8B07551D9F550, "cosh(1)");
+    near_tight(Evaluator_eval(e, "tanh(1)"), 0x3FE85EFAB514F394, "tanh(1)");
+    near_tight(Evaluator_eval(e, "asinh(1)"), 0x3FEC34366179D426, "asinh(1)");
+    near_tight(Evaluator_eval(e, "acosh(2)"), 0x3FF5124271980435, "acosh(2)");
+    near_tight(Evaluator_eval(e, "atanh(0.5)"), 0x3FE193EA7AAD030A, "atanh(0.5)");
+    near_tight(Evaluator_eval(e, "asin(0.5)"), 0x3FE0C152382D7365, "asin(0.5) = pi/6");
+    near_tight(Evaluator_eval(e, "acos(0.5)"), 0x3FF0C152382D7365, "acos(0.5) = pi/3");
+
+    # -- Identities, which no single wrong constant can satisfy --
+    near_tight(Evaluator_eval(e, "cosh(1)*cosh(1) - sinh(1)*sinh(1)"), f64_from(1),
+      "cosh^2 - sinh^2 = 1");
+    near_tight(Evaluator_eval(e, "cosh(2.5)*cosh(2.5) - sinh(2.5)*sinh(2.5)"), f64_from(1),
+      "cosh^2 - sinh^2 = 1 away from the origin");
+    near_tight(Evaluator_eval(e, "tanh(1) - sinh(1)/cosh(1)"), f64_from(0),
+      "tanh = sinh/cosh");
+    near_tight(Evaluator_eval(e, "asin(0.5) + acos(0.5)"), Evaluator_eval(e, "atan2(1, 0)"),
+      "asin(x) + acos(x) = pi/2");
+
+    # -- Inverse round trips --
+    near_tight(Evaluator_eval(e, "asinh(sinh(1.25))"), Evaluator_eval(e, "1.25"),
+      "asinh(sinh(x)) = x");
+    near_tight(Evaluator_eval(e, "acosh(cosh(1.25))"), Evaluator_eval(e, "1.25"),
+      "acosh(cosh(x)) = |x|");
+    near_tight(Evaluator_eval(e, "atanh(tanh(0.75))"), Evaluator_eval(e, "0.75"),
+      "atanh(tanh(x)) = x");
+    near_tight(Evaluator_eval(e, "asin(sin(0.4))"), Evaluator_eval(e, "0.4"),
+      "asin(sin(x)) = x on [-pi/2, pi/2]");
+    near_tight(Evaluator_eval(e, "acos(cos(0.4))"), Evaluator_eval(e, "0.4"),
+      "acos(cos(x)) = x on [0, pi]");
+
+    # -- atan2 is quadrant-correct: the whole reason it exists over atan(y/x),
+    #    which collapses the two diagonals onto one answer. --
+    var quarter_pi = Evaluator_eval(e, "atan2(1, 1)");
+    near_tight(Evaluator_eval(e, "atan2(1, 1)*4"), Evaluator_eval(e, "atan2(1, 0)*2"),
+      "atan2(1,1) = pi/4");
+    near_tight(Evaluator_eval(e, "atan2(1, 0-1)"), f64_mul(quarter_pi, f64_from(3)),
+      "atan2(1,-1) = 3pi/4, quadrant II");
+    near_tight(Evaluator_eval(e, "atan2(0-1, 0-1)"), f64_mul(quarter_pi, f64_from(0 - 3)),
+      "atan2(-1,-1) = -3pi/4, quadrant III");
+    near_tight(Evaluator_eval(e, "atan2(0-1, 1)"), f64_neg(quarter_pi),
+      "atan2(-1,1) = -pi/4, quadrant IV");
+    near_tight(Evaluator_eval(e, "atan2(0, 1)"), f64_from(0), "atan2(0,1) = 0");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "no transcendental set an evaluator error");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco eval tests ===");
@@ -1004,10 +1175,22 @@ fn main() {
     test_pow_nonfinite_and_parity();
     test_pow_negative_base_fractional_exponent();
     test_pow_c99_nonfinite_table();
+    test_pow_zero_base();
+    test_pow_huge_integer_exponent();
+    test_transcendental_coverage();
     test_zero_mantissa_and_range();
     test_top_of_range_literals();
     test_two_product_exact();
-    assert_summary();
+    # Propagate failure to the process exit code. assert_summary() RETURNS
+    # _assert_fail; discarding it and returning 0 made a red suite exit 0, and
+    # CI gates on the exit code — so failures shipped green (fixed 2.4.4).
+    #
+    # Collapsed to 1 rather than returned raw: a Linux exit code is 8 bits, so
+    # returning the count directly would make EXACTLY 256 failures (or 512, ...)
+    # exit 0 — the same silent-green bug in a narrower window. Verified: a
+    # program returning 256 exits 0. The count itself stays visible on the
+    # summary line, which CI also parses.
+    if (assert_summary() != 0) { return 1; }
     return 0;
 }
 

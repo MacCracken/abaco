@@ -857,15 +857,28 @@ fn _ccy_rate_plausible(bits) {
     return 1;
 }
 
-# MED-4 guard: bayan_json_parse (lib/bayan.cyr, formerly lib/json.cyr) recurses
-# once per nesting level with no depth cap, so a deeply-nested rates object
-# (e.g. {"a":{"a":{...}}}) from a compromised / MITM'd endpoint could exhaust
-# the native stack before a single value is read. Legitimate fiat-rate maps are
-# flat (depth 1). Bound the nesting here, before bayan_json_parse ever sees the
-# buffer. The scan counts raw braces /
-# brackets (it does not skip string contents) — that only ever rejects *more*
-# aggressively, the safe direction for a DoS guard, and the cap of 8 leaves
-# ample headroom over the depth-1 real shape.
+# MED-4 guard: a SHAPE check on the rates object, run before any parsing.
+#
+# ⚠ Corrected at 2.4.4 — the rationale here was wrong for as long as it stood.
+# It claimed bayan_json_parse "recurses once per nesting level with no depth
+# cap" and that deep nesting could exhaust the native stack. It cannot:
+# bayan_json_parse is a FLAT single-pass scanner (five while loops, no
+# self-call, no call into the recursive parser), and it always has been. The
+# recursive JSON parser in that module is _jp_parse_value_a, which abaco never
+# calls and which has carried its own _JP_MAX_DEPTH = 128 cap since before
+# 6.5.27. Verified against both the 6.5.27 and 6.5.35 stdlib.
+#
+# The guard stays, because what it actually buys is real and cheap: a
+# legitimate fiat-rate map is FLAT (depth 1), so a payload nested past 8 is not
+# a rates object at all, whatever it is. Rejecting it up front is O(n) input
+# validation on the only data in this crate that arrives off the network, and
+# it bounds the work the loop below does on a hostile body. It is not, and
+# should not be described as, a stack-exhaustion guard.
+#
+# The scan counts raw braces / brackets (it does not skip string contents) —
+# that only ever rejects *more* aggressively, the safe direction here, and the
+# cap of 8 leaves ample headroom over the depth-1 real shape. Since 2.3.5 it
+# also cannot be talked into a false ACCEPT by ']' padding.
 var CCY_MAX_JSON_DEPTH = 8;
 fn _ccy_json_depth_ok(s) {
     var data = str_data(s);
@@ -900,7 +913,8 @@ fn _ccy_load_body(c, body, len) {
     if (base == 0) { return AI_ERR_CURRENCY; }
     var rates_obj = _jf_get_object(body, len, "rates");
     if (rates_obj == 0) { return AI_ERR_CURRENCY; }
-    # MED-4: reject pathologically nested rates before the recursive parser.
+    # MED-4: reject a payload too deeply nested to be a rates map, before the
+    # scan below walks it. (Not a recursion guard — see the note on the cap.)
     if (_ccy_json_depth_ok(rates_obj) == 0) { return AI_ERR_CURRENCY; }
     var pairs = bayan_json_parse(rates_obj);
     var rates = map_new();
