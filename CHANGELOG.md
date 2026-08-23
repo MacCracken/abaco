@@ -5,6 +5,236 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.3] — 2026-08-22
+
+**Cyrius 6.5.35 — and two silent wrong answers the bump surfaced.** The pin half
+is maintenance: the typed-pointer warnings abaco filed at 2.4.2 are gone, and a
+SIGFPE leaves `mod_pow`'s public surface. What is not maintenance is `eval_pow`,
+which had been answering `(-2)^0.5` with `+√2` since 2.2.x and every non-finite
+`pow` row with NaN, all with `eval_err = NONE`. Both are fixed, cited and
+pinned. The bump also costs real performance on the primality path, measured
+below and accepted.
+
+Suite **729 asserts** (was 657); fuzz 4/4 at 20,000 iterations; fmt/lint/vet
+clean; **zero warnings** across all 15 build targets. `dist/abaco.cyr` is **not**
+byte-identical to 2.4.2 — consumers must re-vendor.
+
+### Fixed — `(-2)^0.5` returned `+√2`, not NaN
+
+`eval_pow`'s non-integer branch computes `exp2(exp · log2(|base|))`. `log2`
+requires a positive argument, so the magnitude is taken — and the sign was never
+restored. Through 2.4.2, `(-2)^0.5` came back as `+1.4142135623730951` and
+`(-8)^(1/3)` as `+2`, both with `eval_err = NONE`. The comment sitting on that
+very line had named the problem since 2.2.x — *"a negative base with a fractional
+exponent has no real result"* — and pointed at a "sign correction below" that was
+never written; `fn parse_power` starts on the next line.
+
+Real `x < 0` with non-integer `y` has no real value at all: the principal complex
+root `|x|^y · e^(iπy)` is off the real line for every non-integer `y`, so the
+magnitude's root is a *wrong* answer, not an approximate one. The branch now
+returns a quiet NaN, per IEEE 754-2019 §9.2 and C99 F.10.4.4.
+
+**NaN and not `ABACO_ERR_MATH`:** `sqrt(-1)` already returns NaN here and
+`pow(x, 0.5)` is the same operation — the evaluator must not contradict itself
+within one session. `ABACO_ERR_MATH` in this file guards *integer* domains
+(`factorial` n<0, the totient cap, `fib` > 92), checks on `f64_to()` values and
+never an f64 domain, and `eval_pow` takes no evaluator handle to set an error on.
+The integer path returns above the guard with its sign parity intact: `(0-2)^2`
+is still `4`, `(0-2)^3` still `-8`, `(0-2)^-2` still `0.25`.
+
+### Fixed — every non-finite `pow` row returned NaN
+
+The same branch also swallowed the whole C99 special-value table. `f64_to`
+saturates to `i64_MIN` for `+∞`, `-∞` and NaN alike, so the
+`f64_from(f64_to(y))` round-trip that classifies the exponent never succeeds for
+a non-finite operand — every one of them fell through to the `exp2`/`log2` line,
+which answers NaN for all of them (`f64_exp2` is NaN for every non-finite
+argument in this toolchain, and `log2(+∞) = +∞` hands it one). That is the same
+fact behind the 2.3.4 `(±Inf)^n` regression, which binary exponentiation closed
+for *integer* exponents only.
+
+Through 2.4.2, all of `(-∞)^±2.5`, `(±∞)^±2.5`, `(-2)^±∞`, `(-0.5)^±∞`,
+`2^±∞`, `0.5^±∞`, `(-1)^±∞`, `1^±∞` and `1^NaN` returned NaN with
+`eval_err = NONE`. The table is now answered explicitly ahead of the `exp2`
+line, in C99's own row order — `pow(+1, y) = 1` for every `y` including NaN,
+then NaN propagation, then the `y = ±∞` rows splitting on `|x|` against 1, then
+the `x = ±∞` rows splitting on the sign of `y`.
+
+The `pow(-∞, y)` odd-integer rows (`-∞` for odd `y > 0`, `-0` for odd `y < 0`)
+need no code here: an odd integer has magnitude below 2⁵³, because every f64 at
+or above 2⁵³ has an ulp of 2 or more and is therefore even, and 2⁵³ is far
+inside i64 — so an odd-integer exponent always survives the round-trip and takes
+the integer path, where the sign follows from the multiplication chain.
+
+⚠ **Known gap, deliberately out of scope:** an exponent at or above 2⁶³ misses
+the `is_int` round-trip even though every such f64 is an even integer, so
+`(-2)^1e300` answers NaN where C99 wants `+∞`. Only the `±∞` *base* is corrected
+for it. Closing it means widening the round-trip itself, which is the integer
+path's business and a separate change.
+
+### Fixed — inherited: `mod_pow` no longer traps
+
+`src/ntheory.cyr` exposes `mod_pow` as a bare passthrough to
+`bayan_u64_powmod`, and ships it at `dist/abaco.cyr`. bayan 1.5.2 fixes
+`bayan_u64_mulmod` taking **SIGFPE on ordinary inputs** — x86 `DIV` raises `#DE`
+when the *quotient* overflows 64 bits, not only on a zero divisor, and the
+aarch64 path disagreed. The new body guards `m == 0`, routes wide operands to
+`_u64_mulmod_wide`, and reduces `a` and `b` before the divide; the 6.5.27 body
+went straight to `mul`/`div` with neither guard nor reduction.
+
+Measured with the compiler held fixed and only the vendored stdlib swapped:
+`mod_pow(5, 3, 0)` and `mod_pow(0-1, 3, 5)` both exit **136 (SIGFPE)** against
+the 6.5.27 stdlib and return `0` against 6.5.35. `mod_pow(0-7, 5, 1000003)`
+returns `791664`, exact against `pow(2**64-7, 5, 1000003)`. The new
+`test_mod_pow_boundaries` is a discriminating witness in the strongest sense:
+the identical test file **dies with SIGFPE before printing a single assertion**
+against the old stdlib, and passes 112/112 against the new one.
+
+⚠ **This fix does not travel with abaco's tag.** `dist/abaco.cyr` bundles no
+bayan — consumers supply it from their own `[deps].stdlib` — so exposure is a
+function of the *consumer's* pin, not abaco's version. A consumer on 6.5.27 is
+still exposed even against the 2.4.3 bundle; one already on 6.5.35 was never
+exposed at 2.4.2. **Consumers must pin ≥ 6.5.35.** `is_prime` itself was never
+at risk: it passes small witnesses and a positive, pre-reduced `n`, which is why
+107 ntheory asserts and 20,000 fuzz iterations stayed green over a primitive
+that could trap.
+
+### Changed
+
+- **Toolchain pin 6.5.27 → 6.5.35.** Stdlib re-vendored with
+  `rm -rf lib && cyrius deps`: `bayan` **+10,046 lines** (1.4.1 → 1.5.2 — 1.5.0's
+  PDF writer/reader is most of it), `ganita` +56 (1.1.0 → 1.1.4), `fmt` +24 (the
+  6.5.30 `fmt_float_buf` carry fix), `syscalls_windows` +34 (a Windows-only
+  `enum Stat`). The other **28 of 32** vendored modules are byte-identical. No
+  re-batch, no symbol moves, **zero removals** — the `[deps].stdlib` list is
+  unchanged and every back-compat alias survives.
+- **DCE smoke binary 403,968 → 619,480 B (+211 KB).** Almost all of it is dead
+  weight the linker NOPs out: unreachable fns 1,239 → 1,609, NOPed 323,339 →
+  475,575 B, and all 367 functions bayan gained land in the dead list. Isolated
+  with a 2×2 of compiler × stdlib on one box: the **stdlib** contributes
+  +219,608 B and the 6.5.35 **compiler −8,192 B**, so the codegen is a net size
+  win; the `eval_pow` fix accounts for the remaining 4,096 B. `dist/abaco.cyr`
+  is unaffected by any of it — the bundle is source, and the binary is the smoke
+  entry only.
+- **`dist/abaco.cyr` 137,343 → 141,990 B / 3,674 → 3,759 lines.** Carries the
+  `eval_pow` domain and non-finite fixes, so consumers must re-vendor for
+  *behaviour*, not just for a version header.
+- **`dist/*.deps` is now gitignored.** 6.5.30 fixed `cyrius distlib` writing no
+  sidecar when a manifest mentions "stdlib" in prose — abaco's `cyrius.cyml`
+  does, so the sidecar started appearing at this pin. It is not committed under
+  either name: `cyrius deps` derives the sidecar path from the declared module
+  path, so a consumer using the documented `modules = ["dist/abaco.cyr"]` looks
+  for `dist/abaco.deps` while distlib emits `dist/abaco-abaco.deps` — the names
+  can never match, and the miss is silent. Renaming it would be worse: its
+  12-leaf list prunes `net`, which `lib/http.cyr` needs for `tcp_socket`, so a
+  consumer trusting it and calling `CurrencyCache_fetch` fails to link.
+  README.md's hand-written 15-leaf list remains the contract.
+
+### Fixed upstream — abaco's 2.4.2 typed-pointer filing is closed
+
+`assigning non-pointer to typed pointer` fired inside vendored `lib/bayan.cyr`,
+where assignment did not consult the callee's declared return type. abaco could
+not fix it — vendored stdlib — and filed it with a repro. The 6.5.35 build emits
+**zero** warnings across all 15 build targets.
+
+⚠ **2.4.2's recorded count was wrong.** state.md said 7; a controlled rebuild
+against the 6.5.27 compiler *and* 6.5.27 stdlib produces exactly **3**, at
+`lib/bayan.cyr:1447:77`, `:1451:77` and `:1456:65` — the `value = _toml_parse_*`
+assignments. (Earlier counts of "55" here were the same 3 sites re-emitted once
+per build target, plus a pin-drift warning from the measurement rig.)
+
+⚠ **And the compiler fix is not what closed them.** 6.5.28 fixed the case where
+the callee's *declared* return type is a pointer; abaco's three callees were
+declared `: i64`. What closed them is the **stdlib**: bayan 1.5.x re-declared
+`_toml_parse_str` and `_toml_parse_multiline_q` as `: Str` while keeping the same
+three assignment sites.
+
+### Benchmarks — ⛔ a real regression on the primality path
+
+| measurement | 6.5.27 | 6.5.35 | ratio |
+|-------------|--------|--------|-------|
+| 100,000 `is_prime` calls, wall clock, 5 interleaved rounds | 264.6 ms | 405.8 ms | **1.53×** |
+| `is_prime_small` (harness, median of 5) | 1.600 us | 2.454 us | 1.53× |
+| `is_prime_large` | 4.089 us | 5.967 us | 1.46× |
+| `next_prime` | 1.947 us | 2.911 us | 1.49× |
+| the other 74 benchmarks | — | — | flat within noise |
+
+**This is the price of the SIGFPE fix above.** `bayan_u64_mulmod` gained an
+`m == 0` test, a wide-operand test and two `%` reductions — two extra hardware
+`div`s — on every call, and `bayan_u64_powmod` drives it roughly twice per
+exponent bit.
+
+This is the **opposite signature** from 2.4.2's machine-state swing, which moved
+everything uniformly including `registry_creation`. Here it is exactly and only
+the three benchmarks that reach `bayan_u64_powmod`; `factor_*` is untouched
+because `factor` is plain trial division and never calls `mod_pow`.
+
+⚠ **The wall-clock row is the one to trust.** `benches/bench.bcyr` measures a
+per-run timer floor (~1.35 us per clock read) and subtracts it from every
+sample, which on benchmarks this short is a large fraction of the reading — a
+first interleaved A/B, taken against a loaded box, produced swings of the same
+size as the effect in both directions and had to be discarded. The wall-clock
+figure times 100,000 calls in one process with no per-sample instrumentation at
+all, and its two arms do not overlap across five interleaved rounds.
+
+**No action taken.** Hand-rolling a reduced-operand `mulmod` in `ntheory` would
+re-introduce, in abaco, exactly the hazard upstream just removed, and CLAUDE.md's
+"own the stack" rule says lean on `bayan` for wide-integer modular arithmetic
+rather than hand-rolling it. If it ever needs recovering, the *reduction* — not
+the guards — is the part to look at: `bayan_u64_powmod` already reduces its
+operands before calling `mulmod`, so `a % m; b % m` is redundant work on this
+call path specifically. A `bayan_u64_mulmod_reduced` fast path belongs upstream.
+
+### Added
+
+- **`test_pow_negative_base_fractional_exponent`** and
+  **`test_pow_c99_nonfinite_table`** in `tests/test_eval.tcyr` — 67 asserts
+  between them (`test_eval` 252 → 319) covering both spellings (`^` and
+  `pow(...)`), the finite negative base, agreement with `sqrt(-1)`, the full C99
+  non-finite table, and the untouched integer path.
+
+  Discrimination proven the way the 2.3.5 fix-audit demands — that pass found six
+  decorative assertions that stayed green with the code they guarded deleted.
+  Reverting the negative-base guard alone fails **exactly 9** assertions;
+  neutralising the non-finite table alone fails **exactly 17**, each with a
+  concrete got/expected pair. The NaN checks additionally bit-compare against the
+  same power of the *positive* base — precisely the wrong answer the old code
+  produced — so nothing is hardcoded, and the integer-path and positive-base
+  asserts correctly stay green on either revert.
+- **`test_mod_pow_boundaries`** in `tests/test_ntheory.tcyr` — 5 asserts pinning
+  `mod_pow(x, y, 0)` and a base ≥ 2⁶³ (read as a negative i64), which trapped at
+  2.4.2. `mod_pow` had **no coverage at all** before this: it appeared in no
+  test, fuzz harness or benchmark.
+
+### Verified unchanged
+
+- **74 evaluator results, bit-for-bit identical across pin 6.5.27 and 6.5.35**,
+  measured before either `pow` fix was applied: `pow`/`^` across zero, negative,
+  fractional and huge exponents; every transcendental abaco exposes; literal
+  parsing including `DBL_MAX`, `1e22`/`1e23` and 18-digit mantissas; rounding;
+  `gcd`, `lcm`, `fact`; `is_prime`, `next_prime`, `totient`, `fibonacci`,
+  `binomial`, `mod_pow`; and the dB / MIDI conversions. The stdlib fold moves no
+  value abaco computes — which is what makes the two `pow` fixes above
+  attributable to abaco's own logic rather than to the toolchain.
+- **bayan's +10,046 lines break nothing.** All four symbols abaco calls —
+  `bayan_json_parse` / `_key` / `_value` and `bayan_u64_powmod` — keep identical
+  signatures. Zero functions, vars, enums or constants present at 6.5.27 are
+  absent at 6.5.35. Zero name collisions against abaco's 207 top-level fns, 44
+  globals and 55 enum members, validated with a positive control that *does*
+  produce `warning: duplicate fn`.
+- **No reserved-name collision this window** — no repeat of the `f64_round` or
+  call-arity class that broke 2.3.4 twice.
+- **6.5.28's decimal-literal corruption cannot reach abaco.** Its executable code
+  contains **zero** bare decimal float literals: every f64 constant is a hex bit
+  pattern with the decimal in a trailing comment (`DB_SCALE`, `DB_EXP`,
+  `DB_GAIN_EXP`, `DSP_A4_FREQ`, `DSP_C0_FREQ`, …), a habit the 2.3.2 dB-constant
+  fix established. Checked by stripping comments from all seven `src/*.cyr`: one
+  hit, inside the string `"http://127.0.0.1"`.
+- **`ganita` 1.1.4 and `fmt`'s carry fix are off abaco's call graph.**
+  `ganita_f64_pow` gained a C-pow domain block, but `eval_pow` is deliberately
+  not `f64_pow`; the eleven ganita symbols abaco does route to user-facing names
+  are byte-identical. abaco calls `fmt_int_buf` only.
+
 ## [2.4.2] — 2026-08-14
 
 **Cyrius 6.5.27 — both issues abaco filed at 2.4.1 are fixed, and the workaround

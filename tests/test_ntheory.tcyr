@@ -183,6 +183,26 @@ fn test_binomial() {
     return 0;
 }
 
+fn test_mod_pow_boundaries() {
+    # Ordinary case — the Miller-Rabin path every other ntheory test leans on.
+    assert_eq(mod_pow(2, 10, 1000), 24, "mod_pow(2,10,1000) = 24");
+    assert_eq(mod_pow(3, 200, 1000000007), 136318165, "mod_pow(3,200,1e9+7)");
+
+    # Boundary rows that TRAPPED through 2.4.2. bayan_u64_mulmod fed its
+    # operands straight to x86 `mul`/`div`, and DIV raises #DE when the
+    # QUOTIENT overflows 64 bits, not only on a zero divisor — so both of
+    # these killed the process with SIGFPE instead of returning a value.
+    # bayan 1.5.2 (arriving with the Cyrius 6.5.35 pin) guards m == 0 and
+    # reduces a and b before the divide. abaco's own is_prime never reached
+    # either row — it passes small witnesses and a positive, pre-reduced n —
+    # which is why 107 asserts here stayed green over a crashing primitive.
+    # mod_pow is public surface (dist/abaco.cyr), so pin it.
+    assert_eq(mod_pow(5, 3, 0), 0, "mod_pow with modulus 0 returns 0, does not trap");
+    assert_eq(mod_pow(0 - 1, 3, 5), 0, "base read as negative i64 (>= 2^63) does not trap");
+    assert_eq(mod_pow(0 - 7, 5, 1000003), 791664, "base >= 2^63 reduces correctly");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco ntheory tests ===");
@@ -193,6 +213,7 @@ fn main() {
     test_totient();
     test_fibonacci();
     test_binomial();
+    test_mod_pow_boundaries();
     assert_summary();
     return 0;
 }

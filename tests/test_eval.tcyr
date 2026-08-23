@@ -689,6 +689,170 @@ fn test_pow_nonfinite_and_parity() {
     return 0;
 }
 
+# Post-2.4.2: eval_pow's non-integer branch fed |base| to log2 and returned the
+# result unsigned, so a negative base with a fractional exponent produced the
+# positive root of |base| instead of NaN — (-2)^0.5 = +1.4142135623730951,
+# (-8)^(1/3) = +2, both with eval_err = NONE. The comment above that line had
+# named the problem since 2.2.x; the code never acted on it. Same silent-wrong-
+# answer class as the 2.3.4/2.3.5 regressions above.
+#
+# Contract is NaN, not ABACO_ERR_MATH: sqrt(-1) already returns NaN here, and
+# pow(x, 0.5) is the same operation. IEEE 754-2019 §9.2 / C99 F.10.4.4.
+fn test_pow_negative_base_fractional_exponent() {
+    var e = Evaluator_new();
+
+    # The bug: these must be NaN. f64_eq(r, r) == 0 is the NaN test (NaN is the
+    # only value not equal to itself), and it discriminates — with the fix
+    # reverted each of these is a finite real number that equals itself.
+    var r = Evaluator_eval(e, "(0-2)^0.5");
+    assert(f64_eq(r, r) == 0, "(-2)^0.5 = NaN (was +sqrt(2))");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "(-2)^0.5 is NaN, not an evaluator error");
+
+    # ...and specifically NOT the positive root. Bit-compare against the same
+    # power of the POSITIVE base: that is exactly the wrong answer the old code
+    # returned, so this fails loudly on a revert without hardcoding a constant.
+    var pos = Evaluator_eval(e, "2^0.5");
+    assert(Evaluator_eval(e, "(0-2)^0.5") != pos, "(-2)^0.5 is not +2^0.5");
+
+    # pow() spelling and the '^' operator spelling both go through eval_pow.
+    r = Evaluator_eval(e, "pow(0-2, 0.5)");
+    assert(f64_eq(r, r) == 0, "pow(-2, 0.5) = NaN");
+    r = Evaluator_eval(e, "pow(0-8, 0.3333333333333333)");
+    assert(f64_eq(r, r) == 0, "pow(-8, 1/3) = NaN (was +2)");
+    r = Evaluator_eval(e, "(0-8)^(1/3)");
+    assert(f64_eq(r, r) == 0, "(-8)^(1/3) = NaN (was +2)");
+    var cube = Evaluator_eval(e, "8^(1/3)");
+    assert(Evaluator_eval(e, "(0-8)^(1/3)") != cube, "(-8)^(1/3) is not +8^(1/3)");
+
+    # A fractional exponent that happens to be a whole number is NOT this case —
+    # 4.0 is an integer exponent and takes the exact path with even parity.
+    ev_int("(0-2)^4.0", 16, "(-2)^4.0 stays on the integer path");
+
+    # The integer path must be untouched, sign parity included. These are the
+    # assertions that fail if the guard is placed too high in the function.
+    ev_int("(0-2)^2", 4, "(-2)^2 = 4 (integer path intact)");
+    ev_int("(0-2)^3", 0 - 8, "(-2)^3 = -8 (integer path intact)");
+    ev_int("pow(0-2, 2)", 4, "pow(-2,2) = 4 (integer path intact)");
+    ev_int("pow(0-2, 3)", 0 - 8, "pow(-2,3) = -8 (integer path intact)");
+    ev_int("(0-2)^(0-2)*4", 1, "(-2)^-2 = 0.25 (negative integer exponent intact)");
+
+    # A POSITIVE base with the same fractional exponents is unaffected — the
+    # guard must not swallow the whole non-integer branch.
+    assert(f64_eq(pos, pos) == 1, "2^0.5 is still a real number");
+    ev_near("2^0.5", f64_div(f64_from(1414), f64_from(1000)), 1, "2^0.5 = 1.414");
+    ev_int("8^(1/3)", 2, "8^(1/3) = 2 unaffected");
+
+    # sqrt(-1) and (-1)^0.5 are the same operation and must agree on NaN-ness.
+    var sq = Evaluator_eval(e, "sqrt(0-1)");
+    r = Evaluator_eval(e, "(0-1)^0.5");
+    assert(f64_eq(sq, sq) == 0, "sqrt(-1) = NaN");
+    assert(f64_eq(r, r) == 0, "(-1)^0.5 = NaN, agreeing with sqrt(-1)");
+    return 0;
+}
+
+# Post-2.4.2: eval_pow's non-integer branch answered NaN for EVERY non-finite
+# operand, with eval_err = NONE, where C99 Annex F.10.4.4 / IEEE 754-2019 §9.2
+# require finite infinities or zeros. Root cause: the branch computes
+# exp2(exp · log2(|base|)), f64_exp2 returns NaN for any non-finite argument in
+# this toolchain, and f64_to saturates to i64_MIN for +Inf/-Inf/NaN alike — so
+# no non-finite exponent ever survives the is_int round-trip onto the integer
+# path, where 2.3.4's square-and-multiply already handles Inf and 0 correctly.
+# Same fact as the 2.3.4 (±Inf)^n regression (docs/audit/2026-08-13-fix-audit.md
+# R-1), which binary exponentiation fixed for integer exponents only.
+#
+# Discrimination, per the 2.3.5 fix-audit standard: reverting the table (the
+# block from `if (f64_eq(base, one) == 1)` down to the ±Inf-base rows) fails
+# exactly the 20 asserts marked "was NaN", and no others. The rest are
+# over-reach guards: they pin behaviour the table must NOT change, so they fail
+# when the table is written too greedily rather than when it is deleted —
+# measured by deleting the finite negative-base guard underneath it instead,
+# which fails 9 (the 7 owned by test_pow_negative_base_fractional_exponent plus
+# the 2 marked "still NaN" here) and leaves every non-finite row green.
+fn test_pow_c99_nonfinite_table() {
+    var e = Evaluator_new();
+    var inf = 0x7FF0000000000000;
+    var ninf = 0xFFF0000000000000;
+    var nzero = 0x8000000000000000;
+
+    # -- The six cases in the report. C99 F.10.4.4, negative-base rows. --
+    assert_eq(Evaluator_eval(e, "(0-(1e200*1e200))^2.5"), inf,
+      "(-Inf)^2.5 = +Inf (was NaN)");
+    assert_eq(Evaluator_eval(e, "(0-(1e200*1e200))^(0-2.5)"), 0,
+      "(-Inf)^-2.5 = +0 (was NaN)");
+    assert_eq(Evaluator_eval(e, "(0-2)^(1e200*1e200)"), inf,
+      "(-2)^+Inf = +Inf (was NaN)");
+    assert_eq(Evaluator_eval(e, "(0-2)^(0-(1e200*1e200))"), 0,
+      "(-2)^-Inf = +0 (was NaN)");
+    assert_eq(Evaluator_eval(e, "(0-0.5)^(1e200*1e200)"), 0,
+      "(-0.5)^+Inf = +0 (was NaN)");
+    assert_eq(Evaluator_eval(e, "(0-0.5)^(0-(1e200*1e200))"), inf,
+      "(-0.5)^-Inf = +Inf (was NaN)");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "non-finite pow sets no evaluator error");
+
+    # -- pow(+Inf, y), y finite non-integer. --
+    assert_eq(Evaluator_eval(e, "(1e200*1e200)^2.5"), inf,
+      "(+Inf)^2.5 = +Inf (was NaN)");
+    assert_eq(Evaluator_eval(e, "(1e200*1e200)^(0-2.5)"), 0,
+      "(+Inf)^-2.5 = +0 (was NaN)");
+
+    # -- pow(x, ±Inf), positive base, either side of 1. --
+    assert_eq(Evaluator_eval(e, "2^(1e200*1e200)"), inf, "2^+Inf = +Inf (was NaN)");
+    assert_eq(Evaluator_eval(e, "2^(0-(1e200*1e200))"), 0, "2^-Inf = +0 (was NaN)");
+    assert_eq(Evaluator_eval(e, "0.5^(1e200*1e200)"), 0, "0.5^+Inf = +0 (was NaN)");
+    assert_eq(Evaluator_eval(e, "0.5^(0-(1e200*1e200))"), inf, "0.5^-Inf = +Inf (was NaN)");
+
+    # -- |x| == 1 against an infinite exponent. C99 pins both at 1: the
+    # modulus is 1 for every exponent on the way out, so the magnitude has a
+    # limit even though the sign of (-1)^y never settles. --
+    ev_int("(0-1)^(1e200*1e200)", 1, "(-1)^+Inf = 1 (was NaN)");
+    ev_int("(0-1)^(0-(1e200*1e200))", 1, "(-1)^-Inf = 1 (was NaN)");
+    ev_int("1^(1e200*1e200)", 1, "1^+Inf = 1 (was NaN)");
+    ev_int("1^(0-(1e200*1e200))", 1, "1^-Inf = 1 (was NaN)");
+    # pow(+1, y) = 1 for EVERY y, NaN included — sqrt(-1) supplies the NaN.
+    ev_int("1^sqrt(0-1)", 1, "1^NaN = 1 (was NaN)");
+
+    # -- An exponent at or above 2^63 misses the is_int round-trip, but every
+    # f64 that large is an EVEN integer, so the ±Inf-base rows are still the
+    # right answer and the odd-integer sign rule cannot apply. --
+    assert_eq(Evaluator_eval(e, "(0-(1e200*1e200))^1e300"), inf,
+      "(-Inf)^1e300 = +Inf, 1e300 is an even integer (was NaN)");
+    assert_eq(Evaluator_eval(e, "(0-(1e200*1e200))^(0-1e300)"), 0,
+      "(-Inf)^-1e300 = +0 (was NaN)");
+    assert_eq(Evaluator_eval(e, "(1e200*1e200)^1e300"), inf,
+      "(+Inf)^1e300 = +Inf (was NaN)");
+
+    # -- Over-reach guards. NaN must still propagate: the table returns early
+    # for NaN, so a greedy ±Inf row would wrongly claim these. --
+    var r = Evaluator_eval(e, "sqrt(0-1)^2.5");
+    assert(f64_eq(r, r) == 0, "NaN^2.5 = NaN");
+    r = Evaluator_eval(e, "2^sqrt(0-1)");
+    assert(f64_eq(r, r) == 0, "2^NaN = NaN");
+    r = Evaluator_eval(e, "(0-2)^sqrt(0-1)");
+    assert(f64_eq(r, r) == 0, "(-2)^NaN = NaN");
+    r = Evaluator_eval(e, "(1e200*1e200)^sqrt(0-1)");
+    assert(f64_eq(r, r) == 0, "(+Inf)^NaN = NaN");
+    # ...except pow(x, ±0) = 1, the one row C99 keeps ahead of the NaN rule.
+    ev_int("sqrt(0-1)^0", 1, "NaN^0 = 1, ahead of the NaN rule");
+
+    # -- Over-reach guards: the finite negative-base NaN guard must survive
+    # underneath the table (2.4.2+ fix, test_pow_negative_base_fractional_
+    # exponent owns it in full). --
+    r = Evaluator_eval(e, "(0-2)^0.5");
+    assert(f64_eq(r, r) == 0, "(-2)^0.5 still NaN, the table did not swallow it");
+    r = Evaluator_eval(e, "(0-1)^0.5");
+    assert(f64_eq(r, r) == 0, "(-1)^0.5 still NaN — only an INFINITE exponent gives 1");
+
+    # -- Over-reach guards: the integer path is untouched, and it is where the
+    # odd-integer sign rules for pow(-Inf, y) live, signed zero included. --
+    assert_eq(Evaluator_eval(e, "(0-(1e200*1e200))^3"), ninf, "(-Inf)^3 = -Inf, odd");
+    assert_eq(Evaluator_eval(e, "(0-(1e200*1e200))^4"), inf, "(-Inf)^4 = +Inf, even");
+    assert_eq(Evaluator_eval(e, "(0-(1e200*1e200))^(0-3)"), nzero, "(-Inf)^-3 = -0, odd");
+    assert_eq(Evaluator_eval(e, "(0-(1e200*1e200))^(0-4)"), 0, "(-Inf)^-4 = +0, even");
+    assert_eq(Evaluator_eval(e, "(1e200*1e200)^(0-3)"), 0, "(+Inf)^-3 = +0");
+    ev_int("2^0.5*2^0.5", 2, "finite non-integer path still computes 2^0.5");
+    return 0;
+}
+
 fn test_zero_mantissa_and_range() {
     var e = Evaluator_new();
     # 2.3.4 regression: 0.0 * 10^(>=309) = 0.0 * +Inf = NaN, silently.
@@ -838,6 +1002,8 @@ fn main() {
     test_implicit_mul_cap();
     test_evaluator_round_ties();
     test_pow_nonfinite_and_parity();
+    test_pow_negative_base_fractional_exponent();
+    test_pow_c99_nonfinite_table();
     test_zero_mantissa_and_range();
     test_top_of_range_literals();
     test_two_product_exact();

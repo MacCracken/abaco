@@ -25,7 +25,7 @@ math engine you can wrap any way you like, this is it.
 
 ## Quick start
 
-Requires the Cyrius toolchain pinned in `cyrius.cyml` (currently `6.5.27`).
+Requires the Cyrius toolchain pinned in `cyrius.cyml` (currently `6.5.35`).
 
 ```bash
 # Vendor the pinned stdlib into lib/ (a gitignored build artifact)
@@ -61,7 +61,7 @@ stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged",
 
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.4.2"
+tag = "2.4.3"
 modules = ["dist/abaco.cyr"]   # self-contained library bundle
 ```
 

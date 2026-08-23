@@ -305,6 +305,77 @@ Maintenance patch. No abaco behaviour change, no API change:
       suite 657 asserts; fuzz 4/4 at 20,000 iters; fmt/lint/vet clean; DCE build
       403,968 B; `dist/abaco.cyr` 137,343 B (**not** byte-identical to 2.4.1)
 
+### 2.4.3 — Cyrius 6.5.35; two silent wrong answers in `eval_pow` ✅ (2026-08-22)
+
+- [x] Cyrius pin 6.5.27 → 6.5.35; stdlib re-vendored (`bayan` +10,046 / 1.4.1 →
+      1.5.2, `ganita` +56, `fmt` +24, `syscalls_windows` +34; the other 28 of 32
+      byte-identical, no re-batch, zero symbol removals)
+- [x] **`(-2)^0.5` returned `+√2` with `eval_err = NONE`** — since 2.2.x, with a
+      comment on the very line naming the problem and pointing at a "sign
+      correction below" that was never written. Now a quiet NaN per IEEE
+      754-2019 §9.2 / C99 F.10.4.4, agreeing with `sqrt(-1)`
+- [x] **Every non-finite `pow` row returned NaN** — `f64_to` saturates for ±∞ and
+      NaN alike, so none of them survived the `is_int` round-trip and all fell
+      through to `exp2`. The C99 special-value table is now answered explicitly
+- [x] **`mod_pow`'s SIGFPE is gone** via bayan 1.5.2's `bayan_u64_mulmod` guards.
+      `mod_pow(x, y, 0)` and a base ≥ 2⁶³ killed the process at 2.4.2, with zero
+      coverage anywhere. Consumers need their own pin ≥ 6.5.35 — the fix does not
+      travel with abaco's tag
+- [x] Both `pow` fixes cited in `docs/sources.md`; 67 new `test_eval` asserts and
+      5 new `test_ntheory` asserts, all discrimination-proven (reverting the
+      negative-base guard fails exactly 9, neutralising the non-finite table
+      fails exactly 17, and the `mod_pow` file dies with SIGFPE against the old
+      stdlib)
+- [x] ⛔ **Benchmarks: Miller–Rabin 1.53× slower** (100k `is_prime` calls
+      264.6 → 405.8 ms); the other 74 flat. The measured price of the SIGFPE fix,
+      accepted rather than worked around
+- [x] `dist/*.deps` gitignored — distlib's new sidecar can never match the
+      consumer path, and its 12-leaf list prunes `net`
+- [x] Suite **729 asserts**; fuzz 4/4 at 20,000 iters; fmt/lint/vet clean; zero
+      warnings across all 15 build targets; DCE build 619,480 B;
+      `dist/abaco.cyr` 141,990 B / 3,759 lines (**not** byte-identical to 2.4.2)
+
+#### Opened by the 2.4.3 audit — not actionable in this release
+
+- [ ] **`0^(-1)` returns `+0` with `eval_err = NONE`** while `1/0` raises
+      `ABACO_ERR_DIV_ZERO`. `eval_pow` tests the base for zero before any sign
+      test on the exponent. IEEE/C and ganita both say `+∞`, and abaco already
+      emits `+∞` for `2^10000`. `0^(-0.5)` needs it too
+- [ ] **An exponent ≥ 2⁶³ misses the `is_int` round-trip** though every such f64
+      is an even integer, so `(-2)^1e300` answers NaN where C99 wants `+∞`.
+      Widening the round-trip is the integer path's business
+- [ ] **CI's test gate cannot fail on an assertion failure.** All 7 `.tcyr` call
+      `assert_summary();` then `return 0;`, and `ci.yml` gates on the exit code
+      while grepping only for `passed`. A red suite would ship green. Fix:
+      `return assert_summary();` in all seven. Compile errors, SIGSEGVs and
+      timeouts do still gate
+- [ ] **`release.yml`'s empty-body guard cannot see an empty CHANGELOG stub** —
+      three bare `###` headings are 36 non-empty bytes, so `[ -s ]` passes
+- [ ] **The MED-4 guard comment in `src/ai.cyr` is factually wrong** —
+      `bayan_json_parse` is a flat single-loop scanner and always has been; the
+      recursive parser is `_jp_parse_value_a`, which abaco never calls and which
+      has had a depth cap since before 6.5.27. Keep the guard, fix the rationale
+- [ ] **`Value_to_latex` truncates every non-integral float** and renders
+      `inf`/`nan` as `i64_MIN`; `-0.25` loses its sign. Zero tests, zero call
+      sites, but exported in the bundle
+- [ ] **Nine of the eleven ganita transcendentals abaco exposes have no
+      assertions** (`sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `asin`,
+      `acos`, `atan2`) — all verified correct today, but the next fold has no net
+- [ ] **`SECURITY.md`'s supported-versions table still names 2.3.x**, stale since
+      2.4.0; `scripts/version-bump.sh` only warns on a *major* bump though the
+      table is minor-granularity, and self-heals the tag in `README.md` only, not
+      in `docs/guides/consuming-abaco.md`
+- [ ] **Three files are `cyrius fmt --check` DIRTY at the baseline** —
+      `tests/test_ai.tcyr` (2 hunks), `tests/test_eval.tcyr` (6),
+      `fuzz/fuzz_ai.fcyr` (1). 6.5.x made continuation indent 2 spaces per open
+      paren and these use 4. Pre-existing, and **CI does not gate it** — the
+      format step loops over `src/*.cyr` only, all of which are clean. Left
+      alone at 2.4.3 rather than bundling a whole-file reformat; worth a pass of
+      its own, possibly widening the CI loop to `tests/`, `benches/` and `fuzz/`
+      at the same time
+- [ ] **File `bayan_u64_mulmod_reduced` upstream** — a fast path for callers that
+      can guarantee reduced operands, which would recover the 1.53×
+
 ### Still open
 
 > The two residuals the 2.3.5 fix audit left open were closed in 2.4.0.

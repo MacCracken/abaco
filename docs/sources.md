@@ -124,6 +124,58 @@ source. No magic numbers.
     ~493 ulps in a function whose purpose is exactness), and `exp2(log2(+Inf))`
     is NaN, so `(±Inf)^n` silently stopped being ±Inf. See
     `docs/audit/2026-08-13-fix-audit.md` R-1 / P-1.
+- **`pow` domain — negative base, non-integer exponent.** `eval_pow`'s
+  non-integer branch evaluates `exp2(exp · log2(|base|))`; `log2` requires a
+  positive argument, so the magnitude is taken. `x^y` for real `x < 0` and
+  non-integer `y` has **no real value** — the principal complex root
+  `|x|^y · e^(iπy)` is off the real line for every non-integer `y` — so
+  returning the magnitude's root is a wrong answer, not an approximate one.
+  The branch returns a quiet NaN.
+  - IEEE 754-2019, *Standard for Floating-Point Arithmetic*, §9.2 (`pow`:
+    qNaN for a negative base with a finite non-integer exponent).
+  - ISO/IEC 9899:1999 (C99), Annex F.10.4.4 — the same domain rule. Its
+    non-finite rows are a separate matter and are cited below.
+  - Chosen over an `ABACO_ERR_MATH` evaluator error for internal consistency:
+    `sqrt(-1)` already yields NaN, and `pow(x, 0.5)` is the same operation.
+    `ABACO_ERR_MATH` in `src/eval.cyr` guards integer domains only.
+  - Through 2.4.2 the guard was missing: `(-2)^0.5` returned `+√2` and
+    `(-8)^(1/3)` returned `+2`, both with `eval_err = NONE`.
+- **`pow` non-finite operands — the C99 special-value table.** A non-finite
+  operand is *not* a domain error: `pow` is defined on the extended reals by
+  continuity, and the answers are finite infinities and zeros, not NaN. The
+  non-integer branch answers the table explicitly before it reaches
+  `exp2(exp · log2(|base|))`, because that expression cannot produce them —
+  `f64_exp2` returns NaN for every non-finite argument in this toolchain, and
+  `log2(+∞) = +∞` feeds it one. Nor can these operands reach the exact integer
+  path, where square-and-multiply would propagate ∞ and 0 correctly: `f64_to`
+  saturates to `i64_MIN` for `+∞`, `-∞` and NaN alike, so the
+  `f64_from(f64_to(y))` round-trip that classifies the exponent never succeeds
+  for one.
+  - ISO/IEC 9899:1999 (C99), Annex F.10.4.4 — the normative table.
+    `pow(x, ±∞)` splits on |x| against 1: `+∞` when the exponent's sign agrees
+    with |x| > 1, `+0` when it does not. `pow(±∞, y)` splits on the sign of y.
+    `pow(-1, ±∞) = 1` and `pow(+1, y) = 1` for every y, NaN included, are
+    listed ahead of the NaN-propagation row, as is `pow(x, ±0) = 1`.
+  - IEEE 754-2019 §9.2 — `pow` is one of the recommended operations; the same
+    special values, with `pow(-1, ±∞) = 1` justified as a limit of magnitude:
+    the modulus is 1 for every exponent along the way, so it converges even
+    though the sign does not.
+  - Why the `pow(-∞, y)` odd-integer rows (`-∞` for odd y > 0, `-0` for odd
+    y < 0) need no code in that branch: an odd integer has magnitude below
+    2⁵³, since every f64 at or above 2⁵³ has an ulp of 2 or more and is
+    therefore even. 2⁵³ is far inside i64, so an odd-integer exponent always
+    survives the round-trip and takes the integer path, where the sign follows
+    from the multiplication chain. What reaches the non-integer branch is a
+    non-integer or an even integer too large to round-trip — hence
+    `(-∞)^1e300 = +∞`, on the even row.
+  - Goldberg, D. (1991). "What Every Computer Scientist Should Know About
+    Floating-Point Arithmetic," *ACM Computing Surveys* 23(1), §"Infinity" —
+    on why closing these cases with infinities rather than NaN is what makes
+    ∞ arithmetic useful rather than merely defined.
+  - Through 2.4.2 all six of `(-∞)^±2.5`, `(-2)^±∞` and `(-0.5)^±∞` returned
+    NaN with `eval_err = NONE`, as did `1^±∞` and `1^NaN`. Same underlying
+    `f64_exp2` fact as the 2.3.4 `(±∞)^n` regression above, which binary
+    exponentiation closed for integer exponents only.
 - **Decimal scaling — error-compensated (double-double).** The scale factor
   10^k is carried as a two-term (hi, lo) pair giving ~106 bits of significand,
   built with Dekker's error-compensated product; the 18-digit mantissa is split

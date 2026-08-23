@@ -6,6 +6,17 @@
 # never commit it. (dist/abaco.cyr IS committed — it's the consumer bundle.)
 /lib/
 
+# distlib sidecar — `cyrius distlib abaco` emits dist/abaco-abaco.deps beside the
+# bundle. It is regenerated on every distlib run, and its name is derived from
+# the PROFILE (abaco-abaco), not from the consumer path abaco renames to
+# (dist/abaco.cyr) — so `cyrius deps` on a consumer looks for dist/abaco.deps and
+# never finds it. Committing it under either name would ship a list consumers
+# cannot use: it prunes `net`, which lib/http.cyr needs for tcp_socket, so a
+# consumer trusting it and calling CurrencyCache_fetch fails to link.
+# README.md's hand-written stdlib list is the contract. (dist/abaco.cyr IS
+# committed — it's the consumer bundle.)
+/dist/*.deps
+
 # Editor / IDE
 *.swp
 *.swo

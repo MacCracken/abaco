@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - The Cyrius toolchain installed at `$CYRIUS_HOME` (default `~/.cyrius`),
-  at the version pinned in `cyrius.cyml` (`[package].cyrius`, currently `6.5.27`)
+  at the version pinned in `cyrius.cyml` (`[package].cyrius`, currently `6.5.35`)
 - `~/.cyrius/bin/cyrius` on `PATH`
 - The vendored stdlib in `lib/` (gitignored) is populated via `cyrius deps`
 
