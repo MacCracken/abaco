@@ -12,7 +12,7 @@ In your project's `cyrius.cyml`:
 ```toml
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.4.4"                 # pin to a released tag, never a branch
+tag = "2.4.5"                 # pin to a released tag, never a branch
 modules = ["dist/abaco.cyr"]  # the bundle is the only file you name
 ```
 

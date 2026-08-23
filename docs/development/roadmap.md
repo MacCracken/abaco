@@ -417,6 +417,24 @@ Maintenance patch. No abaco behaviour change, no API change:
       as an 8-bit exit code goes silent-green again at exactly 256 failures.
       Also bounded the TEXT branch's previously unbounded `memcpy`
 
+### 2.4.5 — repair the CI break 2.4.4 shipped ✅ (2026-08-22)
+
+- [x] ⛔ **2.4.4's security-scan hardening failed on every clean run.** Splitting
+      `grep | awk` into `hits=$(grep ...); rc=$?` made the assignment inherit
+      grep's rc=1 "no match" — the PASSING case — which `bash -e` treats as
+      fatal, so the step exited at the first pattern with no output. Fixed with
+      `rc=0; hits=$(grep ...) || rc=$?`
+- [x] **Same hazard on the Test step** (pre-existing, fires on the failure
+      path): a red suite killed the step before `rc`, the per-suite `FAIL:`
+      line, or 2.4.4's new failure-count gate could run
+- [x] **Every runnable `ci.yml` step now verified under `/usr/bin/bash -e`**
+      against the real tree — all 12 pass. 2.4.4 tested the scan's logic but
+      never the step under the shell GitHub actually uses, which was the whole
+      defect
+- [x] `/bench-results.txt` gitignored (CI artifact written into the repo root)
+- [x] No source change; suite **813 asserts**, fuzz 4/4, fmt/lint/vet clean;
+      `dist/abaco.cyr` byte-identical to 2.4.4 bar the version header
+
 ### Still open
 
 > The two residuals the 2.3.5 fix audit left open were closed in 2.4.0.

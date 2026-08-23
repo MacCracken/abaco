@@ -5,6 +5,79 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.5] — 2026-08-22
+
+**2.4.4 broke CI on the clean path.** The security-scan hardening shipped in
+2.4.4 made every run of that step exit 1 with no output — including runs where
+nothing was wrong. One line, and the irony is exact: the release whose theme was
+"gates that were checking nothing" replaced an inert gate with a broken one.
+Fixed here, along with the same latent hazard on the Test step, which is
+pre-existing and would have swallowed 2.4.4's new failure-count reporting the
+first time a suite went red.
+
+CI-only. No source change: `dist/abaco.cyr` is byte-identical to 2.4.4 apart
+from its version header. Suite **813 asserts**; fuzz 4/4 at 20,000 iterations;
+fmt/lint/vet clean; zero warnings across all 15 build targets.
+
+### Fixed — ⛔ the 2.4.4 security scan failed on every clean run
+
+2.4.4 split the scan's `grep | awk` pipeline in two so it could inspect grep's
+exit status and reject a malformed pattern:
+
+```bash
+hits=$(grep -rnE "$pat" src/ 2>/dev/null); rc=$?
+```
+
+**`grep` exits 1 when it finds nothing — which is the passing case.** GitHub
+runs every step under `bash -e`, so the assignment took that failing status as
+its own and the shell exited *at the first `scan` call*, before `rc=$?` was ever
+evaluated. The step produced no `FAIL:` line, no `::error::`, not even its
+closing `security scan complete` — just `Process completed with exit code 1`.
+The previous form was accidentally safe: the pipeline ended in `awk`, which
+exits 0 whether or not grep matched.
+
+Fixed by putting the assignment in a `||` list, which `bash -e` exempts (it
+only exits on the *last* command of such a list), so "no match" is observed
+rather than fatal while a genuine rc=2 still reports:
+
+```bash
+rc=0
+hits=$(grep -rnE "$pat" src/ 2>/dev/null) || rc=$?
+```
+
+⛔ **This is a regression I introduced in 2.4.4 and did not catch**, because the
+2.4.4 verification ran the scan's *logic* — patterns against fixtures, in an
+ordinary shell — rather than the *step* under the interpreter GitHub actually
+uses. `bash -e` is the whole defect. Every runnable step in `ci.yml` is now
+verified by extracting its `run:` block from the YAML and executing it under
+`/usr/bin/bash -e` against the real tree; all 12 pass. The scan itself is
+re-verified end to end: clean against `src/`, exit 1 with `src/main.cyr:12` when
+a `syscall(59, 0)` is planted, and `::error::` on a deliberately malformed
+pattern.
+
+### Fixed — the same hazard on the Test step, on the failure path
+
+`out=$(cyrius test "$t" 2>&1); rc=$?` has the same shape and pre-dates 2.4.4,
+but fires in the mirror case: `cyrius test` exits non-zero for a **red** suite,
+so under `bash -e` the step died at the assignment — before `rc` was captured,
+before the per-suite `FAIL:` line printed, and before the failure-count gate
+2.4.4 added ran at all. The job still went red, so nothing shipped broken, but
+it went red *silently*, without naming the suite or the count — which is most of
+what that gate exists to tell you.
+
+Now uses the same `|| rc=$?` form. Verified on both paths: all-green exits 0 and
+reports `asserts passed: 813`; one injected failing assertion exits 1 and prints
+**both** gates firing — `FAIL: test_simd (exit 1)` and
+`FAIL: test_simd (1 assertions failed)`.
+
+### Changed
+
+- **`/bench-results.txt` is gitignored.** The `Bench (non-fatal)` step tees its
+  output there in the repo root — ephemeral on a runner, but it dirties a local
+  tree whenever that step is run by hand, and would ride along on a
+  `git add -A`. Same class as the `dist/*.deps` sidecar ignored at 2.4.3. The
+  tracked benchmark trail remains `bench-history.csv`.
+
 ## [2.4.4] — 2026-08-22
 
 **The gate that could not fail, and the nine findings behind it.** 2.4.3's audit

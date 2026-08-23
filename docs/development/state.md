@@ -4,7 +4,9 @@
 > [`../../CLAUDE.md`](../../CLAUDE.md); forward plan in [`roadmap.md`](roadmap.md);
 > per-tag history in [`../../CHANGELOG.md`](../../CHANGELOG.md).
 
-**Last updated:** 2026-08-22 (2.4.4 — nine of the ten follow-ups 2.4.3's audit opened, closed. Headline: **abaco's CI could not fail on a failing assertion** — every `.tcyr` discarded `assert_summary()`'s return value, so a red suite exited 0 and shipped green; proven on the 2.4.3 tree and fixed twice over. Plus two more `eval_pow` silent wrong answers (`0^(0-1)` = `+0`, and any exponent >= 2^63 = NaN), a `Value_to_latex` that printed the integer part of every float, a security comment whose stated mechanism does not exist, and three release gates that were checking nothing. Suite 729 -> **813**. `dist/abaco.cyr` **not** byte-identical to 2.4.3)
+**Last updated:** 2026-08-22 (2.4.5 — CI-only. **2.4.4's security-scan hardening broke CI on the clean path**: `grep` exits 1 when it finds nothing, and splitting the `grep | awk` pipeline made the assignment inherit that status, which `bash -e` treats as fatal — so the step died at the first pattern with no output at all. Fixed with a `|| rc=$?` list, along with the same latent hazard on the Test step, which fires on the *failure* path and would have swallowed 2.4.4's new failure-count reporting. Every runnable `ci.yml` step is now verified under `/usr/bin/bash -e` against the real tree; all 12 pass. No source change — `dist/abaco.cyr` byte-identical to 2.4.4 bar the version header)
+
+**Previous:** 2026-08-22 (2.4.4 — nine of the ten follow-ups 2.4.3's audit opened, closed. Headline: **abaco's CI could not fail on a failing assertion** — every `.tcyr` discarded `assert_summary()`'s return value, so a red suite exited 0 and shipped green; proven on the 2.4.3 tree and fixed twice over. Plus two more `eval_pow` silent wrong answers (`0^(0-1)` = `+0`, and any exponent >= 2^63 = NaN), a `Value_to_latex` that printed the integer part of every float, a security comment whose stated mechanism does not exist, and three release gates that were checking nothing. Suite 729 -> **813**. `dist/abaco.cyr` **not** byte-identical to 2.4.3)
 
 **Previous:** 2026-08-22 (2.4.3 — Cyrius 6.5.35. A pin bump that surfaced two silent wrong answers in `eval_pow`: `(-2)^0.5` returned `+√2` and every non-finite `pow` row returned NaN, all with `eval_err = NONE`. Both fixed per IEEE 754-2019 §9.2 / C99 F.10.4.4, cited and pinned by 67 new asserts. A SIGFPE also leaves `mod_pow`'s public surface via bayan 1.5.2 — but that fix rides the *consumer's* pin, not abaco's tag. ⛔ Miller–Rabin primality is **1.53× slower**, the measured price of that same SIGFPE fix. `dist/abaco.cyr` is **not** byte-identical to 2.4.2)
 
@@ -14,7 +16,7 @@
 
 | What | Value |
 |------|-------|
-| abaco | **2.4.4** |
+| abaco | **2.4.5** |
 | Cyrius toolchain pin | **6.5.35** |
 | License | GPL-3.0-only |
 
@@ -338,7 +340,7 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
     executable code holds zero bare decimal float literals (every f64 constant is
     a hex bit pattern — the habit the 2.3.2 dB fix established).
 
-- **2.4.4** (this release) closes **nine of the ten** follow-ups 2.4.3's audit
+- **2.4.4** closes **nine of the ten** follow-ups 2.4.3's audit
   opened. A deliberate cleanup batch rather than the usual one-change-at-a-time
   release; every fix is discrimination-proven with a named, counted revert.
   - ⛔ **CI could not fail on a failing assertion.** `assert_summary()` RETURNS
@@ -422,6 +424,32 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
   - ⚠ **Not closed:** filing `bayan_u64_mulmod_reduced` upstream, which would
     recover 2.4.3's 1.53x Miller-Rabin regression. Outward-facing; left to the
     maintainer.
+
+- **2.4.5** (this release) is **CI-only**, and exists because 2.4.4 broke CI.
+  - ⛔ **The 2.4.4 security-scan hardening failed on every clean run.** To
+    inspect grep's exit status it split the step's `grep | awk` pipeline into
+    `hits=$(grep ...); rc=$?` — but grep exits **1 when it finds nothing**,
+    which is the passing case, and GitHub runs every step under `bash -e`, so
+    the assignment took that failing status as its own and the shell exited at
+    the first pattern. No `FAIL:` line, no `::error::`, not even the closing
+    `security scan complete` — just `Process completed with exit code 1`. The
+    old form was accidentally safe: its pipeline ended in `awk`, which exits 0
+    regardless. Now `rc=0; hits=$(grep ...) || rc=$?`, which `bash -e` exempts.
+  - **The same hazard on the Test step**, pre-dating 2.4.4 and firing on the
+    mirror case: `cyrius test` exits non-zero for a RED suite, so the step died
+    at the assignment before `rc` was captured, before the per-suite `FAIL:`
+    line, and before the failure-count gate 2.4.4 added could run. The job still
+    went red, but silently. Both paths now verified: green exits 0, and one
+    injected failure exits 1 printing BOTH gates.
+  - ⭐ **The lesson, and the process change.** 2.4.4 verified the scan's *logic*
+    — patterns against fixtures, in an ordinary shell — and never ran the
+    *step* under the interpreter GitHub uses. `bash -e` was the entire defect.
+    Every runnable step's `run:` block is now extracted from the YAML and
+    executed under `/usr/bin/bash -e` against the real tree; all 12 pass. That
+    is the check that would have caught this, and it is cheap.
+  - `/bench-results.txt` gitignored — the `Bench (non-fatal)` step tees there in
+    the repo root, dirtying a local tree and liable to ride a `git add -A`. Same
+    class as the `dist/*.deps` sidecar ignored at 2.4.3.
 
 - **2.3.x still open** (external — needs consumer repos, not actionable from
   abaco alone): wire the first real consumers (Abacus, dhvani) to

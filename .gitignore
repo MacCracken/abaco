@@ -17,6 +17,13 @@
 # committed — it's the consumer bundle.)
 /dist/*.deps
 
+# CI bench artifact — the "Bench (non-fatal)" step tees its output to
+# bench-results.txt in the repo root. Ephemeral on a runner, but it dirties a
+# local tree whenever the step is run by hand and would ride along on a
+# `git add -A`. The tracked benchmark trail is bench-history.csv, written by
+# scripts/bench-history.sh.
+/bench-results.txt
+
 # Editor / IDE
 *.swp
 *.swo

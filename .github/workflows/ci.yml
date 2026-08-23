@@ -95,7 +95,14 @@ jobs:
             [ -f "$t" ] || continue
             name=$(basename "$t" .tcyr)
             echo "::group::$name"
-            out=$(cyrius test "$t" 2>&1); rc=$?
+            # Same `bash -e` hazard as the security scan below, but on the
+            # FAILURE path: `cyrius test` exits non-zero for a red suite, which
+            # under `-e` would kill this step at the assignment — before rc is
+            # captured, before the per-suite FAIL line prints, and before the
+            # failure-count gate below runs. The job would still go red, but
+            # silently and without saying which suite or how many.
+            rc=0
+            out=$(cyrius test "$t" 2>&1) || rc=$?
             echo "$out"
             echo "::endgroup::"
             if [ $rc -ne 0 ]; then echo "FAIL: $name (exit $rc)"; fail=1; fi
@@ -169,7 +176,16 @@ jobs:
             local label="$1"; shift
             local pat="$1"; shift
             local hits rc
-            hits=$(grep -rnE "$pat" src/ 2>/dev/null); rc=$?
+            # `|| rc=$?`, NOT `; rc=$?`. GitHub runs every step under
+            # `bash -e`, and grep exits 1 when it finds NOTHING — the clean
+            # case. A bare `hits=$(grep ...)` therefore takes grep's failing
+            # status as the assignment's status and `-e` kills the step before
+            # `rc=$?` ever runs, with no output at all. Putting the assignment
+            # in a `||` list exempts it from `-e` (bash only exits on the LAST
+            # command of such a list), so rc=1 "no match" is observed rather
+            # than fatal, while a genuine rc=2 still reports below.
+            rc=0
+            hits=$(grep -rnE "$pat" src/ 2>/dev/null) || rc=$?
             if [ $rc -gt 1 ]; then
               echo "::error::security scan pattern is invalid (grep rc=$rc): $label -- $pat"
               FAIL=1
