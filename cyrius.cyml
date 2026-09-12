@@ -5,7 +5,7 @@ description = "Math engine — expression evaluation, unit conversion, DSP math"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/abaco"
 language = "cyrius"
-cyrius = "6.5.35"
+cyrius = "6.6.2"
 
 [build]
 entry = "src/main.cyr"
@@ -25,7 +25,7 @@ output = "build/abaco"
 # It writes dist/<pkg>-<profile>.cyr (= dist/abaco-abaco.cyr, no override),
 # so the regen step renames to the consumer path:
 #   cyrius distlib abaco && mv dist/abaco-abaco.cyr dist/abaco.cyr
-[lib.abaco]
+[lib]
 modules = [
     "src/core.cyr",
     "src/ntheory.cyr",

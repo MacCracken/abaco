@@ -1954,3 +1954,13 @@ This is a breaking change for anyone who was depending on `abaco` via
 [0.22.4]: https://github.com/MacCracken/abaco/compare/0.22.3...0.22.4
 [0.22.3]: https://github.com/MacCracken/abaco/compare/0.1.0...0.22.3
 [0.1.0]: https://github.com/MacCracken/abaco/releases/tag/0.1.0
+
+## [Unreleased]
+
+## [2.4.6] - 2026-09-11
+
+### Changed
+
+- **Toolchain `6.5.35` → `6.6.2`.** Migrated to the `Result` value form:
+  4 first-party file(s) changed. Every surface re-verified — build, tests, and any
+  bench/fuzz/distlib target the repo ships.

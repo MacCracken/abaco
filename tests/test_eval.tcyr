@@ -90,6 +90,12 @@ fn test_ntheory_functions() {
     ev_int("isprime(17)", 1, "isprime(17)");
     ev_int("isprime(15)", 0, "isprime(15)");
     ev_int("nextprime(100)", 101, "nextprime(100)");
+    # prevprime is the evaluator's only Result-consuming builtin (prev_prime
+    # returns the 6.6.x (tag, payload) pair). It had NO eval-level coverage,
+    # so a mis-bound pair here would have compiled and returned silent garbage.
+    ev_int("prevprime(3)", 2, "prevprime(3)");
+    ev_int("prevprime(100)", 97, "prevprime(100)");
+    ev_int("prevprime(128)", 127, "prevprime(128)");
     ev_int("totient(12)", 4, "totient(12)");
     ev_int("fibonacci(10)", 55, "fib(10)");
     ev_int("fib(10)", 55, "fib alias");
@@ -519,6 +525,24 @@ fn test_totient_cap() {
     assert_eq(f64_to(Evaluator_eval(e, "totient(1000000)")), 400000, "totient(1e6)");
     Evaluator_eval(e, "totient(999999999999999)");
     assert_eq(eval_err(e), ABACO_ERR_MATH, "totient over cap rejected");
+    return 0;
+}
+
+# prevprime's Err arm: prev_prime(n) returns Err(0) for n <= 2, and the
+# evaluator must surface that as ABACO_ERR_MATH rather than a value. Under the
+# 6.6.x pair form an Err payload of 0 is indistinguishable from a legitimate
+# result unless the TAG is the thing consulted — this pins that it is.
+fn test_prevprime_err_arm() {
+    var e = Evaluator_new();
+    Evaluator_eval(e, "prevprime(2)");
+    assert_eq(eval_err(e), ABACO_ERR_MATH, "prevprime(2) rejected");
+    var e2 = Evaluator_new();
+    Evaluator_eval(e2, "prevprime(1)");
+    assert_eq(eval_err(e2), ABACO_ERR_MATH, "prevprime(1) rejected");
+    # And the Ok arm must NOT set the error flag.
+    var e3 = Evaluator_new();
+    assert_eq(f64_to(Evaluator_eval(e3, "prevprime(10)")), 7, "prevprime(10) = 7");
+    assert_eq(eval_err(e3), ABACO_ERR_NONE, "prevprime(10) sets no error");
     return 0;
 }
 
@@ -1169,6 +1193,7 @@ fn main() {
     test_pow_exponent_cap();
     test_unary_and_power_depth();
     test_totient_cap();
+    test_prevprime_err_arm();
     test_long_literals();
     test_implicit_mul_cap();
     test_evaluator_round_ties();
