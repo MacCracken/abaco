@@ -56,11 +56,10 @@ jobs:
           echo "abaco: $(wc -c < build/abaco) bytes"
 
       - name: Regenerate bundle
-        # 6.2.x distlib reads the [lib.abaco] profile and writes
-        # dist/abaco-abaco.cyr; rename to the consumer path dist/abaco.cyr.
+        # [lib] (not [lib.abaco]) since 2.4.6, so distlib writes the consumer path
+        # dist/abaco.cyr directly — no profile argument, no rename.
         run: |
-          cyrius distlib abaco
-          mv dist/abaco-abaco.cyr dist/abaco.cyr
+          cyrius distlib
 
       - name: Test
         run: |
