@@ -451,3 +451,46 @@ Maintenance patch. No abaco behaviour change, no API change:
 - [ ] DSP expansion as consumer needs surface (filters, additional windows)
 - [ ] `lib/tls.cyr` integration for the currency cache once the stdlib TLS API
       stabilizes (replaces the plaintext `http_get` path)
+
+## Moving the cyrius pin to 6.6.6
+
+Current pin: `cyrius = "6.6.2"` (`cyrius.cyml`). Nothing needs to change first.
+
+Two of 6.6.6's new compile errors are the ones worth checking here, because abaco is the only
+repo in this group that uses both SIMD and multi-return — and neither fires:
+
+- **SIMD.** All 21 intrinsic uses in `src/dsp.cyr` (lines 197-254: `f64v_add`, `f64v_sub`,
+  `f64v_mul`, `f64v_div`, `f64v_sqrt`, `f64v_abs`, `f64v_fmadd`) are the **buffer form**,
+  `f64v_op(dst, a, b, n)`. No function returns a SIMD vector and there is no vector-typed
+  parameter or `var` declaration, so "a SIMD-returning fn returning anything else" has no
+  sites.
+- **Pair returns.** `src/eval.cyr` has six multi-return functions — `_two_product` (`:259`),
+  `_dd_mul_d` (`:273`), `_dd_renorm` (`:283`), `_dd_pow10` (`:294`), `_dd_split_mant` (`:340`)
+  and `parse_number` (`:390`) — declared `: (f64, f64)` or `: (f64, f64, i64)`. 6.6.6 refuses
+  a pair-returning fn that returns anything but a same-shaped pair, so this is exactly the
+  class the gate targets. Every one of them returns a same-shaped tuple; the call sites all
+  destructure (`var p, e = _two_product(hi, d)`) with matching arity. Clean.
+
+Everything else checked and empty:
+
+- **No Windows exposure** — no `CYRIUS_TARGET_*` in `src/`, CI is `ubuntu-latest`,
+  `release.yml` declares no `windows-*` job — and no `O_APPEND` / `O_TRUNC` outside the
+  vendored `lib/`. The single write is `file_write_all` at `src/ai.cyr:623`. Item 1 is a
+  non-event here.
+- No `async fn`, no `operator` fn, no struct- or vector-typed parameter or `var` declaration.
+  The six structs (`Evaluator`, `UnitRegistry`, `Value`, `Unit`, `ConversionResult`,
+  `Currency`) are accessor-style over heap offsets and are never passed or assigned by value,
+  so item 5's by-value-struct-param deep copy is a no-op.
+- No top-level bare `{` blocks (item 4), no duplicated global declarations (item 6), no
+  `regression_*` call sites (item 8), and no own `vec_*` function colliding with the 14 names
+  `lib/vec.cyr` exports, so the new transitive `lib/assert.cyr` → `lib/vec.cyr` include is
+  inert (item 9).
+- Arity and `: cstring` scans over the repo's own sources: clean.
+
+Note this repo has both a top-level `ROADMAP.md` and this file; this note is in
+`docs/development/roadmap.md`.
+
+After bumping, verify: the full `.tcyr` suite per-file, with particular attention to the
+double-double evaluator in `src/eval.cyr` — a numeric comparison of its results against a
+6.6.2-built binary is the cheapest way to confirm the pair-return paths still carry both
+halves.
