@@ -75,6 +75,8 @@ var ABACO_TOTIENT_MAX = 1000000000000;
 # and `0 - 9223372036854775808` would not parse. eval_pow needs it to recognise
 # the one magnitude that cannot be negated without overflowing.
 var ABACO_I64_MIN = (0 - 9223372036854775807) - 1;
+# i64 maximum — the ceiling the evaluator's lcm checks its product against.
+var ABACO_I64_MAX = 9223372036854775807;
 
 # Token array: each token is 16 bytes (type + value)
 fn tok_alloc() { return alloc(ABACO_MAX_TOKENS * 16); }
@@ -1378,6 +1380,16 @@ fn call_function(e, name, args, nargs) {
                 eval_set_err(e, ABACO_ERR_MATH);
                 return f64_from(0);
             }
+            # The stdlib lcm is (a / gcd) * b with no overflow check, so a result
+            # past i64 wrapped silently: lcm(2^62, 3) answered 2^62 through
+            # 2.4.7. For positive a and b the product fits exactly when
+            # a / g <= i64_MAX / b in integer division, so test that first.
+            if (la != 0 && lb != 0) {
+                if (la / gcd_int(la, lb) > ABACO_I64_MAX / lb) {
+                    eval_set_err(e, ABACO_ERR_MATH);
+                    return f64_from(0);
+                }
+            }
             return f64_from(lcm(la, lb));
         }
         var is_binom = 0;
@@ -1390,7 +1402,20 @@ fn call_function(e, name, args, nargs) {
                 eval_set_err(e, ABACO_ERR_MATH);
                 return f64_from(0);
             }
-            return f64_from(binomial(bn, bk));
+            # ganita's binomial answers -1 for a negative n or k and for a result
+            # it cannot hold, and through 2.4.7 that -1 came back as the answer:
+            # binomial(-1, 2) = -1 with no error. Every valid C(n, k) is >= 0
+            # (k > n is 0), so a negative result is refused.
+            # ⚠ ganita multiplies before it divides — its last step holds
+            # C(n, k) * k — so it also refuses results above i64_MAX / k that
+            # would fit: C(62, 31), ~4.65e17, is the first central case. That
+            # limit is ganita's; an error is the honest answer until it lifts.
+            var bv = binomial(bn, bk);
+            if (bv < 0) {
+                eval_set_err(e, ABACO_ERR_MATH);
+                return f64_from(0);
+            }
+            return f64_from(bv);
         }
         eval_set_err(e, ABACO_ERR_UNKNOWN_FN);
         return f64_from(0);

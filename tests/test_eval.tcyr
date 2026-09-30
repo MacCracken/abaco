@@ -1280,6 +1280,36 @@ fn test_gcd_lcm_binomial_domain() {
     return 0;
 }
 
+# ganita's binomial answers -1 for a negative argument and for any result it
+# cannot hold, and the evaluator passed that -1 through as the answer; the
+# stdlib lcm multiplies with no overflow check, so a result past i64 wrapped.
+# Both answered with eval_err = NONE through 2.4.7 (CHANGELOG 2.4.8).
+fn test_binomial_lcm_overflow() {
+    ev_math_err("binomial(0-1, 2)", "binomial(-1, 2) is a math error (was -1)");
+    ev_math_err("binomial(2, 0-1)", "binomial(2, -1) is a math error (was -1)");
+    ev_math_err("binomial(100, 50)", "binomial(100, 50), ~1e29, is a math error (was -1)");
+    ev_math_err("choose(67, 33)", "choose(67, 33), ~1.4e19, is a math error (was -1)");
+    # ⚠ A KNOWN LIMIT, pinned so it cannot change unnoticed: C(62, 31), ~4.65e17,
+    # fits in i64, but ganita's running product (C(n, k) * k) does not, so ganita
+    # refuses it. When ganita divides before it multiplies, this row fails —
+    # flip it to the value then.
+    ev_math_err("binomial(62, 31)", "binomial(62, 31) refused by ganita's product (was -1)");
+    ev_math_err("lcm(4611686018427387904, 3)", "lcm(2^62, 3) is a math error (was 2^62)");
+    ev_math_err("lcm(3037000500, 3037000501)", "lcm just past i64_MAX is a math error (wrapped)");
+    # Over-reach guards: every result ganita and the stdlib can hold comes back.
+    ev_int("binomial(5, 7)", 0, "binomial(5, 7) = 0, k > n");
+    ev_int("binomial(0, 0)", 1, "binomial(0, 0) = 1");
+    ev_int("binomial(52, 26)", 495918532948104, "binomial(52, 26), exact in f64");
+    ev_int("lcm(0, 5)", 0, "lcm(0, 5) = 0");
+    var e = Evaluator_new();
+    assert_eq(Evaluator_eval(e, "binomial(61, 30)"), f64_from(232714176627630544),
+      "binomial(61, 30), the largest central C(n, k) ganita holds");
+    assert_eq(Evaluator_eval(e, "lcm(3037000498, 3037000499)"), f64_from(9223372027889248502),
+      "lcm just under i64_MAX still comes back");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "neither edge guard sets an error");
+    return 0;
+}
+
 # Cyrius 6.6.9 took x86 f64_sin / f64_cos off bare x87 fsin / fcos and onto
 # fdlibm ports within 1 ulp (Cyrius CHANGELOG [6.6.9]). x87 leaves an operand
 # with |x| >= 2^63 untouched, so on the 6.6.2 pin sin(1e300) answered 1e300 and
@@ -1354,6 +1384,7 @@ fn main() {
     test_two_product_exact();
     test_checked_int_conversion();
     test_gcd_lcm_binomial_domain();
+    test_binomial_lcm_overflow();
     test_trig_large_arguments();
     test_unary_minus_zero();
     # Propagate failure to the process exit code. assert_summary() RETURNS

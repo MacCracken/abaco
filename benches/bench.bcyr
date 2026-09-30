@@ -161,6 +161,11 @@ fn _bench_freq_to_midi() {
     return 0;
 }
 
+fn _bench_pitch_class() {
+    freq_to_pitch_class(f64_from(435));
+    return 0;
+}
+
 fn _bench_time_const() {
     time_constant(f64_from(10), f64_from(44100));
     return 0;
@@ -245,6 +250,10 @@ fn run_dsp_benches() {
 
     b = bench_new("freq_to_midi");
     bench_run(b, &_bench_freq_to_midi, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("pitch_class");
+    bench_run(b, &_bench_pitch_class, BENCH_ITERS);
     bench_report(b);
 
     b = bench_new("time_constant");

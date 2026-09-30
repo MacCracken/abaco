@@ -468,6 +468,19 @@ Maintenance patch. No abaco behaviour change, no API change:
       byte-identical to 2.4.6 on the 6.6.2 pin bar the new domain errors.
       Suite 827 → **909**; fuzz 4/4 at 20,000; A/B bench geomean ×0.97
 
+### 2.4.8 — fix what 2.4.7 filed ✅ (2026-09-30)
+
+- [x] ⛔ **`DSP_C0_FREQ` was 16.703125 Hz**, not 16.3516 Hz — every pitch class
+      and octave 0.368 semitone flat since the port (435 Hz read as G#). Now the
+      correctly rounded 440 / 2^(57/12); all 70 corpus pitch rows match true
+      12-TET, and a decode of every other hex f64 constant finds no mismatch
+- [x] `binomial` / `choose` no longer pass ganita's -1 sentinel through as a
+      value (`binomial(-1, 2)`, `binomial(100, 50)`) — `ABACO_ERR_MATH`
+- [x] `lcm` no longer wraps past i64 (`lcm(2^62, 3)` answered 2^62) — the
+      product is tested before it is formed
+- [x] Benchmark rows `pitch_class`, `lcm`, `choose`; A/B against 2.4.7 flat
+      (geomean ×0.99). Suite 909 → **938**; fuzz 4/4 at 20,000
+
 ### Still open
 
 > The two residuals the 2.3.5 fix audit left open were closed in 2.4.0.
@@ -486,22 +499,16 @@ Maintenance patch. No abaco behaviour change, no API change:
       stabilizes (replaces the plaintext `http_get` path). Since Cyrius 6.6.9
       `http_get` really connects, so the loopback dev path works; an `https://`
       base URL still fails before any lookup, because there is no TLS
-- [ ] ⛔ **`DSP_C0_FREQ` is mis-encoded** — `0x4030_B400_0000_0000` is
-      16.703125 Hz, not the 16.3516 Hz its comment and `docs/sources.md` give
-      (the correct bits are `0x4030_5A02_50C2_B956`, 440 / 2^(57/12)). Every
-      `freq_to_pitch_class` / `freq_to_octave` result is computed 0.368
-      semitone flat, so a tone ~0.13 semitone flat of a note lands on the note
-      below (435 Hz reads as G#). Present since the Cyrius port; the same
-      failure class as the 2.3.2 dB constants, and the only mismatch among the
-      crate's hex-encoded f64 constants. Needs a regression test at note
-      boundaries, and a re-vendor note for dhvani
-- [ ] `binomial` returns ganita's -1 error sentinel as a value —
-      `binomial(-1, 2)` and the overflowing `binomial(100, 50)` answer -1 with no
-      evaluator error. Should be `ABACO_ERR_MATH`. So does `binomial(66, 33)`,
-      whose result (~7.2e18) fits in i64 but whose running product does not —
-      an upstream ganita limit worth filing alongside
-- [ ] `lcm` wraps silently when the product overflows i64 —
-      `lcm(4611686018427387904, 3)` answers 2^62. Should be `ABACO_ERR_MATH`
+- [ ] **Upstream (ganita):** `ganita_binomial` multiplies before it divides —
+      its last step holds C(n, k) · k — so it refuses results above
+      `i64_MAX / k` that fit (C(62, 31) ≈ 4.65e17 is the first central case;
+      exact through C(61, 30)). abaco reports those as `ABACO_ERR_MATH` and
+      `test_binomial_lcm_overflow` pins the limit; dividing by gcd(result, i+1)
+      before multiplying would make every representable C(n, k) exact
+- [ ] `bench-history.sh` keys rows by name alone, and `sqrt` exists in both
+      `bench.bcyr` (`f64_sqrt`) and `bench_eval.bcyr` (`"sqrt(16)"`), so
+      `bench-latest.md` shows the first row twice and the evaluator's never.
+      Rename one row or key the trail by file as well
 - [ ] Decide whether to commit the `dist/abaco.deps` sidecar. Since 2.4.6 its
       name is exactly what a consumer's `cyrius deps` reads, but it lists every
       `[deps].stdlib` module, including the test / bench-only `assert`, `bench`

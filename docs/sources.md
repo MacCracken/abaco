@@ -39,8 +39,10 @@ source. No magic numbers.
 
 - **12-tone equal temperament (12-TET), MIDI ↔ frequency.**
   `freq = 440 · 2^((m−69)/12)`. A4 = 440 Hz (ISO 16:1975); MIDI note 69 = A4.
-- **C0 reference** = 16.3516 Hz (MIDI note 12), used for pitch-class /
-  octave computation: `round(12 · log2(freq / C0))`.
+- **C0 reference** = 440 / 2^(57/12) = 16.351597831287414 Hz (MIDI note 12;
+  `DSP_C0_FREQ` = `0x4030_5A02_50C2_B956`, the correctly rounded double), used
+  for pitch-class / octave computation: `round(12 · log2(freq / C0))`. Through
+  2.4.7 the constant encoded 16.703125 Hz instead — see CHANGELOG 2.4.8.
   - `round` here is **ties away from zero** (`f64_round_half_away`), not the
     IEEE-754 round-half-to-even that the Cyrius 6.5.x `f64_round` builtin
     implements. Same rule as the expression evaluator's user-facing `round()`;
@@ -216,13 +218,18 @@ source. No magic numbers.
   - Intel® 64 and IA-32 Architectures SDM, Vol. 2, `CVTTSD2SI` — returns the
     integer indefinite `80000000_00000000H` when the invalid exception is
     masked.
+- **Integer results must fit i64.** `binomial` refuses ganita's -1 sentinel
+  (a negative argument, or a result it cannot hold). `lcm` tests
+  `a / gcd(a, b) ≤ ⌊i64_MAX / b⌋` before forming `(a / gcd) · b`, which for
+  positive operands is exactly the condition that the product fits.
+  - Knuth, *TAOCP Vol. 2* (3rd ed.), §4.5.2 — `lcm(u, v) = u·v / gcd(u, v)`.
 
 ## Constants
 
 | Constant | Value | Source |
 |----------|-------|--------|
 | A4 frequency | 440.0 Hz | ISO 16:1975 |
-| C0 frequency | 16.3516 Hz | 12-TET, MIDI note 12 |
+| C0 frequency | 16.351597831287414 Hz | 12-TET: 440 / 2^(57/12), MIDI note 12 |
 | Semitones/octave | 12 | 12-TET |
 | Cents/octave | 1200 | Ellis (1885) |
 | MR witness bound | 3.317 × 10²⁴ | Sorenson & Webster (2015) |

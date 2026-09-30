@@ -12,7 +12,7 @@ In your project's `cyrius.cyml`:
 ```toml
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.4.7"                 # pin to a released tag, never a branch
+tag = "2.4.8"                 # pin to a released tag, never a branch
 modules = ["dist/abaco.cyr"]  # the bundle is the only file you name
 ```
 
@@ -82,6 +82,21 @@ fn main() {
 Bump the `tag` and run `cyrius deps`. abaco follows SemVer (post-1.0): patch and
 minor bumps are source-compatible; a major bump documents breaking changes in
 [`CHANGELOG.md`](../../CHANGELOG.md) with a migration section.
+
+### 2.4.8 — pitch classes move; two functions now report errors
+
+- **`freq_to_pitch_class` / `freq_to_octave` answer differently for off-centre
+  tones** — correctly now. The C0 reference was encoded as 16.703125 Hz rather
+  than 16.3516 Hz, so every result was 0.368 semitone flat and a tone more than
+  ~0.13 semitone flat of a note came back as the note below (435 Hz as G#, not
+  A). In-tune notes are unchanged. If you compensated for the old skew — a
+  tolerance, an offset — remove it. dhvani in particular should re-vendor.
+- **`binomial` / `choose` and `lcm` set `ABACO_ERR_MATH`** where they used to
+  return a value with no error: `binomial` for a negative argument or a result
+  ganita cannot hold (it answered -1), and `lcm` for a result past i64 (it
+  wrapped). ganita also refuses some results that fit — any C(n, k) above
+  `i64_MAX / k`, from C(62, 31) — so those are errors too until ganita lifts
+  the limit. Every other result is unchanged.
 
 ### 2.4.7 — re-vendor, whatever your Cyrius pin
 

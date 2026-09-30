@@ -5,6 +5,79 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.8] — 2026-09-30
+
+The two correctness bugs 2.4.7 found in passing and filed, now fixed. Neither
+is new: the pitch reference has been wrong since the Cyrius port, and the two
+evaluator functions have answered out-of-range results as ordinary values for as
+long as they have existed. Both change what consumers get, so **dhvani and
+Abacus should re-vendor**.
+
+Suite 909 → **938** asserts; fuzz 4/4 at 20,000 iterations; fmt / lint / vet
+clean; Cyrius 6.6.12 unchanged. `dist/abaco.cyr` is **not** byte-identical to
+2.4.7.
+
+### Fixed — ⛔ the pitch reference was 2% sharp, so every pitch class ran flat
+
+`DSP_C0_FREQ` was `0x4030_B400_0000_0000`, which is **16.703125 Hz** — not the
+16.3516 Hz its comment and `docs/sources.md` give. `freq_to_pitch_class` and
+`freq_to_octave` compute `round(12 · log2(freq / C0))`, so every result was
+0.368 semitone flat, and any tone more than ~0.13 semitone flat of a note read
+as the note below it: 435 Hz (a slightly flat A4) was G#, 257 Hz was B3 rather
+than C4, 60 Hz was A# rather than B, and 16 Hz fell "below C0" (-1) instead of
+rounding to C0. Now `0x4030_5A02_50C2_B956`, the correctly rounded
+440 / 2^(57/12) = 16.351597831287414 Hz (0.2 ulp from the true value), which is
+also the module's own `midi_to_freq(12)`. Same failure class as the 2.3.2 dB
+constants: a hex bit pattern nobody decoded. A decode of every other hex-encoded
+f64 constant in `src/` finds no other mismatch.
+
+In the differential corpus every one of the 70 pitch-class and octave rows now
+matches true 12-TET; the six that changed were all wrong before (e.g. 44,100 Hz
+was E, not F).
+
+### Fixed — `binomial` and `lcm` answered out-of-range results as values
+
+- **`binomial` / `choose` passed ganita's -1 error sentinel through** as the
+  answer, with no error: `binomial(-1, 2)`, `binomial(2, -1)`, and anything too
+  large to hold, such as `binomial(100, 50)`, all evaluated to -1. Every valid
+  C(n, k) is ≥ 0 (k > n is 0), so a negative result now sets `ABACO_ERR_MATH`.
+  ⚠ ganita multiplies before it divides — its last step holds C(n, k) · k — so it
+  also refuses results above `i64_MAX / k` that would fit: C(62, 31) ≈ 4.65e17 is
+  the first central case, and ganita is exact through C(61, 30). Those are now
+  an error rather than -1; the limit is ganita's to lift, and a test pins it so
+  the day it lifts cannot go unnoticed.
+- **`lcm` wrapped silently past i64** — the stdlib computes `(a / gcd) · b` with
+  no overflow check, so `lcm(2^62, 3)` answered 2^62. The evaluator now refuses
+  the product first: for positive a and b it fits exactly when
+  `a / g ≤ i64_MAX / b` in integer division. `lcm(3037000498, 3037000499)`, just
+  under the limit, still comes back.
+
+In the corpus 256 `binomial` / `choose` rows change — every one from a negative
+value with no error to `ABACO_ERR_MATH` — and no other evaluator row does.
+
+### Added
+
+- Benchmark rows `pitch_class` (bench), `lcm` and `choose` (bench_eval). The
+  evaluator's binomial row is `choose`, its alias, because the trail keys rows by
+  name alone and `bench.bcyr` already has a direct `binomial` row. (`sqrt`
+  already collides that way — `bench-latest.md` shows `f64_sqrt`'s row twice and
+  never the evaluator's; filed.)
+
+### Tests
+
+`test_chromagram` +11 and `test_binomial_lcm_overflow` (18). Discrimination,
+measured: with the old constant 6 `test_dsp` rows fail (the C0 ↔
+`midi_to_freq(12)` check and five off-centre tones); with 2.4.7's `eval.cyr` the
+7 "was" rows in `test_eval` fail. The guards — in-tune notes, whole octaves,
+`binomial(61, 30)`, the largest `lcm` that fits — pass both ways.
+
+### Benchmarks
+
+Interleaved A/B against 2.4.7, five rounds: geomean ×0.99 across 63 rows. The new
+checks cost nothing measurable — evaluator `lcm` ×1.015 and `choose` ×1.006,
+both inside the run-to-run spread; `pitch_class` is unchanged (only a constant
+moved).
+
 ## [2.4.7] — 2026-09-30
 
 Toolchain **Cyrius 6.6.2 → 6.6.12**, stdlib re-vendored (bayan 1.5.5 → 1.5.9,

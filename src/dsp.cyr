@@ -409,8 +409,12 @@ fn sinc_kernel(x, half_width) {
 # Chromagram helpers — pitch class mapping
 # ================================================================
 
-# C0 = 16.3516 Hz (MIDI note 12). Reference for pitch class computation.
-var DSP_C0_FREQ = 0x4030_B400_0000_0000;   # 16.3516 Hz — MIDI 12
+# C0 = 440 / 2^(57/12) Hz (MIDI note 12), the reference for pitch class
+# computation. Through 2.4.7 this was 0x4030_B400_0000_0000 — 16.703125 Hz, 2%
+# sharp — so every pitch class and octave came out 0.368 semitone flat, and a
+# tone more than ~0.13 semitone flat of a note (435 Hz for A4) read as the note
+# below. Same failure class as the 2.3.2 dB constants (CHANGELOG 2.4.8).
+var DSP_C0_FREQ = 0x4030_5A02_50C2_B956;   # 16.351597831287414 Hz — MIDI 12
 
 # Internal: round(12 * log2(freq / C0)) — semitones above C0 as an integer.
 # Returns -1 unless freq is positive and finite (NaN fails the > 0 test); a

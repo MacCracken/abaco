@@ -29,6 +29,10 @@ fn _bench_eval_sin() { Evaluator_eval(_ev, "sin(3.14159)"); return 0; }
 fn _bench_eval_log2() { Evaluator_eval(_ev, "log2(1024)"); return 0; }
 fn _bench_eval_pow() { Evaluator_eval(_ev, "pow(2, 10)"); return 0; }
 fn _bench_eval_min() { Evaluator_eval(_ev, "min(3, 5)"); return 0; }
+fn _bench_eval_lcm() { Evaluator_eval(_ev, "lcm(12, 18)"); return 0; }
+# `choose` is the evaluator's binomial alias — the same path, under a name
+# that does not collide with bench.bcyr's direct `binomial` row in the CSV.
+fn _bench_eval_choose() { Evaluator_eval(_ev, "choose(20, 10)"); return 0; }
 fn _bench_eval_complex() { Evaluator_eval(_ev, "2^3 + sqrt(9) * 2"); return 0; }
 fn _bench_eval_nested() { Evaluator_eval(_ev, "((1 + 2) * (3 + 4)) / (5 - 1)"); return 0; }
 fn _bench_eval_trig() { Evaluator_eval(_ev, "sin(pi / 4) * cos(pi / 4)"); return 0; }
@@ -90,6 +94,14 @@ fn main() {
 
     b = bench_new("min");
     bench_run(b, &_bench_eval_min, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("lcm");
+    bench_run(b, &_bench_eval_lcm, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("choose");
+    bench_run(b, &_bench_eval_choose, BENCH_ITERS);
     bench_report(b);
 
     println("--- eval_complex ---");
