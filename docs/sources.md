@@ -202,6 +202,20 @@ source. No magic numbers.
 - **Totient domain cap (`ABACO_TOTIENT_MAX = 10¹²`)** — φ(n) is computed by
   trial division to √n, so the evaluator bounds n the way it already bounds
   `factorial` (170) and `fibonacci` (92); 10¹² keeps the loop under ~10⁶ steps.
+- **Checked f64 → i64 conversion (`abaco_f64_to_i64`, `src/core.cyr`)** — an
+  integer domain is decided by range, `-2^63 ≤ x < 2^63`, using two ordered
+  comparisons (both false for NaN), never by what an out-of-range conversion
+  returns. No standard fixes that value, and Cyrius changed it at 6.6.8 — from
+  the x86 "integer indefinite" `0x8000000000000000` to saturation by sign with
+  NaN → 0.
+  - ISO/IEC 9899:2011 (C11) §6.3.1.4 ¶1 (an unrepresentable integral part is
+    undefined behaviour) and Annex F.4 (infinite, NaN or out-of-range: the
+    result is unspecified, and "invalid" is raised).
+  - IEEE 754-2019 §5.8 — `convertToInteger` signals invalid for NaN, infinite
+    and out-of-range operands; it does not specify the delivered integer.
+  - Intel® 64 and IA-32 Architectures SDM, Vol. 2, `CVTTSD2SI` — returns the
+    integer indefinite `80000000_00000000H` when the invalid exception is
+    masked.
 
 ## Constants
 

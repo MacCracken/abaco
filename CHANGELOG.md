@@ -5,6 +5,194 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.7] — 2026-09-30
+
+Toolchain **Cyrius 6.6.2 → 6.6.12**, stdlib re-vendored (bayan 1.5.5 → 1.5.9,
+ganita 1.2.4 → 1.2.9), and `cyrius.cyml` reduced to data.
+The bump was **not** source-neutral. Cyrius 6.6.8 changed what `f64_to` returns
+out of range — NaN → 0, x ≥ 2^63 → `i64_MAX`, x < -2^63 → `i64_MIN`, where x86
+had answered `i64_MIN` for all of them — and the evaluator had been using that
+`i64_MIN` as its integer-domain check. Against the 2.4.6 source on the new pin,
+`nextprime(1e300)` never returned, `lcm(-1e300, 1e300)` died with SIGFPE,
+`(-1)^(2^63)` answered -1, `2^63` came back as the integer 9223372036854775807,
+and NaN reached `factorial` / `nextprime` / `totient` / `fib` as 0 and was
+answered. One checked conversion closes all of it, under either convention —
+which matters, because consumers compile `dist/abaco.cyr` with their own pin.
+
+Suite 827 → **909** asserts; fuzz 4/4 at 20,000 iterations (one new invariant);
+fmt / lint / vet clean. `dist/abaco.cyr` is **not** byte-identical to 2.4.6.
+
+### Changed
+
+- **Toolchain `6.6.2` → `6.6.12`**, stdlib re-vendored. All 18 declared modules
+  still exist and none lost a public symbol; `chrono` and `alloc_cx` join the
+  vendored set transitively (through `hashmap`'s hash seeding, and `alloc`). bayan 1.5.9 and
+  ganita 1.2.9 are the newest releases with source changes (ganita 1.2.10 is a
+  toolchain/coverage bump with none), and abaco has no git deps to update.
+- **`cyrius.lock` is new — commit it.** `cyrius deps` now writes one for a
+  stdlib-only project (Cyrius 6.6.9): the 36 vendored files' hashes plus a
+  `cyrius 6.6.12` trailer (6.6.4), so a stdlib snapshot that changes under an
+  unchanged pin is refused instead of silently re-vendored.
+- **`cyrius.cyml` is data only.** Its comments had become a ledger: the history
+  of the 6.2.x stdlib re-batch, a `[lib.abaco]` rationale that stopped being true
+  at 2.4.6 ("the flat `[lib]` form is gone" — it is what the file declares), and a
+  claim that abaco reaches bayan through back-compat aliases, false since 2.3.0.
+  The two durable rules they carried — `[lib].modules` keeps `src/main.cyr`'s
+  include order, and never moves to `[build].modules`, which Cyrius inlines ahead
+  of the entry (re-verified on 6.6.12: 212 duplicate-fn warnings) — now live in
+  `CLAUDE.md`, beside a rule that the manifest stays data.
+- **Stale procedure removed.** `CLAUDE.md`, `README.md`, `.gitignore`,
+  `scripts/version-bump.sh` and ADR 0001 still taught
+  `cyrius distlib abaco && mv dist/abaco-abaco.cyr dist/abaco.cyr`, which the
+  2.4.6 `[lib]` switch retired; all now say `cyrius distlib`. The "fmt / lint /
+  doc take ONE path" warnings in `CLAUDE.md`, `CONTRIBUTING.md` and `ci.yml` are
+  gone too: Cyrius 6.6.5 made them take several (checked here — an indentation
+  fault in the second of two files fails `fmt --check` in either order).
+- `benches/bench.bcyr`: `_bench_round` → `_bench_round_half_away`. `lib/bench.cyr`
+  took that name at 6.6.5 for its own `_bench_round(ps)`, and a same-name fn of a
+  different arity is a compile error, so the bench stopped building on the new
+  pin. The row is still labelled `round`, so the CSV trail continues.
+
+### Fixed — ⛔ out-of-range `f64_to` became a wrong answer (Cyrius 6.6.8)
+
+`abaco_f64_to_i64` (`src/core.cyr`) returns `Ok(trunc(x))` for -2^63 ≤ x < 2^63
+and `Err(0)` otherwise, deciding the range with two ordered comparisons (which a
+NaN fails) instead of trusting the builtin's out-of-range answer. Every
+conversion of a user-controlled f64 now goes through it — `eval_pow`, postfix
+`!`, `factorial` / `isprime` / `nextprime` / `prevprime` / `totient` / `fib`,
+`gcd` / `lcm` / `binomial`, `Evaluator_eval_value`, and the chromagram helpers.
+
+| Input | 2.4.6 on 6.6.2 | 2.4.6 on 6.6.12 | 2.4.7 |
+|-------|----------------|-----------------|-------|
+| `(-1)^(2^63)` | 1 | **-1** | 1 |
+| `(-2)^(2^63)` | +Inf | **-Inf** | +Inf |
+| `(-0.5)^(2^63)`, `(-0)^(2^63)` | +0 | **-0** | +0 |
+| `2^63` as a `Value` | FLOAT 2^63 | **INTEGER 9223372036854775807** | FLOAT 2^63 |
+| `(sqrt(-1))!`, `factorial(sqrt(-1))` | `ABACO_ERR_MATH` | **1** | `ABACO_ERR_MATH` |
+| `nextprime(sqrt(-1))` | `ABACO_ERR_MATH` | **2** | `ABACO_ERR_MATH` |
+| `totient` / `fib` of NaN | `ABACO_ERR_MATH` | **0** | `ABACO_ERR_MATH` |
+| `prevprime(1e300)` | `ABACO_ERR_MATH` | **2^63** | `ABACO_ERR_MATH` |
+| `nextprime(1e300)` | `ABACO_ERR_MATH` | **never returns** | `ABACO_ERR_MATH` |
+| `freq_to_pitch_class(+Inf)` / `freq_to_octave(+Inf)` | -1 / -1 | **7 / 768614336404564650** | -1 / -1 |
+
+The exponent row is the subtle one: 2^63 saturates to `i64_MAX`, and `f64_from`
+rounds `i64_MAX` straight back up to 2^63, so the round-trip that classifies an
+exponent as integral *passed* — with an odd integer. `nextprime` overflowed
+`n + 1` and walked the negative numbers. On aarch64, where `f64_to` has always
+saturated, every row in the middle column was live at every pin.
+
+**Behaviour-preserving, measured.** A 17,597-record differential corpus — every
+evaluator function over ~60 special and ordinary arguments, 3,000 random literals,
+1,200 random powers, and the DSP / units / NL / LaTeX / number-theory surface — is
+byte-identical between 2.4.6 and 2.4.7 on the **6.6.2** pin except for the
+`gcd` / `lcm` / `binomial` rows below. The fix changes nothing that worked, under
+the old convention too.
+
+Also corrected: comments in `src/eval.cyr`, `src/core.cyr` and the tests that
+stated x86's pre-6.6.8 answer as a universal fact, and one in `eval_pow` that
+still said `f64_exp2` is NaN for every non-finite argument — false since 6.6.1.
+
+### Fixed — `gcd` / `lcm` / `binomial` had no domain check at all
+
+NaN, ±Inf and |x| ≥ 2^63 went straight into i64 arithmetic, answering garbage
+that moved with the toolchain (`gcd(1e300, 6)` was -2 on x86 through 6.6.7 and is
+1 from 6.6.8, with no error either way) and, from 6.6.8, SIGFPE:
+`lcm(-1e300, 1e300)` saturates to `i64_MIN` and `i64_MAX`, the stdlib `gcd` of
+those is -1, and `i64_MIN / -1` traps. They now set `ABACO_ERR_MATH`.
+
+`lcm` now converts magnitudes, as `gcd` always has, so both have the domain
+|x| < 2^63. That also closes a SIGFPE that pre-dates this release and fired on
+**every** toolchain: the stdlib pair negates negative operands, `0 - i64_MIN` is
+`i64_MIN` again, the stdlib `gcd(i64_MIN, 5)` is -1, and
+`lcm(0-9223372036854775808, 5)` divided `i64_MIN` by it. Every other `lcm` result
+is unchanged — the stdlib returns |lcm| whatever the operand signs. In the corpus,
+1,078 rows change, every one of them to `ABACO_ERR_MATH` and every one with an
+out-of-domain argument; the 1,226 in-domain rows are identical.
+
+### Fixed — the currency cache's loopback exception was a prefix match
+
+`_ccy_validate_url` accepted plaintext `http://` only for local development, but
+tested for it with a bare prefix, so remote names that merely *start* with a
+loopback one passed: `http://localhost.<any domain>`, `http://127.0.0.1.<any
+domain>` — names DNS can point anywhere. That was inert while `lib/http.cyr`
+could reach no host at all; Cyrius 6.6.9's `http_get` resolves names and
+connects, which made them a plaintext rate fetch from a remote server — the
+poisoning the HTTPS rule exists to stop (audit §4.3). The loopback name must now
+be the whole host: end of URL, a port, or a path. `https://` URLs were never
+exposed — `http_get` has no TLS and refuses them before any lookup. `fuzz_ai`
+gains the invariant, mirrored so rejecting all loopback cannot pass.
+
+### Inherited from the toolchain — no abaco change
+
+- **`sin` / `cos` / `tan` are within 1 ulp for every argument** (6.6.9 took x86
+  off bare x87 `fsin` / `fcos`). On the 6.6.2 pin `sin(1e300)` answered **1e300**
+  and `tan(1e300)` answered 1 — x87 leaves an operand with |x| ≥ 2^63 untouched —
+  `sin(pi)` was 1.6e11 ulp off, and `sin(1e12)` about 9e6. Every trig row that
+  changed in the corpus is now within 1 ulp of glibc, most bit-exact; a few
+  mid-range arguments where x87 happened to round correctly moved by 1 ulp
+  (`sin(±2.5)`, `tan(±2.5)`, `cos(1000)`, `tan(1000)`). DSP rows built on them moved too:
+  `f64_sinc`, `sinc_kernel`, and the pan / crossfade endpoints, where `cos(π/2)`
+  is now the correctly rounded 6.123233995736766e-17.
+- **Unary minus on zero gives -0** (6.6.8 made x86 `f64_neg` a sign-bit flip; it
+  computed `0 - x`). `-0` in an expression is negative zero now, so `(-0)^(-1)`
+  is -Inf as C99 F.10.4.4 requires (was +Inf).
+- `http_get` connects since 6.6.9 (see above); `f64_parse` is unchanged.
+
+### Tests
+
+Suite 827 → 909: `test_checked_int_conversion` (30), `test_gcd_lcm_binomial_domain`
+(17), `test_trig_large_arguments` (14), `test_unary_minus_zero` (7) in `test_eval`;
+`test_security_loopback_must_be_whole_host` (11) in `test_ai`; three non-finite
+rows in `test_chromagram`. Discrimination, measured: with the call sites
+reverted (the helper kept so the file compiles) 18 `test_eval` and 2 `test_dsp`
+assertions fail, `nextprime(1e300)` and `nextprime(2^63)` hang, and both `lcm`
+rows die with SIGFPE; with the old validator the six loopback lookalikes fail
+and `fuzz_ai` trips on its first. The same fixed suite on the 6.6.2 pin fails
+only the 10 toolchain pins (7 trig, 3 unary minus) — the conversion rows pass
+there too.
+
+### Benchmarks
+
+Interleaved A/B on one machine, 2.4.6 on 6.6.2 against 2.4.7 on 6.6.12, median of
+three rounds: geomean ×0.97 across 77 benchmarks. `pan_center` and
+`crossfade_mid` 101 → 64 ns — `sin` / `cos` through the fdlibm port rather than
+x87. Nothing else moved outside noise. The `bench_units` rows swing up to 5× from
+one process to the next (per-process hash seeding), so they were re-run for ten
+rounds: geomean ×0.94, and no row's range separated from the other side's.
+Miller–Rabin is flat — `bayan_u64_mulmod` is byte-identical. ⚠ 6.6.x also
+reworked `lib/bench.cyr`'s statistics (picosecond means, a new min / max), so
+`bench-history.csv` rows either side of this bump are not strictly comparable.
+
+### Not fixed — found in passing, filed in `docs/development/roadmap.md`
+
+- ⛔ `DSP_C0_FREQ` encodes **16.703125 Hz**, not the 16.3516 Hz its comment and
+  `docs/sources.md` give: every pitch class and octave is computed 0.368 semitone
+  flat, so a tone ~0.13 semitone flat of a note — 435 Hz for A4 — lands on the note
+  below. Present since the Cyrius port; the same failure class as the 2.3.2 dB
+  constants.
+- `binomial` passes ganita's -1 error sentinel through as a value:
+  `binomial(-1, 2)` answers -1 with no error.
+- `lcm` of in-range operands whose product overflows wraps silently
+  (`lcm(2^62, 3)`).
+- Whether to commit the `dist/abaco.deps` sidecar, now that its name matches what
+  a consumer's `cyrius deps` looks for.
+
+## [2.4.6] — 2026-09-11
+
+### Changed
+
+- **Toolchain `6.5.35` → `6.6.2`.** Migrated to the `Result` value form:
+  4 first-party file(s) changed. Every surface re-verified — build, tests, and any
+  bench/fuzz/distlib target the repo ships.
+- **`cyrius.cyml` declares a flat `[lib]` again** (was `[lib.abaco]`), so a bare
+  `cyrius distlib` writes the consumer path `dist/abaco.cyr` directly — no profile
+  argument, no rename. CI and release regenerate the bundle that way.
+- `prevprime`, the evaluator's only `Result`-consuming builtin, gained eval-level
+  coverage for both arms (`test_prevprime_err_arm`), and `prev_prime`'s pair form
+  is pinned in `test_ntheory`. Suite 813 → 827.
+
+(First appended below the link references; moved into order at 2.4.7.)
+
 ## [2.4.5] — 2026-08-22
 
 **2.4.4 broke CI on the clean path.** The security-scan hardening shipped in
@@ -1954,13 +2142,3 @@ This is a breaking change for anyone who was depending on `abaco` via
 [0.22.4]: https://github.com/MacCracken/abaco/compare/0.22.3...0.22.4
 [0.22.3]: https://github.com/MacCracken/abaco/compare/0.1.0...0.22.3
 [0.1.0]: https://github.com/MacCracken/abaco/releases/tag/0.1.0
-
-## [Unreleased]
-
-## [2.4.6] - 2026-09-11
-
-### Changed
-
-- **Toolchain `6.5.35` → `6.6.2`.** Migrated to the `Result` value form:
-  4 first-party file(s) changed. Every surface re-verified — build, tests, and any
-  bench/fuzz/distlib target the repo ships.

@@ -14,11 +14,13 @@ endpoint; consumers that don't call `fetch` never open a socket.
 | Expression parsing | Stack overflow via deep nesting | `eval_depth` bounded at `ABACO_MAX_DEPTH`; **every** recursive path charges depth — parens, call arguments, unary signs and `^` chains (the last two were unbounded before 2.3.4) |
 | Expression parsing | Token-array overrun | `tokenize` / `implicit_mul` bound every write against `ABACO_MAX_TOKENS` (1024 as of 2.4.0), returning `ABACO_ERR_PARSE` (unchecked before 2.3.4 — see the 2026-08-13 audit) |
 | Expression parsing | Algorithmic-complexity DoS | `eval_pow` uses binary exponentiation (O(log n), no cap needed), `totient` at `ABACO_TOTIENT_MAX`, scientific exponents at 308/400, `factorial` at 170, `fibonacci` at 92 |
+| Expression parsing | Out-of-range f64 → integer | Every user-controlled conversion goes through `abaco_f64_to_i64`, which refuses NaN, ±Inf and \|x\| ≥ 2^63 — the integer functions then answer `ABACO_ERR_MATH`. Before 2.4.7 the evaluator leaned on x86's old `f64_to` answer; on Cyrius ≥ 6.6.8 (and aarch64 always) `nextprime(1e300)` never returned and `lcm(-1e300, 1e300)` raised SIGFPE — as `lcm(-(2^63), 5)` did on every toolchain |
 | Expression parsing | Integer overflow in numeric literals | `parse_number` uses an exact 18-digit mantissa plus a decimal exponent — no accumulator can wrap. Both exponents are genuinely combined before clamping as of 2.3.5 (2.3.4 still saturated the written exponent separately, preserving the bug its own comment claimed to have removed) |
 | History JSON | Structure smuggled through string values | All structural scanning skips string contents via `_jf_skip_string`; keys match only in key position. Before 2.3.4 a `{`, `}` or `]` in any field silently destroyed the whole history on reload |
 | Division by zero | Undefined / inf propagation | Explicit zero checks in eval + units, returns `ABACO_ERR_MATH` / `UERR_CONVERT` |
 | NaN / Infinity | Silent propagation | `sanitize_sample` scrubs inputs in DSP; eval detects and returns error |
 | Unit lookup | Malformed query | Hashmap-based, constant work per lookup; unknown → `UERR_UNKNOWN`, never panics |
+| AI currency fetch | Plaintext fetch / rate poisoning | `_ccy_validate_url` accepts `https://`, or plaintext only when `localhost` / `127.0.0.1` is the **whole** host (then `:`, `/` or end). Through 2.4.6 a prefix match let `http://localhost.<domain>` through — inert until Cyrius 6.6.9's `http_get` began connecting. Control bytes are refused anywhere in the URL (audit §4.1) |
 | AI currency fetch | Malicious response body | Nested JSON extractor bounds-checks every offset; malformed response → `AI_ERR_CURRENCY`, no crash (covered by `fuzz_eval` / explicit tests) |
 | Natural-language parse | Adversarial input | `fuzz_ai.fcyr` runs 20k+ inputs through `nl_parse`, `CalcHistory_*`, `_ccy_load_body` and `_ccy_validate_url`, asserting the MED-7 rate and §4.1 URL invariants directly |
 | ntheory primality | Timing side-channel | `mod_mul` / `mod_pow` are data-independent in control flow; Miller–Rabin loop iterates a fixed witness set |
@@ -28,7 +30,7 @@ endpoint; consumers that don't call `fetch` never open a socket.
 - `fuzz/fuzz_eval.fcyr`    — random expression strings (up to 1200 bytes) → `Evaluator_eval` + `Evaluator_eval_partial`, plus targeted adversarial shapes every 4th iteration: long exponent digit-runs, deep unary-sign chains, deep `^` chains, and token-array overruns
 - `fuzz/fuzz_ntheory.fcyr` — random i64 → `is_prime`, `factor`, `totient`, `next_prime`; cross-checks `is_prime` against trial division for n < 10⁶
 - `fuzz/fuzz_units.fcyr`   — random cstrings → `UnitRegistry_find`, `UnitRegistry_convert`
-- `fuzz/fuzz_ai.fcyr`      — `nl_parse` on random bytes and grammar-shaped phrases; `CalcHistory` ring-buffer bounds and JSON round-trip; `_ccy_load_body` on adversarial rate payloads and deep nesting; `_ccy_validate_url`. Asserts that every cached rate is finite/positive/< 10⁶ and that no URL with a control byte is ever accepted
+- `fuzz/fuzz_ai.fcyr`      — `nl_parse` on random bytes and grammar-shaped phrases; `CalcHistory` ring-buffer bounds and JSON round-trip; `_ccy_load_body` on adversarial rate payloads and deep nesting; `_ccy_validate_url`. Asserts that every cached rate is finite/positive/< 10⁶, that no URL with a control byte is ever accepted, and that loopback is accepted only as the whole host
 
 Run with `./fuzz/run.sh [iters]`. Each harness has passed 20k+ iterations with
 no crashes or invariant violations.
@@ -43,7 +45,7 @@ no crashes or invariant violations.
 
 | Version | Supported |
 |---------|-----------|
-| 2.4.x   | Yes (current — Cyrius 6.5.x) |
+| 2.4.x   | Yes (current — Cyrius 6.6.x) |
 | 2.3.x   | Security fixes only |
 | 2.0.x – 2.2.x | Security fixes only |
 | 1.x     | No (Rust crate, unmaintained) |

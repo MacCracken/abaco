@@ -118,7 +118,10 @@ fn _bench_clamp() {
     return 0;
 }
 
-fn _bench_round() {
+# Not `_bench_round`: lib/bench.cyr took that name at Cyrius 6.6.5 for its own
+# `_bench_round(ps)`, and a same-name fn of a different arity is a compile
+# error, so this file stopped building at the 6.6.12 pin (CHANGELOG 2.4.7).
+fn _bench_round_half_away() {
     f64_round_half_away(f64_div(f64_from(37), f64_from(10)));
     return 0;
 }
@@ -213,7 +216,7 @@ fn run_dsp_benches() {
     bench_report(b);
 
     b = bench_new("round");
-    bench_run(b, &_bench_round, BENCH_ITERS);
+    bench_run(b, &_bench_round_half_away, BENCH_ITERS);
     bench_report(b);
 
     b = bench_new("sqrt");

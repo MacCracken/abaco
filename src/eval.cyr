@@ -193,9 +193,10 @@ var _DD_READY = 0;
 # SINGLE correctly-rounded operation — no compensation needed. That is Clinger's
 # fast path, and it covers essentially every literal a human writes.
 var ABACO_EXACT_INT_MAX = 9007199254740992;   # 2^53
-# 2^63 as an f64 bit pattern — the point where f64_to saturates and the
-# is_int round-trip in eval_pow stops working. Every f64 at or above it is an
-# even integer (ulp >= 2 from 2^53 up), which is what makes the shortcut sound.
+# 2^63 as an f64 bit pattern — the i64 bound, past which abaco_f64_to_i64
+# refuses and eval_pow's is_int test cannot classify an exponent. Every f64 at
+# or above it is an even integer (ulp >= 2 from 2^53 up), which is what makes
+# the shortcut sound.
 var ABACO_POW_INT_HUGE = 0x43E0_0000_0000_0000;
 var ABACO_EXACT_P10_MAX = 22;
 
@@ -831,8 +832,8 @@ fn eval_pow(base, exp) {
         # NaN propagates. C99 exempts exactly two rows from that — pow(x, +/-0)
         # = 1 and pow(+1, y) = 1 — and pow(+/-0, NaN) is neither, so it must be
         # NaN. This block returns before the general NaN rows further down, so
-        # without this line a NaN exponent fell through every test below (f64_to
-        # saturates, so the round-trip fails and `zodd` stays 0; f64_lt(NaN, 0)
+        # without this line a NaN exponent fell through every test below (the
+        # checked conversion refuses it, so `zodd` stays 0; f64_lt(NaN, 0)
         # is 0 because the comparison is unordered) and landed on `return zero`,
         # silently turning NaN into an exact +0. Reachable from ordinary text:
         # `0^(sqrt(0-1))`. Pre-dates 2.4.4 — 2.4.3's one-line zero-base return
@@ -841,10 +842,15 @@ fn eval_pow(base, exp) {
         if (f64_eq(exp, exp) == 0) { return qnan; }
         var zsign = 0;
         if (base == neg_zero) { zsign = 1; }
+        # Checked, not a bare f64_to round-trip: on Cyrius 6.6.8+ that
+        # saturates +2^63 to i64_MAX, which is ODD and round-trips, and
+        # (-0)^(2^63) answered -0 (see abaco_f64_to_i64).
         var zodd = 0;
-        var zei = f64_to(exp);
-        if (f64_eq(exp, f64_from(zei)) == 1) {
-            if (zei % 2 != 0) { zodd = 1; }
+        var zt, zei = abaco_f64_to_i64(exp);
+        if (is_ok(zt) == 1) {
+            if (f64_eq(exp, f64_from(zei)) == 1) {
+                if (zei % 2 != 0) { zodd = 1; }
+            }
         }
         if (f64_lt(exp, zero) == 1) {
             if (zodd == 1) {
@@ -858,9 +864,16 @@ fn eval_pow(base, exp) {
         return zero;
     }
 
-    var exp_i = f64_to(exp);
-    var exp_back = f64_from(exp_i);
-    var is_int = f64_eq(exp, exp_back);
+    # An integral exponent INSIDE i64. Through 2.4.6 this was a bare
+    # f64_from(f64_to(exp)) == exp, which relied on f64_to's out-of-range
+    # answer to fail it; on Cyrius 6.6.8+ exp = +2^63 saturates to i64_MAX,
+    # f64_from rounds that back to 2^63, and the test passed with an ODD
+    # exponent — (-2)^(2^63) answered -Inf and (-1)^(2^63) answered -1. The
+    # checked conversion refuses +2^63, which sends it to the huge-exponent
+    # block below, as x86 did before 6.6.8 (see abaco_f64_to_i64).
+    var et, exp_i = abaco_f64_to_i64(exp);
+    var is_int = 0;
+    if (is_ok(et) == 1) { is_int = f64_eq(exp, f64_from(exp_i)); }
 
     # |base| == 1 is exact for every exponent and sidesteps the i64-minimum
     # magnitude question below, so settle it first.
@@ -909,14 +922,16 @@ fn eval_pow(base, exp) {
     # ---- Non-finite operands: C99 F.10.4.4 / IEEE 754-2019 §9.2 ----
     #
     # Every non-finite operand lands in THIS branch, never the integer path
-    # above: f64_to saturates to i64_MIN for +Inf, -Inf and NaN alike, so the
-    # f64_from(f64_to(exp)) round-trip that sets `is_int` cannot succeed for
-    # any of them. Left to itself the exp2/log2 line answers NaN for all of
-    # them — f64_exp2 returns NaN for every non-finite argument in this
-    # toolchain, and log2(+Inf) = +Inf hands it one. That is the same fact
-    # behind the 2.3.4 (±Inf)^n regression (docs/audit/2026-08-13-fix-audit.md
-    # R-1), which binary exponentiation fixed for INTEGER exponents only; the
-    # rows below were still NaN through 2.4.2, with eval_err = NONE.
+    # above: abaco_f64_to_i64 refuses +Inf, -Inf and NaN alike, so `is_int`
+    # stays 0 for all of them. Left to itself the exp2/log2 line answered NaN
+    # for all of them — f64_exp2 returned NaN for every non-finite argument
+    # through Cyrius 6.6.0, and log2(+Inf) = +Inf hands it one. That is the
+    # same fact behind the 2.3.4 (±Inf)^n regression
+    # (docs/audit/2026-08-13-fix-audit.md R-1), which binary exponentiation
+    # fixed for INTEGER exponents only; the rows below were still NaN through
+    # 2.4.2, with eval_err = NONE. (6.6.1 made exp2 IEEE at ±Inf, but +1 and
+    # negative bases still go wrong on that line — Inf·0 is NaN, and the
+    # negative-base guard claims -x — so every row stays explicit.)
     #
     # pow(+1, y) = 1 for EVERY y, NaN included. The |base| == 1 shortcut near
     # the top of this function sits inside the is_int arm, so +1 with a
@@ -952,8 +967,8 @@ fn eval_pow(base, exp) {
     # is an ODD INTEGER (-Inf for y > 0, -0 for y < 0), and that row cannot
     # reach this line: an odd integer has magnitude below 2^53, because every
     # f64 at or above 2^53 has an ulp of 2 or more and is therefore even; 2^53
-    # is far inside i64, so f64_to is exact for it and the round-trip above
-    # sends it to the integer path, where square-and-multiply carries the sign
+    # is far inside i64, so the checked conversion is exact for it and sends it
+    # to the integer path, where square-and-multiply carries the sign
     # ((-Inf)^3 = -Inf and (-Inf)^-3 = -0 are pinned by the test). What reaches
     # here is either a non-integer or an even integer too large to round-trip,
     # and both take the unsigned rows.
@@ -964,9 +979,9 @@ fn eval_pow(base, exp) {
 
     # ---- Finite exponent too large to round-trip through i64 ----
     #
-    # |y| >= 2^63 saturates f64_to, so the is_int round-trip above fails and
-    # these land here — yet they are not non-integers. (One exception: exactly
-    # -(2^63) round-trips, because i64_MIN is representable, so it takes the
+    # |y| >= 2^63 is refused by abaco_f64_to_i64, so `is_int` is 0 and these
+    # land here — yet they are not non-integers. (One exception: exactly
+    # -(2^63) converts, because i64_MIN is representable, so it takes the
     # integer path above and never reaches this test. That is the value the peel
     # up there has to keep even.) Every f64 at or above
     # 2^53 has an ulp of 2 or more and is therefore an EVEN INTEGER, so every
@@ -1020,8 +1035,10 @@ fn parse_power(e) {
     # Postfix factorial
     while (eval_at(e, TOK_BANG) == 1) {
         eval_advance(e);
-        var n = f64_to(base);
-        if (n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
+        # Checked, like every integer-domain argument in call_function: a bare
+        # f64_to gives 0 for NaN on Cyrius 6.6.8+, so (sqrt(0-1))! answered 1.
+        var nt, n = abaco_f64_to_i64(base);
+        if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
         if (n > 170) {
             eval_set_err(e, ABACO_ERR_MATH);
             return base;
@@ -1261,9 +1278,16 @@ fn call_function(e, name, args, nargs) {
             # degrees to radians: a * pi/180
             return f64_mul(a, f64_div(CONST_PI, f64_from(180)));
         }
+        # Integer-domain functions. Every argument goes through
+        # abaco_f64_to_i64. Through 2.4.6 these tested a bare f64_to result for
+        # `n < 0`, which caught NaN, +/-Inf and |a| >= 2^63 only because x86
+        # answered i64_MIN for all of them before Cyrius 6.6.8. Under 6.6.8's
+        # saturation NaN arrived as 0 (factorial(NaN) = 1, nextprime(NaN) = 2)
+        # and 1e300 as i64_MAX, which next_prime overflowed into a search that
+        # never returned. A refused argument gets exactly what that i64_MIN did.
         if (streq(name, "factorial") == 1) {
-            var n = f64_to(a);
-            if (n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
+            var nt, n = abaco_f64_to_i64(a);
+            if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             if (n > 170) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             var result = f64_from(1);
             var fi = 1;
@@ -1271,26 +1295,26 @@ fn call_function(e, name, args, nargs) {
             return result;
         }
         if (streq(name, "isprime") == 1) {
-            var n = f64_to(a);
-            if (n < 0) { return f64_from(0); }
+            var nt, n = abaco_f64_to_i64(a);
+            if (is_ok(nt) == 0 || n < 0) { return f64_from(0); }
             return f64_from(is_prime(n));
         }
         if (streq(name, "nextprime") == 1) {
-            var n = f64_to(a);
-            if (n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
+            var nt, n = abaco_f64_to_i64(a);
+            if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             return f64_from(next_prime(n));
         }
         if (streq(name, "prevprime") == 1) {
-            var n = f64_to(a);
-            if (n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
+            var nt, n = abaco_f64_to_i64(a);
+            if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             var rt, rv = prev_prime(n);
             if (is_ok(rt) == 1) { return f64_from(rv); }
             eval_set_err(e, ABACO_ERR_MATH);
             return f64_from(0);
         }
         if (streq(name, "totient") == 1) {
-            var n = f64_to(a);
-            if (n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
+            var nt, n = abaco_f64_to_i64(a);
+            if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             # totient() trial-divides to sqrt(n), so an unbounded n is an
             # attacker-controlled O(sqrt(n)) loop. Cap the domain the way
             # `factorial` (n > 170) and `fibonacci` (n > 92) already do; 10^12
@@ -1303,8 +1327,8 @@ fn call_function(e, name, args, nargs) {
         if (streq(name, "fibonacci") == 1) { is_fib = 1; }
         if (streq(name, "fib") == 1) { is_fib = 1; }
         if (is_fib == 1) {
-            var n = f64_to(a);
-            if (n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
+            var nt, n = abaco_f64_to_i64(a);
+            if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             if (n > 92) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             return f64_from(fibonacci(n));
         }
@@ -1323,17 +1347,50 @@ fn call_function(e, name, args, nargs) {
             # without quadrant fix.
             return f64_atan2(a, b);
         }
+        # gcd / lcm / binomial had no domain check at all through 2.4.6: NaN,
+        # +/-Inf and |x| >= 2^63 went straight into i64 arithmetic, answering
+        # garbage that moved with the toolchain (gcd(1e300, 6) is -2 on x86
+        # through Cyrius 6.6.7 and 1 from 6.6.8, with no error either way) and,
+        # from 6.6.8, SIGFPE: lcm(-1e300, 1e300) saturates to i64_MIN and
+        # i64_MAX, whose stdlib gcd is -1, and i64_MIN / -1 traps. Now
+        # ABACO_ERR_MATH, through the same checked conversion as above.
+        #
+        # gcd and lcm convert MAGNITUDES (gcd always did), so their domain is
+        # |x| < 2^63. The stdlib pair negates negative operands, and 0 - i64_MIN
+        # is i64_MIN again, so -(2^63) itself broke lcm on EVERY toolchain:
+        # stdlib gcd(i64_MIN, 5) is -1, and lcm(0-9223372036854775808, 5)
+        # divided i64_MIN by it and trapped. (gcd of that pair answered -1 on
+        # x86 through 6.6.7.) Every other lcm result is unchanged — the stdlib
+        # returns |lcm| whatever the operand signs.
         if (streq(name, "gcd") == 1) {
-            return f64_from(gcd_int(f64_to(f64_abs(a)), f64_to(f64_abs(b))));
+            var gat, ga = abaco_f64_to_i64(f64_abs(a));
+            var gbt, gb = abaco_f64_to_i64(f64_abs(b));
+            if (is_ok(gat) == 0 || is_ok(gbt) == 0) {
+                eval_set_err(e, ABACO_ERR_MATH);
+                return f64_from(0);
+            }
+            return f64_from(gcd_int(ga, gb));
         }
         if (streq(name, "lcm") == 1) {
-            return f64_from(lcm(f64_to(a), f64_to(b)));
+            var lat, la = abaco_f64_to_i64(f64_abs(a));
+            var lbt, lb = abaco_f64_to_i64(f64_abs(b));
+            if (is_ok(lat) == 0 || is_ok(lbt) == 0) {
+                eval_set_err(e, ABACO_ERR_MATH);
+                return f64_from(0);
+            }
+            return f64_from(lcm(la, lb));
         }
         var is_binom = 0;
         if (streq(name, "binomial") == 1) { is_binom = 1; }
         if (streq(name, "choose") == 1) { is_binom = 1; }
         if (is_binom == 1) {
-            return f64_from(binomial(f64_to(a), f64_to(b)));
+            var bnt, bn = abaco_f64_to_i64(a);
+            var bkt, bk = abaco_f64_to_i64(b);
+            if (is_ok(bnt) == 0 || is_ok(bkt) == 0) {
+                eval_set_err(e, ABACO_ERR_MATH);
+                return f64_from(0);
+            }
+            return f64_from(binomial(bn, bk));
         }
         eval_set_err(e, ABACO_ERR_UNKNOWN_FN);
         return f64_from(0);
@@ -1414,10 +1471,14 @@ fn Evaluator_eval_partial(e, expr) {
 fn Evaluator_eval_value(e, expr) {
     var result = Evaluator_eval(e, expr);
     if (eval_err(e) != ABACO_ERR_NONE) { return Value_float(result); }
-    var i = f64_to(result);
-    var back = f64_from(i);
-    if (f64_eq(result, back) == 1) {
-        return Value_integer(i);
+    # Checked, not a bare f64_to round-trip: on Cyrius 6.6.8+ that saturates
+    # 2^63 to i64_MAX, which f64_from rounds back to 2^63, so `2^63` came back
+    # as the INTEGER 9223372036854775807 — off by one, with no error.
+    var it, i = abaco_f64_to_i64(result);
+    if (is_ok(it) == 1) {
+        if (f64_eq(result, f64_from(i)) == 1) {
+            return Value_integer(i);
+        }
     }
     return Value_float(result);
 }

@@ -16,7 +16,8 @@
 #     strictly positive and < 10^6 (the audit MED-7 poisoning invariant).
 #   - _ccy_validate_url NEVER accepts a URL containing a control byte
 #     (the CRLF header-injection guard, audit §4.1), and never accepts
-#     plaintext http:// to a non-loopback host (audit §4.3).
+#     plaintext http:// to a non-loopback host (audit §4.3) — including a
+#     remote name that only starts with a loopback one (2.4.7).
 #   - CurrencyCache_convert reports an error rather than returning a result
 #     when a code is absent from the cache.
 
@@ -457,6 +458,22 @@ fn main() {
         # cannot be "fixed" by rejecting everything.
         if (has_ctrl == 0 && pk == 0 && ok != 0) {
             _fz_fail("validate_url rejected a clean https URL");
+        }
+        # Loopback must be the WHOLE host: the byte after it is a port (`:`) or
+        # a path (`/`). 2.4.7 — a bare prefix test accepted remote names such as
+        # http://localhost.<domain>, which Cyrius 6.6.9's http_get resolves and
+        # fetches in plaintext. Mirrored, so rejecting all loopback cannot pass.
+        if (pk == 1 || pk == 2) {
+            var hc = load8(tail);
+            var whole = 0;
+            if (hc == 58) { whole = 1; }
+            if (hc == 47) { whole = 1; }
+            if (ok == 0 && whole == 0) {
+                _fz_fail("validate_url accepted a remote host that starts with a loopback name");
+            }
+            if (whole == 1 && has_ctrl == 0 && ok != 0) {
+                _fz_fail("validate_url rejected a clean loopback URL");
+            }
         }
         # Plaintext http:// to a non-loopback host must be rejected.
         if (_ccy_validate_url("http://evil.example.com/rates") == 0) {

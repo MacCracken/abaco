@@ -7,6 +7,34 @@
 fn str_lower(s) { return str_lower_cstr(s); }
 fn str_upper(s) { return str_upper_cstr(s); }
 
+# --- Checked f64 -> i64 ---
+#
+# Ok(trunc(x)) when -2^63 <= x < 2^63, where truncation is exact and every
+# toolchain agrees; Err(0) for NaN, +/-Inf and every finite x outside that
+# range. Every conversion of a USER-CONTROLLED f64 to an integer in this crate
+# goes through here rather than the bare `f64_to` builtin, because the
+# builtin's out-of-range answer is not portable: x86 through Cyrius 6.6.7 gave
+# i64_MIN for NaN, +/-Inf and every |x| >= 2^63 alike (cvttsd2si's "integer
+# indefinite"), while 6.6.8+ -- and aarch64 always -- saturate by sign and map
+# NaN to 0 (Cyrius CHANGELOG [6.6.8]). The evaluator had used the i64_MIN
+# answer as its domain check (`n < 0`, and an f64_from(f64_to(y)) == y
+# round-trip), so under saturation it quietly took the other branch: 2^63 came
+# back as i64_MAX, which f64_from rounds straight back UP to 2^63, so the
+# round-trip "succeeded" with an ODD integer and (-1)^(2^63) answered -1;
+# NaN! answered 1; nextprime(1e300) never returned. dist/abaco.cyr is compiled
+# by the CONSUMER's toolchain, so it has to be right under both conventions.
+# CHANGELOG 2.4.7.
+var ABACO_I64_BOUND_HI = 0x43E0_0000_0000_0000;   #  2^63, exclusive
+var ABACO_I64_BOUND_LO = 0xC3E0_0000_0000_0000;   # -2^63, inclusive
+
+fn abaco_f64_to_i64(x) {
+    # Both tests are ordered comparisons, which a NaN fails, so NaN is Err.
+    if (f64_lt(x, ABACO_I64_BOUND_HI) == 1) {
+        if (f64_ge(x, ABACO_I64_BOUND_LO) == 1) { return Ok(f64_to(x)); }
+    }
+    return Err(0);
+}
+
 # --- Value tags ---
 # Value is a tagged struct: { tag, data1, data2 }
 #   INTEGER:  tag=0, data1=i64 value,           data2=unused
@@ -135,10 +163,12 @@ fn _val_is_nan(bits) {
 
 # Fixed-decimal rendering has two blind spots, and LaTeX has a good answer for
 # both. lib/fmt.cyr's fmt_float_buf guards Inf/NaN but still does
-# f64_to(f64_floor(val)) for finite input, which saturates to i64_MIN once
+# f64_to(f64_floor(val)) for finite input, which leaves i64 range once
 # |x| >= 2^63 — so delegating to it unguarded would render 1e300 as
-# "-9223372036854775808.000000". (2.4.3 did not even reach fmt_float_buf; its
-# general path printed the bare integer "-9223372036854775808".) At the other
+# "-9223372036854775808.000000" on x86 through Cyrius 6.6.7 and as
+# "9223372036854775807.000000" from 6.6.8. (2.4.3 did not even reach
+# fmt_float_buf; its general path printed the bare integer
+# "-9223372036854775808".) At the other
 # end, six decimals turn every |x| < 1e-6 into "0.000000", which reads as zero
 # for a value that is not.
 #
@@ -236,10 +266,11 @@ fn Value_to_latex(self) {
         return buf;
     }
     if (t == FLOAT) {
-        # Non-finite first. f64_to saturates to i64_MIN for +Inf, -Inf and NaN
-        # alike, and fmt_int_buf then renders that literally as
-        # -9223372036854775808 — through 2.4.3 every infinity and NaN came out
-        # as that number. LaTeX has real symbols, so emit them.
+        # Non-finite first. f64_to has no integer for +Inf, -Inf or NaN — x86
+        # gave i64_MIN for all three before Cyrius 6.6.8 — and fmt_int_buf
+        # rendered that literally as -9223372036854775808: through 2.4.3 every
+        # infinity and NaN came out as that number. LaTeX has real symbols, so
+        # emit them.
         if (_val_nonfinite(d1) == 1) {
             var nfl = _val_num_at(buf, d1);
             store8(buf + nfl, 0);

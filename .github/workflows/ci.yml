@@ -36,8 +36,9 @@ jobs:
       - name: Format check
         # Every source kind, not just src/ — through 2.4.3 this loop covered
         # src/*.cyr alone, so three test/fuzz files sat fmt-dirty for releases
-        # while the gate reported clean. `cyrius fmt` takes ONE path; extra glob
-        # args are silently dropped, hence the loop.
+        # while the gate reported clean. Looped so each drifted file gets its
+        # own ::error:: (through Cyrius 6.6.4 the loop was also the only way to
+        # check more than one file — extra paths were silently dropped).
         run: |
           for f in src/*.cyr tests/*.tcyr benches/*.bcyr fuzz/*.fcyr; do
             [ -f "$f" ] || continue

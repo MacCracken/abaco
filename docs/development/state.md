@@ -4,38 +4,32 @@
 > [`../../CLAUDE.md`](../../CLAUDE.md); forward plan in [`roadmap.md`](roadmap.md);
 > per-tag history in [`../../CHANGELOG.md`](../../CHANGELOG.md).
 
-**Last updated:** 2026-08-22 (2.4.5 — CI-only. **2.4.4's security-scan hardening broke CI on the clean path**: `grep` exits 1 when it finds nothing, and splitting the `grep | awk` pipeline made the assignment inherit that status, which `bash -e` treats as fatal — so the step died at the first pattern with no output at all. Fixed with a `|| rc=$?` list, along with the same latent hazard on the Test step, which fires on the *failure* path and would have swallowed 2.4.4's new failure-count reporting. Every runnable `ci.yml` step is now verified under `/usr/bin/bash -e` against the real tree; all 12 pass. No source change — `dist/abaco.cyr` byte-identical to 2.4.4 bar the version header)
+**Last updated:** 2026-09-30 (2.4.7 — Cyrius 6.6.12, stdlib re-vendored (bayan 1.5.9, ganita 1.2.9), `cyrius.cyml` reduced to data, `cyrius.lock` introduced. Not source-neutral: **6.6.8 made `f64_to` saturate** (NaN → 0, ≥ 2^63 → `i64_MAX`) where x86 had answered `i64_MIN`, and the evaluator used that `i64_MIN` as its integer-domain check — on the new pin `nextprime(1e300)` never returned, `lcm(-1e300, 1e300)` took SIGFPE and `(-1)^(2^63)` answered -1. One checked conversion (`abaco_f64_to_i64`) closes it under either convention; `gcd` / `lcm` / `binomial` gained a domain check; the currency cache's loopback exception stopped being a prefix match, which 6.6.9's working `http_get` had made live. Suite 827 → **909**. `dist/abaco.cyr` **not** byte-identical to 2.4.6)
+
+**Previous:** 2026-09-11 (2.4.6 — Cyrius 6.6.2 and the `Result` value form; `[lib.abaco]` → flat `[lib]`, so a bare `cyrius distlib` writes `dist/abaco.cyr`. Suite 813 → 827)
+
+**Previous:** 2026-08-22 (2.4.5 — CI-only. **2.4.4's security-scan hardening broke CI on the clean path**: `grep` exits 1 when it finds nothing, and splitting the `grep | awk` pipeline made the assignment inherit that status, which `bash -e` treats as fatal — so the step died at the first pattern with no output at all. Fixed with a `|| rc=$?` list, along with the same latent hazard on the Test step, which fires on the *failure* path and would have swallowed 2.4.4's new failure-count reporting. Every runnable `ci.yml` step is now verified under `/usr/bin/bash -e` against the real tree; all 12 pass. No source change — `dist/abaco.cyr` byte-identical to 2.4.4 bar the version header)
 
 **Previous:** 2026-08-22 (2.4.4 — nine of the ten follow-ups 2.4.3's audit opened, closed. Headline: **abaco's CI could not fail on a failing assertion** — every `.tcyr` discarded `assert_summary()`'s return value, so a red suite exited 0 and shipped green; proven on the 2.4.3 tree and fixed twice over. Plus two more `eval_pow` silent wrong answers (`0^(0-1)` = `+0`, and any exponent >= 2^63 = NaN), a `Value_to_latex` that printed the integer part of every float, a security comment whose stated mechanism does not exist, and three release gates that were checking nothing. Suite 729 -> **813**. `dist/abaco.cyr` **not** byte-identical to 2.4.3)
-
-**Previous:** 2026-08-22 (2.4.3 — Cyrius 6.5.35. A pin bump that surfaced two silent wrong answers in `eval_pow`: `(-2)^0.5` returned `+√2` and every non-finite `pow` row returned NaN, all with `eval_err = NONE`. Both fixed per IEEE 754-2019 §9.2 / C99 F.10.4.4, cited and pinned by 67 new asserts. A SIGFPE also leaves `mod_pow`'s public surface via bayan 1.5.2 — but that fix rides the *consumer's* pin, not abaco's tag. ⛔ Miller–Rabin primality is **1.53× slower**, the measured price of that same SIGFPE fix. `dist/abaco.cyr` is **not** byte-identical to 2.4.2)
-
-**Previous:** 2026-08-14 (2.4.2 — Cyrius 6.5.27. Both issues abaco filed at 2.4.1 are fixed upstream: the typed-pointer warning was testing the wrong sign, and `<source>` diagnostic lines shifted by one per prepended line. The fresh-local workaround the first one forced is reverted. No abaco behaviour change; parse accuracy byte-identical over the same 5000-literal corpus)
 
 ## Versions
 
 | What | Value |
 |------|-------|
-| abaco | **2.4.5** |
-| Cyrius toolchain pin | **6.5.35** |
+| abaco | **2.4.7** |
+| Cyrius toolchain pin | **6.6.12** |
 | License | GPL-3.0-only |
 
-## Stdlib (6.2.x batching — unchanged through 6.5.x)
+## Stdlib (6.2.x batching — unchanged through 6.6.12)
 
 The 6.2.x stdlib re-batched several modules; abaco's `[deps].stdlib` list
-adjusted accordingly at 2.2.5. **6.3.x (2.3.1) through 6.5.x (2.3.4, 2.4.1, 2.4.2, 2.4.3)
-keep the same layout** — no re-batch, so the dependency list is unchanged and all
-18 declared modules still exist; the bundles only grow internally. At 6.5.35 vs
-6.5.27: `bayan` **+10,046 lines** (1.4.1 → 1.5.2 — 1.5.0's PDF writer/reader is
-most of it), `ganita` +56 (1.1.0 → 1.1.4), `fmt` +24 (the 6.5.30 `fmt_float_buf`
-carry fix), `syscalls_windows` +34 (a Windows-only `enum Stat`) — the other **28
-of 32** vendored modules byte-identical, with **zero symbol removals** and every
-back-compat alias intact. (6.5.27 vs 6.5.21 was `ganita` +146, `syscalls_windows`
-+58, `syscalls_macos` +25, `syscalls_aarch64_linux` +19, `net` +8; and for
-reference, 6.5.20 vs 6.4.66 was the larger step: `bayan`
-+774, `syscalls_x86_64_agnos` +442, `alloc` +241, `io` +203, `vec` +187,
-`bench` +185, …) As of 2.3.0 abaco calls the **canonical
-`bayan_*` API directly** — no longer the deprecated back-compat aliases:
+adjusted accordingly at 2.2.5, and no toolchain since has re-batched: all 18
+declared modules still exist and the bundles only grow internally. At 6.6.12
+against 6.6.2 no public symbol left any of them; bayan 1.5.5 → 1.5.9 and ganita
+1.2.4 → 1.2.9 (both current — ganita 1.2.10 changes no source), and `chrono` and
+`alloc_cx` join the vendored set transitively. The 36 vendored files are pinned
+in `cyrius.lock`. As of 2.3.0 abaco calls the **canonical `bayan_*` API
+directly**, not the deprecated back-compat aliases:
 
 | Was (6.0.x) | Now (6.2.x) | Canonical symbols abaco uses |
 |-------------|-------------|------------------------------|
@@ -43,42 +37,49 @@ reference, 6.5.20 vs 6.4.66 was the larger step: `bayan`
 | extended `math` | `ganita` (math bundle) | `f64_{a,}sinh/cosh/tanh`, `f64_asin/acos`, `f64_atan2`, `fibonacci`, `binomial` |
 | `math` (slim) | `math` | basics: `f64_sin/cos/sqrt/log`, constants, aarch64 polyfills (`f64_pow` lives in `ganita`, not here) |
 
-**6.5.x compiler builtins.** `f64_round` is now a *reserved* builtin (ties to
-**even**), so a library may no longer define it. It was already an intrinsic
-well before that: building the 2.3.3 tree against 6.2.11, 6.3.10 and 6.4.66 all
-answer `round(2.5) = 2`, meaning the intrinsic had been silently shadowing
-abaco's hand-rolled `fn f64_round` — which said ties-*away*-from-zero — for four
-releases, with no diagnostic. 6.5.x reserving the name is what made the
-divergence visible. abaco's version is now `f64_round_half_away` (ties **away
-from zero**, the documented and cited behaviour) and the two modes are pinned
-apart by `test_round_ties_away`. 6.5.x also enforces **call arity**, so
-`print(msg)` must be `print(msg, len)`.
+**Toolchain semantics abaco depends on** (the first four pinned by tests; the network one is not exercised):
+
+- `f64_round` is a reserved builtin (6.5.x) that ties to **even**; abaco's
+  ties-away-from-zero rounding is `f64_round_half_away`. Call arity is enforced.
+- `f64_to` saturates out of range from 6.6.8 (NaN → 0, ≥ 2^63 → `i64_MAX`,
+  < -2^63 → `i64_MIN`); x86 answered `i64_MIN` for all of them before, aarch64
+  always saturated. abaco never relies on either: user-controlled values go
+  through `abaco_f64_to_i64`.
+- `f64_neg` is a sign-bit flip from 6.6.8 (x86 computed `0 - x`), so `-0` in an
+  expression is negative zero.
+- x86 `f64_sin` / `f64_cos` are fdlibm ports within 1 ulp from 6.6.9, not x87
+  `fsin` / `fcos` (which returned |x| ≥ 2^63 unchanged).
+- `http_get` resolves names and connects from 6.6.9 (before, it reached no host);
+  there is still no TLS, so `https://` base URLs fail before any lookup.
 
 ## Artifacts
 
 | Artifact | Size | Notes |
 |----------|------|-------|
-| `build/abaco` | ~620 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF (619,576 B at 2.4.4/6.5.35, 619,480 B at 2.4.3; was 403,968 B at 2.4.2/6.5.27, 353,408 B at 2.3.3/6.4.66). The +211 KB is the bayan 1.4.1 → 1.5.2 fold, not abaco: unreachable fns 1239 → 1609, NOPed 323,339 → 475,575 B, and all 367 functions bayan gained land in the dead list. A 2×2 of compiler × stdlib splits it as stdlib **+219,608 B**, compiler **−8,192 B** (6.5.35's codegen is a net size win), with the `eval_pow` fix the remaining 4,096 B |
-| `dist/abaco.cyr` | ~153 KB (~3.97k lines) | Committed consumer bundle. 6.2.x distlib is profile-based: `cyrius distlib abaco` → `dist/abaco-abaco.cyr`, renamed to `dist/abaco.cyr`. **2.4.4: 156,430 B / 4,027 lines** — adds the `eval_pow` zero-base and huge-exponent rows and the rewritten `Value_to_latex`; **not** byte-identical to 2.4.3. (2.4.3: 141,990 B / 3,759 lines) — carries the `eval_pow` domain + non-finite fixes, so **not** byte-identical to 2.4.2 and consumers must re-vendor for *behaviour*. The `dist/abaco-abaco.deps` sidecar distlib now also emits is gitignored, not shipped (its name can never match the consumer path, and its 12-leaf list prunes `net`, which `lib/http.cyr` needs). 2.4.2: 137,343 B / 3,674 lines — carries the `f64_round_half_away` rename, the evaluator bound-check fixes and string-aware JSON scanning; **not** byte-identical to 2.4.1 (consumers must re-vendor, and a consumer calling the bundle's old `f64_round` now silently gets the ties-to-even builtin) |
+| `build/abaco` | ~77 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF. **76,992 B** at 2.4.7/6.6.12 (79,032 B at 2.4.6/6.6.2; 619,576 B at 2.4.4/6.5.35 — 6.6.x DCE drops dead code instead of NOP-filling it) |
+| `dist/abaco.cyr` | ~163 KB (~4.1k lines) | Committed consumer bundle, regenerated by a bare `cyrius distlib` (flat `[lib]` since 2.4.6). **2.4.7: 163,347 B / 4,141 lines**, not byte-identical to 2.4.6 (156,333 B / 4,023 lines). The `dist/abaco.deps` sidecar distlib also writes is gitignored — README.md's stdlib list is the contract; shipping the sidecar is an open roadmap item |
+| `cyrius.lock` | 37 lines | Committed. Hashes of the 36 vendored stdlib files plus the `cyrius 6.6.12` trailer; `cyrius deps --verify` checks `lib/` against it |
 
 ## Tests
 
-**813 asserts, 0 failures** across 7 `.tcyr` files:
+**909 asserts, 0 failures** across 7 `.tcyr` files:
 
 | Suite | Asserts |
 |-------|---------|
-| `test_ai` | 118 |
-| `test_dsp` | 109 |
-| `test_eval` | 379 |
+| `test_ai` | 129 |
+| `test_dsp` | 112 |
+| `test_eval` | 457 |
 | `test_integration` | 51 |
-| `test_ntheory` | 112 |
+| `test_ntheory` | 116 |
 | `test_simd` | 10 |
 | `test_units` | 34 |
 
 - Fuzz harnesses: **4** (`fuzz/fuzz_{eval,ntheory,units,ai}.fcyr`) — clean at 20,000 iters
-- Benchmarks: 3 (`bench`, `bench_eval`, `bench_units`)
-- fmt / lint / vet: clean — fmt now checked across `tests/`, `benches/` and
-  `fuzz/` as well as `src/`, which is how three long-dirty files were found
+- Benchmarks: 3 (`bench`, `bench_eval`, `bench_units`). ⚠ `bench_units` rows
+  swing up to 5× between processes (per-process hash seeding) — compare medians
+  over many runs, never one row from one run. `bench-history.csv` rows either side
+  of 2.4.7 are not strictly comparable: 6.6.x reworked `lib/bench.cyr`'s statistics.
+- fmt / lint / vet: clean across `src/`, `tests/`, `benches/` and `fuzz/`
 
 ## Library surface
 
@@ -425,7 +426,7 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
     recover 2.4.3's 1.53x Miller-Rabin regression. Outward-facing; left to the
     maintainer.
 
-- **2.4.5** (this release) is **CI-only**, and exists because 2.4.4 broke CI.
+- **2.4.5** is **CI-only**, and exists because 2.4.4 broke CI.
   - ⛔ **The 2.4.4 security-scan hardening failed on every clean run.** To
     inspect grep's exit status it split the step's `grep | awk` pipeline into
     `hits=$(grep ...); rc=$?` — but grep exits **1 when it finds nothing**,
@@ -450,6 +451,21 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
   - `/bench-results.txt` gitignored — the `Bench (non-fatal)` step tees there in
     the repo root, dirtying a local tree and liable to ride a `git add -A`. Same
     class as the `dist/*.deps` sidecar ignored at 2.4.3.
+
+- **2.4.6** pins **Cyrius 6.6.2**: the `Result` value form, and a flat `[lib]`
+  so a bare `cyrius distlib` writes `dist/abaco.cyr`.
+
+- **2.4.7** (this release) pins **Cyrius 6.6.12** — see CHANGELOG. The bump
+  broke the bench build (a `_bench_round` arity clash with `lib/bench.cyr`) and,
+  silently, every integer-domain check in the evaluator (6.6.8 `f64_to`
+  saturation); both fixed and discrimination-proven. `gcd` / `lcm` / `binomial`
+  gained a domain check, and the currency cache's loopback exception is no longer
+  a prefix match (6.6.9's working `http_get` made that live). A 17,597-record
+  differential corpus shows no other change against 2.4.6 on the 6.6.2 pin.
+  `cyrius.cyml` holds data only; its durable rules moved to `CLAUDE.md`.
+  Found in passing and **filed, not fixed** (roadmap): `DSP_C0_FREQ` encodes
+  16.703125 Hz, so pitch class / octave run 0.368 semitone flat; `binomial`
+  leaks ganita's -1 sentinel; `lcm` wraps on overflow.
 
 - **2.3.x still open** (external — needs consumer repos, not actionable from
   abaco alone): wire the first real consumers (Abacus, dhvani) to

@@ -949,7 +949,8 @@ fn _ccy_load_body(c, body, len) {
 # Validate a base URL. Enforces two invariants from the 2026-04-14 audit:
 #   (a) HTTPS required — a plaintext HTTP/1.0 fetch is MITM-rewritable and
 #       would silently poison rates (audit §4.3). Exception: http://localhost
-#       and http://127.0.0.1 are accepted for local hoosh dev / testing.
+#       and http://127.0.0.1 are accepted for local hoosh dev / testing, as
+#       the whole host only.
 #   (b) No control bytes — `lib/http.cyr::_http_build_request` splices the
 #       URL straight into the wire format, so CR/LF or other < 0x20 bytes
 #       would land as header injection (CVE-2019-9741 pattern, audit §4.1).
@@ -968,10 +969,27 @@ fn _ccy_validate_url(url) {
     }
     # Accept https://
     if (_nl_starts_with(url, "https://") == 1) { return 0; }
-    # Accept http://localhost, http://127.0.0.1 for local development.
-    if (_nl_starts_with(url, "http://localhost") == 1) { return 0; }
-    if (_nl_starts_with(url, "http://127.0.0.1") == 1) { return 0; }
+    # Accept http://localhost, http://127.0.0.1 for local development — as the
+    # WHOLE host. Through 2.4.6 this was a bare prefix test, so remote names
+    # that merely start with a loopback one passed too: http://localhost.<any
+    # domain>, http://127.0.0.1.<any domain>. That was inert while lib/http.cyr
+    # could reach no host at all; from Cyrius 6.6.9 http_get resolves names and
+    # connects, which made it a plaintext fetch from a remote server — exactly
+    # the rate poisoning (a) is here to stop (CHANGELOG 2.4.7).
+    if (_ccy_is_host(url, "http://localhost") == 1) { return 0; }
+    if (_ccy_is_host(url, "http://127.0.0.1") == 1) { return 0; }
     return AI_ERR_HTTP;
+}
+
+# 1 when `url` is `prefix` followed by the end, a port (`:`) or a path (`/`) —
+# that is, when `prefix` names the whole host rather than the start of one.
+fn _ccy_is_host(url, prefix) {
+    if (_nl_starts_with(url, prefix) == 0) { return 0; }
+    var c = load8(url + strlen(prefix));
+    if (c == 0) { return 1; }
+    if (c == 58) { return 1; }   # ':' — a port
+    if (c == 47) { return 1; }   # '/' — a path
+    return 0;
 }
 
 # Fetch live rates from the cache's base URL. Hits <base_url>/rates and parses

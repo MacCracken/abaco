@@ -162,8 +162,8 @@ fn test_value_to_latex() {
     assert_streq(Value_to_latex(Value_float(f64_from(0 - 3))), "-3.0", "-3.0 stays N.0");
     assert_streq(Value_to_latex(Value_integer(42)), "42", "integers unchanged");
 
-    # Non-finite. f64_to saturates to i64_MIN for all three, which fmt_int_buf
-    # printed verbatim as -9223372036854775808.
+    # Non-finite. f64_to gave i64_MIN for all three on x86 before Cyrius 6.6.8,
+    # which fmt_int_buf printed verbatim as -9223372036854775808.
     assert_streq(Value_to_latex(Value_float(0x7FF0000000000000)), "{\\infty}",
       "+Inf is {\\infty} (was -9223372036854775808)");
     assert_streq(Value_to_latex(Value_float(0xFFF0000000000000)), "{-\\infty}",

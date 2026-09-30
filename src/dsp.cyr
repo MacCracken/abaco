@@ -413,14 +413,21 @@ fn sinc_kernel(x, half_width) {
 var DSP_C0_FREQ = 0x4030_B400_0000_0000;   # 16.3516 Hz — MIDI 12
 
 # Internal: round(12 * log2(freq / C0)) — semitones above C0 as an integer.
-# Returns -1 when freq <= 0.
+# Returns -1 unless freq is positive and finite (NaN fails the > 0 test); a
+# note below C0 comes back negative, which the callers treat the same way.
 fn _freq_semis_from_c0(freq) {
     if (f64_gt(freq, f64_from(0)) == 0) { return 0 - 1; }
     var semis = f64_mul(DSP_SEMITONES, f64_log2(f64_div(freq, DSP_C0_FREQ)));
-    return f64_to(f64_round_half_away(semis));
+    # Only freq = +Inf leaves i64 range (DBL_MAX is ~12,240 semitones up).
+    # Checked because Cyrius 6.6.8+ saturates it to i64_MAX — pitch class 7,
+    # octave 768614336404564650 — where x86 before it gave i64_MIN, so -1.
+    var st, n = abaco_f64_to_i64(f64_round_half_away(semis));
+    if (is_ok(st) == 0) { return 0 - 1; }
+    return n;
 }
 
-# freq_to_pitch_class: 0..11 for C..B, or -1 when freq <= 0.
+# freq_to_pitch_class: 0..11 for C..B, or -1 when freq is not a positive finite
+# number or rounds to a note below C0.
 fn freq_to_pitch_class(freq) {
     var n = _freq_semis_from_c0(freq);
     if (n < 0) { return 0 - 1; }
@@ -429,7 +436,8 @@ fn freq_to_pitch_class(freq) {
     return pc;
 }
 
-# freq_to_octave: 0..N indicating which octave above C0 the freq falls in.
+# freq_to_octave: 0..N indicating which octave above C0 the freq falls in, or
+# -1 when freq is not a positive finite number or rounds to a note below C0.
 fn freq_to_octave(freq) {
     var n = _freq_semis_from_c0(freq);
     if (n < 0) { return 0 - 1; }

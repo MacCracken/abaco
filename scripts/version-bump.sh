@@ -107,8 +107,7 @@ echo ""
 echo "Still manual:"
 echo "  - Fill the CHANGELOG.md [$NEW] Changed/Added/Fixed sections"
 echo "  - docs/development/{state,roadmap}.md — bump version + add a release note"
-echo "  - Regenerate the bundle if source changed:"
-echo "      cyrius distlib abaco && mv dist/abaco-abaco.cyr dist/abaco.cyr"
+echo "  - Regenerate the bundle (its header carries the version): cyrius distlib"
 if [ "$OLD_MINOR" != "$NEW_MINOR" ]; then
     echo "  - SECURITY.md supported-versions table (minor bump $OLD_MINOR -> $NEW_MINOR)"
 fi

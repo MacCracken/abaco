@@ -392,6 +392,33 @@ fn test_security_fetch_accepts_localhost() {
     return 0;
 }
 
+# 2.4.7: the loopback exception was a bare prefix test, so a remote name that
+# only STARTS with a loopback one passed as local. Inert while lib/http.cyr
+# could reach no host; Cyrius 6.6.9's http_get resolves names and connects, so
+# http://localhost.<domain> became a plaintext fetch from a remote server.
+# Every "was accepted" row below is refused now.
+fn test_security_loopback_must_be_whole_host() {
+    assert_eq(_ccy_validate_url("http://localhost.example.net"), AI_ERR_HTTP,
+      "localhost.<domain> rejected (was accepted)");
+    assert_eq(_ccy_validate_url("http://localhost.example.net/rates"), AI_ERR_HTTP,
+      "localhost.<domain>/path rejected (was accepted)");
+    assert_eq(_ccy_validate_url("http://127.0.0.1.example.net"), AI_ERR_HTTP,
+      "127.0.0.1.<domain> rejected (was accepted)");
+    assert_eq(_ccy_validate_url("http://localhostile.example"), AI_ERR_HTTP,
+      "localhost<more> rejected (was accepted)");
+    assert_eq(_ccy_validate_url("http://127.0.0.10"), AI_ERR_HTTP,
+      "127.0.0.1<digit> rejected (was accepted)");
+    assert_eq(_ccy_validate_url("http://localhost@example.net"), AI_ERR_HTTP,
+      "localhost@<host> rejected (was accepted)");
+    # Loopback as the whole host still passes, with or without port and path.
+    assert_eq(_ccy_validate_url("http://localhost"), 0, "bare localhost ok");
+    assert_eq(_ccy_validate_url("http://localhost/"), 0, "localhost/ ok");
+    assert_eq(_ccy_validate_url("http://localhost:8088/rates"), 0, "localhost:port/path ok");
+    assert_eq(_ccy_validate_url("http://127.0.0.1"), 0, "bare 127.0.0.1 ok");
+    assert_eq(_ccy_validate_url("http://127.0.0.1/rates"), 0, "127.0.0.1/path ok");
+    return 0;
+}
+
 # 2.3.4: braces inside a field are legal JSON and need no escaping, so
 # `to_json` emits them verbatim — but `from_json` used to find object
 # boundaries by counting raw braces, ignoring string context. One '{' or '}'
@@ -575,6 +602,7 @@ fn main() {
     test_security_fetch_rejects_plaintext();
     test_security_fetch_rejects_crlf();
     test_security_fetch_accepts_localhost();
+    test_security_loopback_must_be_whole_host();
     test_security_rate_sanity_rejects_nan();
     test_security_rate_sanity_rejects_negative();
     test_security_rate_sanity_all_bad();

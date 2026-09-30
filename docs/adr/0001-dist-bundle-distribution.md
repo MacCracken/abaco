@@ -33,6 +33,10 @@ depend via:
 > writes `dist/abaco-abaco.cyr` (`<pkg>-<profile>.cyr`, no override), renamed to
 > the committed consumer path `dist/abaco.cyr`. The decision (one committed
 > bundle as the stable contract) is unchanged.
+>
+> **Mechanism update (2.4.6, Cyrius 6.6.2):** back to a flat `[lib]` — bare
+> `cyrius distlib` writes `dist/abaco.cyr` directly, no profile and no rename.
+> The decision is unchanged.
 
 ```toml
 [deps.abaco]

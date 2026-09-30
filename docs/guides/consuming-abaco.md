@@ -12,7 +12,7 @@ In your project's `cyrius.cyml`:
 ```toml
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.4.6"                 # pin to a released tag, never a branch
+tag = "2.4.7"                 # pin to a released tag, never a branch
 modules = ["dist/abaco.cyr"]  # the bundle is the only file you name
 ```
 
@@ -82,6 +82,29 @@ fn main() {
 Bump the `tag` and run `cyrius deps`. abaco follows SemVer (post-1.0): patch and
 minor bumps are source-compatible; a major bump documents breaking changes in
 [`CHANGELOG.md`](../../CHANGELOG.md) with a migration section.
+
+### 2.4.7 — re-vendor, whatever your Cyrius pin
+
+The 2.4.6 bundle gives wrong answers — and can hang or trap — when you compile
+it with Cyrius 6.6.8 or later, because that toolchain changed what `f64_to`
+returns for NaN, ±Inf and |x| ≥ 2^63: it saturates now, where x86 used to
+answer `i64_MIN` for all of them. `nextprime(1e300)` never returns,
+`lcm(-1e300, 1e300)` dies with SIGFPE, `(-1)^(2^63)` is -1 and `(sqrt(-1))!` is
+1. 2.4.7 is correct under either convention. On aarch64, where `f64_to` has
+always saturated, these were live at every pin.
+
+One behaviour change to handle: `gcd`, `lcm`, `binomial` and `choose` now set
+`ABACO_ERR_MATH` for a NaN, ±Inf or out-of-range argument (|x| ≥ 2^63, which
+for `gcd` / `lcm` includes -(2^63)), where they used to return garbage with no
+error. In-range results are unchanged. And `CurrencyCache_fetch` refuses a base
+URL whose host only *starts* with `localhost` or `127.0.0.1`
+(`http://localhost.example.net`) with `AI_ERR_HTTP`.
+
+Two further changes come from the toolchain, not the bundle, so they follow
+your own pin: from Cyrius 6.6.9, `sin` / `cos` / `tan` are within 1 ulp for
+every argument (x86 used to answer `sin(1e300) = 1e300`), and from 6.6.8 unary
+minus on zero gives -0, so `(-0)^(-1)` is -Inf as C99 requires. Pin 6.6.12 to
+match the toolchain abaco's own gate runs.
 
 ### 2.4.0 — larger expressions, correctly-rounded literals
 

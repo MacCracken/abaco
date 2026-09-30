@@ -435,6 +435,39 @@ Maintenance patch. No abaco behaviour change, no API change:
 - [x] No source change; suite **813 asserts**, fuzz 4/4, fmt/lint/vet clean;
       `dist/abaco.cyr` byte-identical to 2.4.4 bar the version header
 
+### 2.4.6 — Cyrius 6.6.2; the `Result` value form ✅ (2026-09-11)
+
+- [x] Pin 6.5.35 → 6.6.2; the four `Result` sites migrated to `var t, v = f()`
+- [x] `[lib.abaco]` → flat `[lib]`: a bare `cyrius distlib` writes
+      `dist/abaco.cyr`, no rename. CI and release follow
+- [x] `prevprime`'s `Result` arms pinned at eval level; suite 813 → 827
+
+### 2.4.7 — Cyrius 6.6.12 ✅ (2026-09-30)
+
+- [x] Pin 6.6.2 → 6.6.12; stdlib re-vendored (bayan 1.5.9, ganita 1.2.9 — no
+      symbol removed from any declared module); `cyrius.lock` committed
+- [x] The 6.6.6 pre-flight held: the SIMD buffer-form intrinsics and the six
+      pair-returning fns in `src/eval.cyr` compile clean under 6.6.6's new
+      checks, and the double-double parse path is bit-identical to the 6.6.2
+      build over 3,000 random literals (part of the 17,597-record corpus below)
+- [x] ⛔ **6.6.8 `f64_to` saturation broke every integer-domain check** —
+      `nextprime(1e300)` hung, `lcm(-1e300, 1e300)` took SIGFPE,
+      `(-1)^(2^63)` = -1, `2^63` typed as INTEGER 9223372036854775807, NaN
+      answered by `factorial` / `nextprime` / `totient` / `fib`. Closed by
+      `abaco_f64_to_i64`, correct under either convention
+- [x] `gcd` / `lcm` / `binomial` domain check (NaN, ±Inf, |x| ≥ 2^63 →
+      `ABACO_ERR_MATH`); `lcm` takes magnitudes like `gcd`, which also closes a
+      pre-existing `lcm(-(2^63), 5)` SIGFPE present on every toolchain
+- [x] Currency-cache loopback exception made whole-host
+      (`http://localhost.<domain>` passed as local; live since 6.6.9's
+      `http_get` connects). `fuzz_ai` invariant added
+- [x] `benches/bench.bcyr` `_bench_round` arity clash with `lib/bench.cyr`
+- [x] `cyrius.cyml` reduced to data; its durable rules moved to `CLAUDE.md`;
+      stale `distlib abaco && mv` and "one path" guidance swept
+- [x] Behaviour-preserving, measured: a 17,597-record differential corpus is
+      byte-identical to 2.4.6 on the 6.6.2 pin bar the new domain errors.
+      Suite 827 → **909**; fuzz 4/4 at 20,000; A/B bench geomean ×0.97
+
 ### Still open
 
 > The two residuals the 2.3.5 fix audit left open were closed in 2.4.0.
@@ -450,47 +483,27 @@ Maintenance patch. No abaco behaviour change, no API change:
 - [ ] Standardize AGNOS projects on abaco for shared math
 - [ ] DSP expansion as consumer needs surface (filters, additional windows)
 - [ ] `lib/tls.cyr` integration for the currency cache once the stdlib TLS API
-      stabilizes (replaces the plaintext `http_get` path)
-
-## Moving the cyrius pin to 6.6.6
-
-Current pin: `cyrius = "6.6.2"` (`cyrius.cyml`). Nothing needs to change first.
-
-Two of 6.6.6's new compile errors are the ones worth checking here, because abaco is the only
-repo in this group that uses both SIMD and multi-return — and neither fires:
-
-- **SIMD.** All 21 intrinsic uses in `src/dsp.cyr` (lines 197-254: `f64v_add`, `f64v_sub`,
-  `f64v_mul`, `f64v_div`, `f64v_sqrt`, `f64v_abs`, `f64v_fmadd`) are the **buffer form**,
-  `f64v_op(dst, a, b, n)`. No function returns a SIMD vector and there is no vector-typed
-  parameter or `var` declaration, so "a SIMD-returning fn returning anything else" has no
-  sites.
-- **Pair returns.** `src/eval.cyr` has six multi-return functions — `_two_product` (`:259`),
-  `_dd_mul_d` (`:273`), `_dd_renorm` (`:283`), `_dd_pow10` (`:294`), `_dd_split_mant` (`:340`)
-  and `parse_number` (`:390`) — declared `: (f64, f64)` or `: (f64, f64, i64)`. 6.6.6 refuses
-  a pair-returning fn that returns anything but a same-shaped pair, so this is exactly the
-  class the gate targets. Every one of them returns a same-shaped tuple; the call sites all
-  destructure (`var p, e = _two_product(hi, d)`) with matching arity. Clean.
-
-Everything else checked and empty:
-
-- **No Windows exposure** — no `CYRIUS_TARGET_*` in `src/`, CI is `ubuntu-latest`,
-  `release.yml` declares no `windows-*` job — and no `O_APPEND` / `O_TRUNC` outside the
-  vendored `lib/`. The single write is `file_write_all` at `src/ai.cyr:623`. Item 1 is a
-  non-event here.
-- No `async fn`, no `operator` fn, no struct- or vector-typed parameter or `var` declaration.
-  The six structs (`Evaluator`, `UnitRegistry`, `Value`, `Unit`, `ConversionResult`,
-  `Currency`) are accessor-style over heap offsets and are never passed or assigned by value,
-  so item 5's by-value-struct-param deep copy is a no-op.
-- No top-level bare `{` blocks (item 4), no duplicated global declarations (item 6), no
-  `regression_*` call sites (item 8), and no own `vec_*` function colliding with the 14 names
-  `lib/vec.cyr` exports, so the new transitive `lib/assert.cyr` → `lib/vec.cyr` include is
-  inert (item 9).
-- Arity and `: cstring` scans over the repo's own sources: clean.
-
-Note this repo has both a top-level `ROADMAP.md` and this file; this note is in
-`docs/development/roadmap.md`.
-
-After bumping, verify: the full `.tcyr` suite per-file, with particular attention to the
-double-double evaluator in `src/eval.cyr` — a numeric comparison of its results against a
-6.6.2-built binary is the cheapest way to confirm the pair-return paths still carry both
-halves.
+      stabilizes (replaces the plaintext `http_get` path). Since Cyrius 6.6.9
+      `http_get` really connects, so the loopback dev path works; an `https://`
+      base URL still fails before any lookup, because there is no TLS
+- [ ] ⛔ **`DSP_C0_FREQ` is mis-encoded** — `0x4030_B400_0000_0000` is
+      16.703125 Hz, not the 16.3516 Hz its comment and `docs/sources.md` give
+      (the correct bits are `0x4030_5A02_50C2_B956`, 440 / 2^(57/12)). Every
+      `freq_to_pitch_class` / `freq_to_octave` result is computed 0.368
+      semitone flat, so a tone ~0.13 semitone flat of a note lands on the note
+      below (435 Hz reads as G#). Present since the Cyrius port; the same
+      failure class as the 2.3.2 dB constants, and the only mismatch among the
+      crate's hex-encoded f64 constants. Needs a regression test at note
+      boundaries, and a re-vendor note for dhvani
+- [ ] `binomial` returns ganita's -1 error sentinel as a value —
+      `binomial(-1, 2)` and the overflowing `binomial(100, 50)` answer -1 with no
+      evaluator error. Should be `ABACO_ERR_MATH`. So does `binomial(66, 33)`,
+      whose result (~7.2e18) fits in i64 but whose running product does not —
+      an upstream ganita limit worth filing alongside
+- [ ] `lcm` wraps silently when the product overflows i64 —
+      `lcm(4611686018427387904, 3)` answers 2^62. Should be `ABACO_ERR_MATH`
+- [ ] Decide whether to commit the `dist/abaco.deps` sidecar. Since 2.4.6 its
+      name is exactly what a consumer's `cyrius deps` reads, but it lists every
+      `[deps].stdlib` module, including the test / bench-only `assert`, `bench`
+      and `args`; README.md's list is the contract today, and CI can move to
+      `distlib --check` only once the sidecar is committed

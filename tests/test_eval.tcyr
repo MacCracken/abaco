@@ -777,10 +777,10 @@ fn test_pow_negative_base_fractional_exponent() {
 # Post-2.4.2: eval_pow's non-integer branch answered NaN for EVERY non-finite
 # operand, with eval_err = NONE, where C99 Annex F.10.4.4 / IEEE 754-2019 §9.2
 # require finite infinities or zeros. Root cause: the branch computes
-# exp2(exp · log2(|base|)), f64_exp2 returns NaN for any non-finite argument in
-# this toolchain, and f64_to saturates to i64_MIN for +Inf/-Inf/NaN alike — so
-# no non-finite exponent ever survives the is_int round-trip onto the integer
-# path, where 2.3.4's square-and-multiply already handles Inf and 0 correctly.
+# exp2(exp · log2(|base|)), f64_exp2 returned NaN for any non-finite argument
+# (through Cyrius 6.6.0), and no non-finite exponent ever passes the is_int
+# test onto the integer path, where 2.3.4's square-and-multiply already handles
+# Inf and 0 correctly.
 # Same fact as the 2.3.4 (±Inf)^n regression (docs/audit/2026-08-13-fix-audit.md
 # R-1), which binary exponentiation fixed for integer exponents only.
 #
@@ -1024,9 +1024,9 @@ fn test_pow_zero_base() {
     assert_eq(Evaluator_eval(e, "0^0.5"), 0, "0^0.5 = +0, unchanged");
     assert_eq(Evaluator_eval(e, "0^0"), one, "0^0 = 1, the row ahead of all of these");
 
-    # -0 carries its sign through the ODD-integer rows only. Unreachable from
-    # the tokenizer (a literal "-0" parses as 0 - 0 = +0), so drive eval_pow
-    # directly with the bit pattern.
+    # -0 carries its sign through the ODD-integer rows only. Driven by bit
+    # pattern: until Cyrius 6.6.8 unary minus computed 0 - x, so "-0" in an
+    # expression was +0. test_unary_minus_zero pins the text path.
     assert_eq(eval_pow(nzero, f64_from(0 - 3)), ninf, "(-0)^-3 = -Inf, odd carries the sign");
     assert_eq(eval_pow(nzero, f64_from(0 - 2)), inf, "(-0)^-2 = +Inf, even does not");
     assert_eq(eval_pow(nzero, f64_from(3)), nzero, "(-0)^3 = -0, odd carries the sign");
@@ -1040,7 +1040,7 @@ fn test_pow_zero_base() {
 
     # C99's NaN row. The zero-base block returns before eval_pow's general NaN
     # rows, so without an explicit test here a NaN exponent passed every check
-    # inside it (f64_to saturates, and f64_lt(NaN, 0) is 0 because the compare
+    # inside it (NaN is no integer, and f64_lt(NaN, 0) is 0 because the compare
     # is unordered) and landed on `return zero` — silently turning NaN into an
     # exact +0. Reachable from ordinary text, hence the last two.
     var qn = 0x7FF8000000000000;
@@ -1061,7 +1061,7 @@ fn test_pow_huge_integer_exponent() {
     var inf = 0x7FF0000000000000;
     var one = 0x3FF0000000000000;
 
-    # |y| >= 2^63 saturates f64_to, so the is_int round-trip fails and these
+    # |y| >= 2^63 is outside i64, so eval_pow's is_int test fails and these
     # reach the non-integer branch — but every f64 at or above 2^53 has an ulp
     # of 2 or more and is therefore an EVEN INTEGER. Through 2.4.3 the
     # negative-base NaN guard claimed them and (0-2)^1e300 answered NaN.
@@ -1171,6 +1171,152 @@ fn test_transcendental_coverage() {
     return 0;
 }
 
+# Cyrius 6.6.8 made f64_to saturate — NaN -> 0, x >= 2^63 -> i64_MAX,
+# x < -2^63 -> i64_MIN — where x86 had answered i64_MIN for all of them, and
+# the evaluator used that i64_MIN as its integer-domain check. Against the
+# 2.4.6 source on the 6.6.12 pin every "was" row below fails: a wrong sign or
+# value, a missing ABACO_ERR_MATH, SIGFPE, or no return at all. The checked
+# conversion closes them under either convention (CHANGELOG 2.4.7).
+
+# 1 when abaco_f64_to_i64 refuses x.
+fn conv_refused(x) {
+    var t, v = abaco_f64_to_i64(x);
+    return is_err_result(t);
+}
+
+# What abaco_f64_to_i64 converts x to; callers pass in-range x only.
+fn conv_value(x) {
+    var t, v = abaco_f64_to_i64(x);
+    return v;
+}
+
+# Evaluate expr on a fresh evaluator; assert it raised ABACO_ERR_MATH.
+fn ev_math_err(expr, name) {
+    var e = Evaluator_new();
+    Evaluator_eval(e, expr);
+    assert_eq(eval_err(e), ABACO_ERR_MATH, name);
+    return 0;
+}
+
+fn test_checked_int_conversion() {
+    var two63 = 0x43E0000000000000;
+    var ntwo63 = 0xC3E0000000000000;
+
+    # The conversion itself, at each edge of [-2^63, 2^63).
+    assert_eq(conv_refused(ntwo63), 0, "-2^63 converts: i64_MIN is representable");
+    assert_eq(conv_value(ntwo63), ABACO_I64_MIN, "-2^63 is exactly i64_MIN");
+    assert_eq(conv_refused(0xC3E0000000000001), 1, "the f64 below -2^63 is refused");
+    assert_eq(conv_refused(two63), 1, "+2^63 is refused (6.6.8+ f64_to: i64_MAX)");
+    assert_eq(conv_value(0x43DFFFFFFFFFFFFF), 9223372036854774784,
+      "the largest f64 below 2^63 converts exactly");
+    assert_eq(conv_refused(0x7FF8000000000000), 1, "NaN is refused (6.6.8+ f64_to: 0)");
+    assert_eq(conv_refused(0x7FF0000000000000), 1, "+Inf is refused");
+    assert_eq(conv_refused(0xFFF0000000000000), 1, "-Inf is refused");
+    assert_eq(conv_value(f64_div(f64_from(0 - 29), f64_from(10))), 0 - 2,
+      "-2.9 truncates toward zero");
+    assert_eq(conv_value(0x8000000000000000), 0, "-0 converts to 0");
+
+    # eval_pow at exactly +2^63, an EVEN integer. 6.6.8+ saturated it to the
+    # ODD i64_MAX, which f64_from rounds back to 2^63, so the is_int round-trip
+    # passed with the wrong parity.
+    var e = Evaluator_new();
+    assert_eq(Evaluator_eval(e, "(0-1)^9223372036854775808"), 0x3FF0000000000000,
+      "(-1)^(2^63) = +1 (was -1)");
+    assert_eq(Evaluator_eval(e, "(0-2)^9223372036854775808"), 0x7FF0000000000000,
+      "(-2)^(2^63) = +Inf (was -Inf)");
+    assert_eq(Evaluator_eval(e, "(0-0.5)^9223372036854775808"), 0,
+      "(-0.5)^(2^63) = +0 (was -0)");
+    assert_eq(eval_pow(0x8000000000000000, two63), 0, "(-0)^(2^63) = +0 (was -0)");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "none of them is an evaluator error");
+
+    # Integer typing at the i64 edges. 2^63 is not an i64 and came back as the
+    # INTEGER 9223372036854775807, off by one; -(2^63) is one, and stays one.
+    var v = Evaluator_eval_value(e, "2^63");
+    assert_eq(Value_tag(v), FLOAT, "2^63 is a FLOAT (was INTEGER 9223372036854775807)");
+    assert_eq(load64(v + 8), two63, "holding exactly 2^63");
+    v = Evaluator_eval_value(e, "0-9223372036854775808");
+    assert_eq(Value_tag(v), INTEGER, "-(2^63) is still an INTEGER");
+    assert_eq(load64(v + 8), ABACO_I64_MIN, "holding i64_MIN");
+
+    # NaN reached the integer-domain functions as 0, and was answered.
+    ev_math_err("(sqrt(0-1))!", "NaN! is a math error (was 1)");
+    ev_math_err("factorial(sqrt(0-1))", "factorial(NaN) is a math error (was 1)");
+    ev_math_err("nextprime(sqrt(0-1))", "nextprime(NaN) is a math error (was 2)");
+    ev_math_err("totient(sqrt(0-1))", "totient(NaN) is a math error (was 0)");
+    ev_math_err("fib(sqrt(0-1))", "fib(NaN) is a math error (was 0)");
+    # Huge arguments reached them as i64_MAX: prevprime answered 2^63, and
+    # nextprime overflowed n + 1 and searched the negative numbers forever.
+    ev_math_err("prevprime(1e300)", "prevprime(1e300) is a math error (was 2^63)");
+    ev_math_err("nextprime(1e300)", "nextprime(1e300) is a math error (never returned)");
+    ev_math_err("nextprime(9223372036854775808)",
+      "nextprime(2^63) is a math error (never returned)");
+    # isprime keeps its error-free 0 for anything that is not a prime integer.
+    e = Evaluator_new();
+    assert_eq(Evaluator_eval(e, "isprime(sqrt(0-1))"), 0, "isprime(NaN) = 0");
+    assert_eq(Evaluator_eval(e, "isprime(1e300)"), 0, "isprime(1e300) = 0");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "isprime raises no error");
+    return 0;
+}
+
+fn test_gcd_lcm_binomial_domain() {
+    # No domain check at all through 2.4.6, so out-of-range arguments answered
+    # garbage that moved with the toolchain, and some trapped.
+    ev_math_err("gcd(1e300, 6)", "gcd(1e300, 6) is a math error (was -2, then 1)");
+    ev_math_err("gcd(sqrt(0-1), 6)", "gcd(NaN, 6) is a math error (was -2, then 6)");
+    ev_math_err("lcm(0-1e300, 1e300)", "lcm(-1e300, 1e300) is a math error (SIGFPE on 6.6.8+)");
+    ev_math_err("binomial(10, 1e300)", "binomial(10, 1e300) is a math error (was -1, then 0)");
+    ev_math_err("choose(sqrt(0-1), 2)", "choose(NaN, 2) is a math error (was -1, then 1)");
+    # |x| = 2^63 is outside gcd/lcm's magnitude domain. This lcm trapped on
+    # EVERY toolchain: stdlib gcd(i64_MIN, 5) is -1, and i64_MIN / -1 is #DE.
+    ev_math_err("lcm(0-9223372036854775808, 5)", "lcm(-(2^63), 5) is a math error (was SIGFPE)");
+    ev_math_err("gcd(0-9223372036854775808, 5)",
+      "gcd(-(2^63), 5) is a math error (was -1 on x86)");
+    # In-domain answers are unchanged, signs included.
+    ev_int("gcd(0-12, 18)", 6, "gcd(-12, 18) = 6");
+    ev_int("lcm(0-4, 6)", 12, "lcm(-4, 6) = 12");
+    ev_int("lcm(4, 0-6)", 12, "lcm(4, -6) = 12");
+    ev_int("binomial(10, 3)", 120, "binomial(10, 3) = 120");
+    ev_int("gcd(9007199254740992, 6)", 2, "gcd(2^53, 6) = 2");
+    return 0;
+}
+
+# Cyrius 6.6.9 took x86 f64_sin / f64_cos off bare x87 fsin / fcos and onto
+# fdlibm ports within 1 ulp (Cyrius CHANGELOG [6.6.9]). x87 leaves an operand
+# with |x| >= 2^63 untouched, so on the 6.6.2 pin sin(1e300) answered 1e300 and
+# tan(1e300) answered 1, and its 66-bit pi put sin(pi) 1.6e11 ulp off. abaco
+# hands these straight to the builtins, so the fix is inherited; pinned here
+# against glibc libm — near_tight where the old answer was wildly off, exact
+# bits for sin(pi), whose value is ~1e-16.
+fn test_trig_large_arguments() {
+    near_tight(ev("sin(1e300)"), 0xBFEA2C16B010E385, "sin(1e300) (was 1e300)");
+    near_tight(ev("cos(1e300)"), 0xBFE2699022ADC4C1, "cos(1e300) (was 1e300)");
+    near_tight(ev("tan(1e300)"), 0x3FF6BE411F37AC77, "tan(1e300) (was 1)");
+    near_tight(ev("sin(1e19)"), 0xBFEDAA805F702A5C, "sin(1e19) (was 1e19)");
+    near_tight(ev("cos(9223372036854775808)"), 0x3F882AA375B3C33E, "cos(2^63) (was 2^63)");
+    near_tight(ev("sin(1.7976931348623157e308)"), 0x3F7452FC98B34E97,
+      "sin(DBL_MAX) (was DBL_MAX)");
+    assert_eq(ev("sin(pi)"), 0x3CA1A62633145C07, "sin(pi) is the double nearest sin(fl(pi))");
+    return 0;
+}
+
+# Cyrius 6.6.8 made x86 f64_neg a sign-bit flip (Cyrius CHANGELOG [6.6.8]). It
+# had computed 0 - x, so unary minus on zero gave +0 and "-0" in an expression
+# was positive. It is negative zero now, which puts C99 F.10.4.4's signed-zero
+# rows within reach of text: (-0)^-1 = -Inf, where the 6.6.2 pin said +Inf.
+fn test_unary_minus_zero() {
+    var e = Evaluator_new();
+    assert_eq(Evaluator_eval(e, "-0"), 0x8000000000000000, "-0 is negative zero (was +0)");
+    assert_eq(Evaluator_eval(e, "(-0)^(0-1)"), 0xFFF0000000000000, "(-0)^-1 = -Inf (was +Inf)");
+    assert_eq(Evaluator_eval(e, "(-0)^3"), 0x8000000000000000, "(-0)^3 = -0 (was +0)");
+    assert_eq(Evaluator_eval(e, "(-0)^2"), 0, "(-0)^2 = +0, even exponent");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "no evaluator error");
+    # Integer typing is unaffected: -0 still reads back as the INTEGER 0.
+    var v = Evaluator_eval_value(e, "-0");
+    assert_eq(Value_tag(v), INTEGER, "-0 is still the INTEGER 0");
+    assert_eq(load64(v + 8), 0, "holding 0");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco eval tests ===");
@@ -1206,6 +1352,10 @@ fn main() {
     test_zero_mantissa_and_range();
     test_top_of_range_literals();
     test_two_product_exact();
+    test_checked_int_conversion();
+    test_gcd_lcm_binomial_domain();
+    test_trig_large_arguments();
+    test_unary_minus_zero();
     # Propagate failure to the process exit code. assert_summary() RETURNS
     # _assert_fail; discarding it and returning 0 made a red suite exit 0, and
     # CI gates on the exit code — so failures shipped green (fixed 2.4.4).

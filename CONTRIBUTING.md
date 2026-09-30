@@ -5,12 +5,11 @@
 1. Fork the repository.
 2. Create a branch from `main`.
 3. Make your changes. Ensure:
-   - `cyrius test` — all 657+ assertions pass
-   - `for f in src/*.cyr; do cyrius lint "$f"; done` — clean, meaning **both**
-     `0 warnings` and `0 untracked deferrals` on every file. Lint takes one path
-     and silently ignores extra glob args, so `cyrius lint src/*.cyr` checks
-     `src/ai.cyr` alone. (Ignore `Type_method` PascalCase warnings; that
-     convention is intentional.)
+   - `cyrius test` — every assertion passes (current count in
+     `docs/development/state.md`)
+   - `cyrius lint src/*.cyr` — clean, meaning **both** `0 warnings` and
+     `0 untracked deferrals` on every file. (Ignore `Type_method` PascalCase
+     warnings; that convention is intentional.)
    - `./scripts/bench-history.sh` — no unexplained regressions
    - `./fuzz/run.sh` — all fuzz harnesses still pass
 4. Open a pull request to `main`.
