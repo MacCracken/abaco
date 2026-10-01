@@ -4,7 +4,9 @@
 > [`../../CLAUDE.md`](../../CLAUDE.md); forward plan in [`roadmap.md`](roadmap.md);
 > per-tag history in [`../../CHANGELOG.md`](../../CHANGELOG.md).
 
-**Last updated:** 2026-09-30 (2.4.10 — the abaco-side roadmap items. A wrong argument count is now **`ABACO_ERR_ARITY`** (was `UNKNOWN_FN`), and builtins dispatch on an id from one name lookup instead of a `streq` chain. Accuracy: `tan` is an fdlibm port (≤ 1 ulp; `sin/cos` was up to 2), `n!` is exact to 170, `mean` is correctly rounded and `stddev` cannot overflow, literals round once (subnormals and 19-36 digits), and the windows are bit-exact symmetric. Units: `short_ton` / `long_ton`; below absolute zero is `UERR_CONVERT`. CI gains an **aarch64 (qemu) lane**. Suite 1704 → **1801**. `dist/abaco.cyr` **not** byte-identical to 2.4.9 — consumers re-vendor; one new error code)
+**Last updated:** 2026-09-30 (2.4.11 — **every literal is correctly rounded**, at any length: a certified double-double estimate falls back to an exact comparison against the midpoint (Clinger / Gay) when it cannot decide. 0 wrong of ~242,000 literals and 400,000+ more from two reviewers' generators; 2.4.10 got ~25% of adversarial midpoints wrong by 1 ulp. **Periodic (DFT-even) windows** for FFT / STFT. **`dist/abaco.deps` committed** (15 leaves, test-only modules out of `[deps].stdlib`), CI and release on `distlib --check`. The test and fuzz files are lint-clean and CI lints them. Suite 1801 → **2062**. `dist/abaco.cyr` **not** byte-identical to 2.4.10)
+
+**Previous:** 2026-09-30 (2.4.10 — the abaco-side roadmap items. A wrong argument count is now **`ABACO_ERR_ARITY`** (was `UNKNOWN_FN`), and builtins dispatch on an id from one name lookup instead of a `streq` chain. Accuracy: `tan` is an fdlibm port (≤ 1 ulp; `sin/cos` was up to 2), `n!` is exact to 170, `mean` is correctly rounded and `stddev` cannot overflow, literals round once (subnormals and 19-36 digits), and the windows are bit-exact symmetric. Units: `short_ton` / `long_ton`; below absolute zero is `UERR_CONVERT`. CI gains an **aarch64 (qemu) lane**. Suite 1704 → **1801**. `dist/abaco.cyr` **not** byte-identical to 2.4.9 — consumers re-vendor; one new error code)
 
 **Previous:** 2026-09-30 (2.4.9 — the two items 2.4.8 filed (the `sqrt` bench-row collision; `binomial` past ganita's limit, now `abaco_binomial`, exact whenever the result fits) and a **project-wide audit**: 170 findings, 166 confirmed, 131 fixed in code, 22 in docs, 11 deferred, plus 14 from a final review of the finished diff, all fixed ([report](../audit/2026-09-30-audit.md)). The worst: **`batch_*` wrote past `dst` for odd `n`**; **units case-folded symbols** (`MW` read as milliwatt through `nl_parse`) and used 6-digit factors; **`factor` / `totient` / `next_prime` never returned near 2^63**; the evaluator skipped unknown bytes, accepted `1.2.3`, truncated fractions and leaked 16-33 KB per evaluation. Gates that could not fail were rewritten and run against 2.4.8. Suite 938 → **1704**, green on x86_64 and aarch64 (qemu). `dist/abaco.cyr` **not** byte-identical to 2.4.8 — consumers re-vendor; dhvani fixes two `time_constant` call sites first)
 
@@ -20,19 +22,21 @@
 
 | What | Value |
 |------|-------|
-| abaco | **2.4.10** |
+| abaco | **2.4.11** |
 | Cyrius toolchain pin | **6.6.12** |
 | License | GPL-3.0-only |
 
 ## Stdlib (6.2.x batching — unchanged through 6.6.12)
 
 The 6.2.x stdlib re-batched several modules; abaco's `[deps].stdlib` list
-adjusted accordingly at 2.2.5, and no toolchain since has re-batched: all 18
-declared modules still exist and the bundles only grow internally. At 6.6.12
+adjusted accordingly at 2.2.5, and no toolchain since has re-batched: every
+declared module still exists and the bundles only grow internally (18 declared
+through 2.4.10; 15 since 2.4.11, which moved `assert`, `bench` and `args` into
+the test, bench and fuzz files that use them). At 6.6.12
 against 6.6.2 no public symbol left any of them; bayan 1.5.5 → 1.5.9 and ganita
 1.2.4 → 1.2.9 (both current — ganita 1.2.10 changes no source), and `chrono` and
-`alloc_cx` join the vendored set transitively. The 36 vendored files are pinned
-in `cyrius.lock`. As of 2.3.0 abaco calls the **canonical `bayan_*` API
+`alloc_cx` join the vendored set transitively. The 32 vendored files are pinned
+in `cyrius.lock` (36 through 2.4.10). As of 2.3.0 abaco calls the **canonical `bayan_*` API
 directly**, not the deprecated back-compat aliases:
 
 | Was (6.0.x) | Now (6.2.x) | Canonical symbols abaco uses |
@@ -60,20 +64,21 @@ directly**, not the deprecated back-compat aliases:
 
 | Artifact | Size | Notes |
 |----------|------|-------|
-| `build/abaco` | ~82 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF. **81,936 B** at 2.4.10/6.6.12 (81,480 B at 2.4.9; 77,000 B at 2.4.8; 76,992 B at 2.4.7; 79,032 B at 2.4.6/6.6.2; 619,576 B at 2.4.4/6.5.35 — 6.6.x DCE drops dead code instead of NOP-filling it) |
-| `dist/abaco.cyr` | ~237 KB (~5.8k lines) | Committed consumer bundle, regenerated by a bare `cyrius distlib` (flat `[lib]` since 2.4.6). **2.4.10: 236,882 B / 5,779 lines**, not byte-identical to 2.4.9 (218,167 B / 5,332 lines; 2.4.8: 165,091 B / 4,170 lines) — most of the growth is comments recording what each fix replaced. The `dist/abaco.deps` sidecar distlib also writes is gitignored — README.md's stdlib list is the contract; shipping the sidecar is an open roadmap item |
-| `cyrius.lock` | 37 lines | Committed. Hashes of the 36 vendored stdlib files plus the `cyrius 6.6.12` trailer; `cyrius deps --verify` checks `lib/` against it |
+| `build/abaco` | ~81 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF. **81,048 B** at 2.4.11/6.6.12 (81,936 B at 2.4.10; 81,480 B at 2.4.9; 77,000 B at 2.4.8; 76,992 B at 2.4.7; 79,032 B at 2.4.6/6.6.2; 619,576 B at 2.4.4/6.5.35 — 6.6.x DCE drops dead code instead of NOP-filling it) |
+| `dist/abaco.cyr` | ~248 KB (~6.0k lines) | Committed consumer bundle, regenerated by a bare `cyrius distlib` (flat `[lib]` since 2.4.6). **2.4.11: 248,432 B / 6,047 lines**, not byte-identical to 2.4.10 (236,882 B / 5,779 lines; 2.4.9: 218,167 B / 5,332 lines) — most of the growth is comments recording what each fix replaced |
+| `dist/abaco.deps` | 15 leaves | Committed since 2.4.11: the stdlib modules the bundle needs, which a consumer's `cyrius deps` reads beside it and vendors. `string fmt alloc vec str syscalls tagged hashmap fnptr math ganita io net http bayan`; CI fails if `assert` / `bench` / `args` reappear |
+| `cyrius.lock` | 33 lines | Committed. Hashes of the 32 vendored stdlib files plus the `cyrius 6.6.12` trailer (36 until 2.4.11 dropped `args`, `args_win`, `assert`, `bench`); `cyrius deps --verify` checks `lib/` against it |
 
 ## Tests
 
-**1801 asserts, 0 failures** across 7 `.tcyr` files, on x86_64 and on aarch64
+**2062 asserts, 0 failures** across 7 `.tcyr` files, on x86_64 and on aarch64
 (`cyrius test --aarch64`, qemu — a CI lane since 2.4.10):
 
 | Suite | Asserts |
 |-------|---------|
 | `test_ai` | 289 |
-| `test_dsp` | 180 |
-| `test_eval` | 706 |
+| `test_dsp` | 249 |
+| `test_eval` | 898 |
 | `test_integration` | 63 |
 | `test_ntheory` | 171 |
 | `test_simd` | 27 |
@@ -86,9 +91,8 @@ directly**, not the deprecated back-compat aliases:
   swing up to 5× between processes (per-process hash seeding) — compare medians
   over many runs, never one row from one run. `bench-history.csv` rows either side
   of 2.4.7 are not strictly comparable: 6.6.x reworked `lib/bench.cyr`'s statistics.
-- fmt: clean across `src/`, `tests/`, `benches/` and `fuzz/`; lint / vet: clean on
-  `src/` (the CI gate). 11 long-line lint warnings in `tests/test_{ai,dsp,eval}`
-  and `fuzz/fuzz_eval` predate 2.4.10 and are outside the gate
+- fmt / lint: clean across `src/`, `tests/`, `benches/` and `fuzz/`, all in the CI
+  gate since 2.4.11; vet: clean
 
 ## Library surface
 
@@ -493,14 +497,17 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
   a final 4-agent review of the finished diff then found 14 more (among them a
   `%` hang and a thread-unsafe global arena the fixes had introduced), all fixed.
   Report: [`../audit/2026-09-30-audit.md`](../audit/2026-09-30-audit.md).
-- **2.4.10** (this release) works the abaco-side roadmap items: `ABACO_ERR_ARITY`
+- **2.4.10** works the abaco-side roadmap items: `ABACO_ERR_ARITY`
   and id dispatch; `tan`, `n!`, `mean`, `stddev`, literal parsing and the window
   functions made correctly rounded or exact where the audit found them loose;
   US / imperial tons and an absolute-zero floor; an aarch64 (qemu) CI lane. The
   upstream filings (ganita, bayan, cyrius) stay open in their repos.
+- **2.4.11** (this release) closes the literal-rounding residual (every literal
+  correctly rounded, any length), adds periodic (DFT-even) windows, commits the
+  `dist/abaco.deps` sidecar, and makes the test tree lint-clean under a widened
+  gate. Studied, not shipped: currency TLS (ready behind `-D ABACO_TLS`, see the
+  roadmap). Filed upstream: a ganita `tan`, and cyrius TLS findings.
 
-- **Still open** (external — needs consumer repos, not actionable from abaco
-  alone): move dhvani and jalwa from 2.4.6 to 2.4.10 (dhvani's `time_constant`
-  call sites first) and wire Abacus; audit consumers for duplicated math that
-  should use `abaco::dsp`; `lib/tls.cyr` for the currency cache once the stdlib
-  TLS API stabilizes. See [`roadmap.md`](roadmap.md).
+- **Still open**: see [`roadmap.md`](roadmap.md). Consumers move onto a
+  release on their own schedule; abaco's part is the upgrade notes in
+  [`../guides/consuming-abaco.md`](../guides/consuming-abaco.md).

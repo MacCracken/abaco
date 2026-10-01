@@ -5,6 +5,185 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.11] — 2026-09-30
+
+### Changed
+
+### Added
+
+### Fixed
+
+## [2.4.11] — 2026-09-30
+
+The roadmap items abaco can close on its own after 2.4.10: literals rounded
+correctly at any length, periodic windows, a committed stdlib sidecar, and a
+lint-clean test tree. Currency TLS was studied and is ready behind a build
+flag, but not shipped here (see Docs).
+
+### Fixed — every literal correctly rounded
+
+- A literal in an expression now parses to the round-half-even double of its
+  exact decimal value at any length: normals, subnormals, underflow to +0, and
+  +Inf from the IEEE overflow threshold 2^1024 − 2^970 up. 2.4.10 rounded once
+  but could still land on the wrong side of a midpoint between two doubles:
+  ~25% of an adversarial set of midpoints came out 1 ulp off (7,101 of 28,272),
+  as did 4 of 22 edge cases. Now 0 of ~242,000 literals over four seeds, on
+  x86_64 and aarch64, and 0 of over 400,000 more from two reviewers' own
+  generators. The oracle is CPython's `float()`, checked against exact
+  `Fraction` rounding.
+- How: Clinger's fast path is unchanged (mantissa below 2^53, |exponent| ≤
+  22). Past it, a double-double estimate with a derived error bound (below
+  2^-99; worst measured 2^-103.7) is accepted only when it sits more than
+  2^-32 ulp from a rounding boundary. Otherwise the literal's digits are
+  compared exactly with the one midpoint in question, written out in a
+  768-byte base-10^9 integer on the stack (Clinger's AlgorithmR, Gay's
+  `bigcomp`). The comparison streams the digits straight from the input, so a
+  literal of any length is decided in linear time with no allocation. On
+  ordinary literals it fired 4 times in 29,493, all exact ties.
+- Results that move, all by 1 ulp toward the correct double: literals on or
+  near a midpoint. The edges follow the same rule: the exact midpoint between
+  `DBL_MAX` and 2^1024 is now +Inf, and anything above 2^-1075 is now the
+  smallest subnormal.
+- Removed as dead code: `_mul_pow10_dd`, `_div_pow10_dd`, `_pair_scale_down`,
+  `_scale_down_once`, `_dd_scale_pow2`. `_mul_pow10` / `_div_pow10` stay, on the
+  same correctly rounded path.
+
+### Added — periodic (DFT-even) windows
+
+- `window_hann_periodic`, `window_hamming_periodic`, `window_blackman_periodic`,
+  `window_kaiser_periodic` and `window_kaiser_periodic_fill`: Harris's DFT-even
+  form (denominator `size`), for FFT frames and STFT. They use the same
+  centred-phase evaluation, so `periodic(n, N)` equals `symmetric(n, N + 1)`
+  bit for bit for N ≥ 2, and w(n) == w(N − n) exactly. `size + 1` is never
+  formed. A 1-point window is [1], as in scipy (`fftbins=True`) and MATLAB.
+- Hann and Hamming overlap-add to a constant at hop N/2 for even N, and
+  Blackman at hop N/3 when 3 divides N. The tests check each sum within 2^-50
+  for every such N ≤ 256.
+- The symmetric windows return the same bits as 2.4.10 (208,560 values
+  compared).
+
+### Changed — `dist/abaco.deps` is committed
+
+- The sidecar `cyrius distlib` writes beside the bundle lists the stdlib
+  modules the bundle needs, and a consumer's `cyrius deps` reads it. It used to
+  be gitignored because it listed every `[deps].stdlib` entry, including the
+  test-only `assert`, `bench` and `args`. Those three are now included by the
+  test, bench and fuzz files that use them, so the sidecar lists exactly the 15
+  library modules. `cyrius.lock` drops 4 entries (36 → 32).
+- The 15 are exactly the modules README lists, so a consumer that lists them
+  vendors the same set as before. One that lists none now builds from the
+  sidecar alone; checked with a probe consumer that declares no stdlib.
+- CI and release run `cyrius distlib --check`, which byte-compares both files
+  against a fresh regeneration. CI also fails if a test-only module reappears
+  in the sidecar. Release no longer regenerates the bundle; a stale one fails
+  it.
+
+### Changed — lint
+
+- The 11 lint warnings in the test and fuzz files are gone: all were lines
+  over 120 columns, in `tests/test_{ai,dsp,eval}` and `fuzz/fuzz_eval`. They
+  predate 2.4.10 and sat outside the gate, which linted `src/` only. The long
+  JSON fixtures are now built from parts with a small `cjoin` helper, so their
+  bytes are unchanged. CI's `Lint` step now covers `tests/`, `benches/` and
+  `fuzz/` as well; a planted 131-column line in a test file fails it.
+
+### Tests
+
+- `test_eval` 706 → 898. `test_literal_midpoints` has 96 rows, each checked
+  bit for bit and for no error. The rows cover:
+  - classic hard cases;
+  - exact midpoints up to 774 characters;
+  - ±1 in the last and in a far digit;
+  - truncations, with and without a far nonzero tail;
+  - the 2^-1022, overflow and 2^-1075 boundaries;
+  - literals of ~5,000 digits;
+  - leading fractional zeros;
+  - the neighbourhood of 1e23, the only power of ten in [1e-400, 1e400] that
+    is a midpoint.
+
+  Against 2.4.10's parser, 59 of its asserts fail.
+- `test_dsp` 180 → 249. The periodic windows are checked:
+  - against an independent reference, within a few ulp;
+  - for bit-exact DFT-even symmetry over many sizes;
+  - for `periodic(n, N) == symmetric(n, N + 1)`, bit for bit;
+  - at the edge sizes;
+  - for constant overlap-add.
+
+  The suite's `ulp_dist` helper wrapped at a distance of exactly 2^63, which
+  let `near_ulp` accept any value for one bit pattern per reference. It now
+  saturates, and `test_ulp_dist` pins that with 16 asserts.
+- `fuzz_eval` gains a literal-midpoint invariant with its own oracle:
+  - it writes out a random double's midpoint with the harness's own big
+    integer, which shares no code with the parser;
+  - the midpoint goes into five literals (exact, padded, nudged up, nudged
+    down, truncated), each in one of four spellings;
+  - every literal must parse to the right neighbour, with ties to even.
+
+  2.4.10 fails it on the first literal. 20,000 iterations take 2.5 s.
+  Mutating the leading-zero shift is caught at CI's 1,000 iterations, and
+  mutating the 1e23 length test is caught by the suite.
+- Suite 1801 → **2062** asserts, green on x86_64 and on aarch64 (qemu).
+
+### Benchmarks
+
+The A/B against 2.4.10 used the same bench file with 7 interleaved runs pinned
+to one core, and compared medians in both DCE and non-DCE builds.
+
+- No existing row regressed: every one is within ±5%, with mixed signs.
+- Literals off the fast path pay for the certification:
+
+  | row | literal | 2.4.10 | 2.4.11 |
+  |---|---|---|---|
+  | `lit_sci_const` | `1.602176634e-19` | 473 ns | 523 ns (+10.6%) |
+  | `lit_long40` | 40 digits | 762 ns | 785 ns (+3%) |
+
+- The literals that take the exact comparison pay more. 2.4.10 answered the
+  last two wrong:
+
+  | row | literal | 2.4.10 | 2.4.11 |
+  |---|---|---|---|
+  | `lit_tie_1e23` | `1e23` | 367 ns | 579 ns |
+  | `lit_near_mid` | the 1 + 2^-53 midpoint, written out | 854 ns | 1.46 µs |
+  | `lit_mid_worst` | the 768-digit midpoint | 6.8 µs | 25.7 µs |
+
+- The periodic windows cost the same as their symmetric partners (trail):
+  Hann 58 / 59 ns, Blackman 98 / 96 ns, Kaiser 307 / 300 ns per sample; a
+  1,024-point Kaiser fill 149 / 152 µs.
+- New rows:
+  - `window_{hann,hamming,blackman,kaiser}` and their `_periodic` partners;
+  - `kaiser_fill_1024` and `kaiser_periodic_fill_1024`;
+  - `lit_long40`, `lit_near_mid`, `lit_tie_1e23`, `lit_sci_const` and
+    `lit_mid_worst`.
+- This release's trail run is pinned to one core (`taskset -c 13`). An
+  unpinned run, taken while another process was compiling on the machine, read
+  10-19% slow on rows the release does not touch, so it was discarded.
+
+### Docs
+
+- Moving consumers onto a release, and auditing them for math they should take
+  from abaco, is off the roadmap: it is the consumers' work. abaco's side is the
+  README, the docs and the upgrade notes in `docs/guides/consuming-abaco.md`.
+- The guide's 2.4.11 upgrade note covers the literal change, the periodic
+  windows and the sidecar. Its DSP row now says correctly which arguments are
+  plain integers: `samples_to_ms` takes an f64 sample count.
+- **Currency TLS, studied, not shipped.** The stdlib's native TLS verifies the
+  chain and the hostname and fails closed, on x86_64 and on aarch64. A
+  prototype works behind `-D ABACO_TLS`, with a self-contained test (forked
+  native `tls_accept`, fixture CA). It must be opt-in, because listing `tls` in
+  `[deps].stdlib` grows the smoke binary 81,936 → 545,680 B. The roadmap item
+  lists what must ship with it.
+- **Filed upstream:**
+  - ganita `2026-09-30-f64-tan-missing.md`: an fdlibm `tan`, so abaco can drop
+    its kernel.
+  - cyrius `2026-09-30-tls-libssl-backend-no-hostname-verification.md` (High):
+    the libssl backend accepts a certificate for any name.
+  - cyrius `2026-09-30-tls-first-use-thread-race.md`: first TLS use from two
+    threads at once breaks every later handshake, and worker-then-main
+    first use takes SIGSEGV.
+  - cyrius `2026-09-30-tls-client-memory-and-alert-gaps.md`: about 1 MiB is
+    retained per `tls_ctx_load_verify_locations` call, and a fatal alert
+    reads as EOF.
+
 ## [2.4.10] — 2026-09-30
 
 The abaco-side roadmap items left after the 2.4.9 audit. The items that need

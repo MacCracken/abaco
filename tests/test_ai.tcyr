@@ -464,8 +464,10 @@ fn test_history_ring() {
     assert_eq(CalcHistory_get(h, 3), 0, "past the end is 0");
     assert_eq(CalcHistory_get(h, 0 - 1), 0, "negative index is 0");
     var js = CalcHistory_to_json(h);
-    var want = "[{\"input\":\"5\",\"result\":\"5\",\"timestamp\":\"t\"},{\"input\":\"6\",\"result\":\"6\",\"timestamp\":\"t\"},{\"input\":\"7\",\"result\":\"7\",\"timestamp\":\"t\"}]";
-    assert(str_len(js) == strlen(want) && memeq(str_data(js), want, strlen(want)) == 1, "to_json oldest first after wrap");
+    var w5 = "[{\"input\":\"5\",\"result\":\"5\",\"timestamp\":\"t\"},";
+    var w6 = "{\"input\":\"6\",\"result\":\"6\",\"timestamp\":\"t\"},";
+    var want = cjoin(cjoin(w5, w6), "{\"input\":\"7\",\"result\":\"7\",\"timestamp\":\"t\"}]");
+    assert(str_is(js, want) == 1, "to_json oldest first after wrap");
     var big = CalcHistory_new(100);
     i = 0;
     while (i < 100) { CalcHistory_push(big, "x", "1", "t"); i = i + 1; }
@@ -480,6 +482,25 @@ fn test_history_ring() {
     CalcHistory_push(h, "after", "1", "t");
     assert(streq(he_input(CalcHistory_get(h, 0)), "after") == 1, "clear resets the ring");
     return 0;
+}
+
+# A fresh C string holding a then b: long JSON fixtures are written in pieces
+# to stay inside the 120-column lint limit.
+fn cjoin(a, b) {
+    var na = strlen(a);
+    var nb = strlen(b);
+    var r = alloc(na + nb + 1);
+    memcpy(r, a, na);
+    memcpy(r + na, b, nb);
+    store8(r + na + nb, 0);
+    return r;
+}
+
+# 1 when the Str s holds exactly the bytes of the C string want.
+fn str_is(s, want) {
+    var n = strlen(want);
+    if (str_len(s) != n) { return 0; }
+    return memeq(str_data(s), want, n);
 }
 
 fn json_rejected(json, what) {
@@ -502,8 +523,8 @@ fn test_history_from_json_strict() {
     json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\"}", "missing ]");
     json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\"},]", "trailing comma");
     json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\"}] x", "bytes after ]");
-    json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\"}{\"input\":\"b\",\"result\":\"2\",\"timestamp\":\"t\"}]",
-      "missing comma");
+    var okb = "{\"input\":\"b\",\"result\":\"2\",\"timestamp\":\"t\"}";
+    json_rejected(cjoin(cjoin("[", ok), cjoin(okb, "]")), "missing comma");
     json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\"},{\"input\":\"b\"}]",
       "bad second object leaves h unchanged");
     json_rejected("[{\"input\":\"a\\x\",\"result\":\"1\",\"timestamp\":\"t\"}]", "unknown escape");
@@ -516,12 +537,14 @@ fn test_history_from_json_strict() {
     json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\",\"x\":}]", "a member with no value");
     json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\",}]", "a trailing comma in an object");
     json_rejected("[{\"q\":\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\"}]", "a value read as a key");
-    json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\",\"x\":\"\\q\"}]", "a bad escape in another member");
+    json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\",\"x\":\"\\q\"}]",
+      "a bad escape in another member");
     json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\",\"n\":01}]", "a number with a leading zero");
     var h = CalcHistory_new(10);
     assert_eq(CalcHistory_from_json(h, " [ ] "), 0, "empty array with blanks");
-    assert_eq(CalcHistory_from_json(h, "\n[ {\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\"} ,\r\n {\"input\":\"b\",\"result\":\"2\",\"timestamp\":\"t\"} ]\n"), 0,
-      "whitespace between tokens");
+    var spaced = cjoin("\n[ {\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\"} ,\r\n ",
+      "{\"input\":\"b\",\"result\":\"2\",\"timestamp\":\"t\"} ]\n");
+    assert_eq(CalcHistory_from_json(h, spaced), 0, "whitespace between tokens");
     assert_eq(CalcHistory_len(h), 2, "two entries");
     return 0;
 }
@@ -540,7 +563,7 @@ fn test_history_json_unicode_and_controls() {
     CalcHistory_push(c, "\x01\x1F\x08\x0C", "\x7F", "t");
     var s = CalcHistory_to_json(c);
     var want = "[{\"input\":\"\\u0001\\u001f\\b\\f\",\"result\":\"\x7F\",\"timestamp\":\"t\"}]";
-    assert(str_len(s) == strlen(want) && memeq(str_data(s), want, strlen(want)) == 1, "control bytes escaped per RFC 8259");
+    assert(str_is(s, want) == 1, "control bytes escaped per RFC 8259");
     var n = str_len(s);
     var cbuf = alloc(n + 1);
     memcpy(cbuf, str_data(s), n);

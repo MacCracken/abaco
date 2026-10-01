@@ -12,6 +12,8 @@
 #   - A two-byte query "<letter>s" never resolves: the plural strip must not
 #     turn "ms" into metre or "ns" into newton.
 
+include "lib/args.cyr"
+
 include "src/core.cyr"
 include "src/ntheory.cyr"
 include "src/dsp.cyr"

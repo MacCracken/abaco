@@ -18,7 +18,7 @@ math engine you can wrap any way you like, this is it.
 |--------|--------------|
 | [`core`](src/core.cyr)     | `Value` (Integer / Float / Fraction / Complex / Text), `Unit`, `UnitCategory` (19 categories), `Currency`, `ConversionResult` |
 | [`ntheory`](src/ntheory.cyr) | `is_prime` (deterministic Miller–Rabin), `next_prime` / `prev_prime`, `factor`, `totient`, `mod_pow`, `abaco_binomial` (exact whenever the result fits in i64) |
-| [`dsp`](src/dsp.cyr)       | dB ↔ amplitude, MIDI ↔ frequency, envelope time constants, PolyBLEP, panning, crossfade, Hann / Hamming / Blackman / Kaiser windows, cubic / sinc interpolation, chromagram helpers, SIMD batch ops, samples ↔ ms, BPM ↔ Hz |
+| [`dsp`](src/dsp.cyr)       | dB ↔ amplitude, MIDI ↔ frequency, envelope time constants, PolyBLEP, panning, crossfade, Hann / Hamming / Blackman / Kaiser windows (symmetric, and periodic / DFT-even for STFT), cubic / sinc interpolation, chromagram helpers, SIMD batch ops, samples ↔ ms, BPM ↔ Hz |
 | [`eval`](src/eval.cyr)     | Tokenizer + recursive-descent parser, 43+ functions, variables, implicit multiplication, `%` operator, scientific notation, `eval_partial` for live-as-you-type feedback |
 | [`units`](src/units.cyr)   | Built-in units in 19 categories with factors exact to the definition (NIST SP 811), O(1) hashmap lookup, reciprocal units (L/100km), pitch (semitones / cents / octaves), BPM via frequency |
 | [`ai`](src/ai.cyr)         | Natural-language parsing (`"convert 5 km to miles"`, `"what is 15% of 230"`), bounded calculation history with JSON save/load, currency cache + a plaintext fetch from a loopback rates server (no TLS yet) |
@@ -60,12 +60,16 @@ stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged",
 
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.4.10"
+tag = "2.4.11"
 modules = ["dist/abaco.cyr"]   # self-contained library bundle
 ```
 
-`cyrius deps` vendors the bundle; there is nothing to `include` from abaco's
-`src/`. Then call the public API directly:
+`cyrius deps` vendors the bundle and reads `dist/abaco.deps` beside it — the
+stdlib modules the bundle needs — and vendors those too, so from 2.4.11 the
+`[deps] stdlib` line above is optional (repeating it is harmless: each module
+is vendored once). Keep it for a tag before 2.4.11, or if you include
+`dist/abaco.cyr` without `cyrius deps`. There is nothing to `include` from
+abaco's `src/`. Then call the public API directly:
 
 ```cyr
 fn main() {

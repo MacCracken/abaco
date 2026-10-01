@@ -37,6 +37,14 @@ depend via:
 > **Mechanism update (2.4.6, Cyrius 6.6.2):** back to a flat `[lib]` — bare
 > `cyrius distlib` writes `dist/abaco.cyr` directly, no profile and no rename.
 > The decision is unchanged.
+>
+> **Mechanism update (2.4.11):** the `dist/abaco.deps` sidecar distlib writes
+> beside the bundle is committed too. It lists the stdlib modules the bundle
+> needs, which a consumer's `cyrius deps` vendors, so it replaces README's
+> hand-written list as the contract. `[deps].stdlib` was trimmed to the
+> library's own needs first (`assert`, `bench`, `args` are included by the test,
+> bench and fuzz files that use them). CI checks both files with
+> `distlib --check`. The decision is unchanged.
 
 ```toml
 [deps.abaco]

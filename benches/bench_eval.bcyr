@@ -50,6 +50,43 @@ fn _bench_nl_parse_convert() { nl_parse("convert 5 MW to kW"); return 0; }
 fn _bench_history_push_full() { CalcHistory_push(_hist, "2 + 3", "5", "2026-09-30T00:00:00Z"); return 0; }
 fn _bench_eval_sci_add() { Evaluator_eval(_ev, "1.5e10 + 2.3e9"); return 0; }
 fn _bench_eval_sci_mul() { Evaluator_eval(_ev, "1e-3 * 1e3"); return 0; }
+# 2.4.11: literals past Clinger's fast path. 40 digits take the certified
+# double-double estimate; an exact midpoint (1 + 2^-53, written out) and the
+# exact tie 1e23 take the big-integer comparison; the 768-digit midpoint just
+# above 2^-1022 is that comparison's worst case (5^1075).
+fn _bench_lit_long40() { Evaluator_eval(_ev, "3.141592653589793238462643383279502884197"); return 0; }
+fn _bench_lit_near_mid() { Evaluator_eval(_ev, "1.00000000000000011102230246251565404236316680908203125"); return 0; }
+fn _bench_lit_tie_1e23() { Evaluator_eval(_ev, "1e23"); return 0; }
+# An everyday constant off the fast path (exponent past 22): the certified
+# estimate, no big integer. Tracks what ordinary scientific literals pay.
+fn _bench_lit_sci_const() { Evaluator_eval(_ev, "1.602176634e-19"); return 0; }
+var _lit_worst = 0;
+fn _bench_lit_mid_worst() { Evaluator_eval(_ev, _lit_worst); return 0; }
+
+# The midpoint (2^53 + 1) * 2^-1075, just above 2^-1022: 768 digits, built
+# once from pieces (no source line holds it).
+fn _bench_cat(a, b) {
+    var la = strlen(a);
+    var lb = strlen(b);
+    var r = alloc(la + lb + 1);
+    memcpy(r, a, la);
+    memcpy(r + la, b, lb);
+    store8(r + la + lb, 0);
+    return r;
+}
+
+fn _bench_mid_worst_text() {
+    var s = "2225073858507201630123055637955676152503612414573018013083228724049586647606759446192036794116";
+    s = _bench_cat(s, "8869532139855205490320009034347818844123255721843675633476170205181759989229413936299667425982");
+    s = _bench_cat(s, "8589999483014897143355557856769327930601597818316214242506796246078529588519927249357768832073");
+    s = _bench_cat(s, "2492479924816869232247165964934329258783950102250973957579510571600738343645738494324192997092");
+    s = _bench_cat(s, "1792073899197616943141314971732652550200849979736767837431552058188044391638105723677911751777");
+    s = _bench_cat(s, "5622749741380425338708447819365553307386742083452616251302946202273010905482006765402020154711");
+    s = _bench_cat(s, "2002028139700141575259123440177362244273712468151750189745559978653234255886219611516335924167");
+    s = _bench_cat(s, "9580296044770649464701847773609343004514216836070136474795139621383772282614543769341253209859");
+    s = _bench_cat(s, "1327667236328125");
+    return _bench_cat(s, "e-1075");
+}
 
 # Tokenizer only
 fn _bench_tok_simple() {
@@ -154,6 +191,28 @@ fn main() {
 
     b = bench_new("sci_mul");
     bench_run(b, &_bench_eval_sci_mul, BENCH_ITERS);
+    bench_report(b);
+
+    println("--- literal rounding ---");
+    b = bench_new("lit_long40");
+    bench_run(b, &_bench_lit_long40, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("lit_near_mid");
+    bench_run(b, &_bench_lit_near_mid, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("lit_tie_1e23");
+    bench_run(b, &_bench_lit_tie_1e23, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("lit_sci_const");
+    bench_run(b, &_bench_lit_sci_const, BENCH_ITERS);
+    bench_report(b);
+
+    _lit_worst = _bench_mid_worst_text();
+    b = bench_new("lit_mid_worst");
+    bench_run(b, &_bench_lit_mid_worst, BENCH_ITERS);
     bench_report(b);
 
     println("--- tokenizer ---");

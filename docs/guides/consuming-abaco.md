@@ -12,7 +12,7 @@ In your project's `cyrius.cyml`:
 ```toml
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.4.10"                 # pin to a released tag, never a branch
+tag = "2.4.11"                 # pin to a released tag, never a branch
 modules = ["dist/abaco.cyr"]  # the bundle is the only file you name
 ```
 
@@ -20,8 +20,11 @@ modules = ["dist/abaco.cyr"]  # the bundle is the only file you name
 
 ## 2. Provide the stdlib surface
 
-The bundle carries **no** `include "lib/…"` lines — abaco does not dictate your
-stdlib set. List the stdlib modules abaco's code needs in your own `[deps]`:
+The bundle carries **no** `include "lib/…"` lines. From 2.4.11 each tag also
+ships `dist/abaco.deps`, the stdlib modules the bundle needs; your `cyrius deps`
+reads it beside the bundle and vendors them, so you need not list them. For a
+tag before 2.4.11, or if you include `dist/abaco.cyr` without `cyrius deps`,
+list them in your own `[deps]` — repeating them on 2.4.11 is harmless:
 
 ```toml
 [deps]
@@ -29,8 +32,10 @@ stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged",
           "hashmap", "fnptr", "math", "ganita", "io", "net", "http", "bayan"]
 ```
 
-(Drop `net` / `http` only if you never touch the currency-cache path — `bayan`
-is still needed for `bayan_u64_powmod` in `ntheory`.)
+(Before 2.4.11 you could drop `net` / `http` if you never touch the
+currency-cache path; the sidecar always lists them, and DCE removes them from
+a binary that never fetches. `bayan` is needed regardless, for
+`bayan_u64_powmod` in `ntheory`.)
 
 > **Changed at 6.2.x** — the standalone `json` and `u128` modules were folded
 > into **`bayan`**, and the extended transcendentals abaco calls
@@ -73,7 +78,7 @@ fn main() {
 | Expressions | `Evaluator_new`, `Evaluator_set_variable`, `Evaluator_eval`, `Evaluator_eval_partial` | `eval` |
 | Units | `UnitRegistry_new`, `UnitRegistry_convert`, `UnitRegistry_find`, `UnitRegistry_list` | `units` |
 | Number theory | `is_prime`, `next_prime`, `prev_prime`, `factor`, `totient` | `ntheory` |
-| DSP | windows, `amplitude_to_db`, MIDI↔freq, interpolation, chromagram, batch ops — every argument an **f64 bit pattern** (`time_constant(f64_from(10), f64_from(48000))`, not `48000`) | `dsp` |
+| DSP | windows (`window_hann` … symmetric, for FIR design; `window_hann_periodic` … DFT-even, for FFT / STFT), `amplitude_to_db`, MIDI↔freq, interpolation, chromagram, batch ops — every value argument an **f64 bit pattern** (`time_constant(f64_from(10), f64_from(48000))`, not `48000`), a sample count included (`samples_to_ms(f64_from(441), f64_from(44100))`; `ms_to_samples` returns an f64 too); the plain integers are window indices and sizes (`window_hann(n, size)`), batch lengths `n`, buffer and out pointers, pitch-class numbers and the octave `freq_to_octave` returns | `dsp` |
 | Values | `Value_*`, `Unit`, `ConversionResult` | `core` |
 | NL / history / currency | `nl_parse`, `CalcHistory_*`, `CurrencyCache_*` | `ai` |
 
@@ -82,6 +87,36 @@ fn main() {
 Bump the `tag` and run `cyrius deps`. abaco follows SemVer (post-1.0): patch and
 minor bumps are source-compatible; a major bump documents breaking changes in
 [`CHANGELOG.md`](../../CHANGELOG.md) with a migration section.
+
+### 2.4.11 — periodic windows (additive), and literals correctly rounded
+
+- **New:** `window_hann_periodic`, `window_hamming_periodic`,
+  `window_blackman_periodic`, `window_kaiser_periodic` and
+  `window_kaiser_periodic_fill` — the periodic (DFT-even) form, denominator
+  `size` (scipy's `fftbins=True`), for FFT frames and STFT. Hann and Hamming
+  overlap-add to a constant at hop `size / 2` when `size` is even, Blackman at
+  `size / 3` when 3 divides `size`; the symmetric forms do not, and Kaiser has
+  no hop at which it does. Arguments as for the symmetric ones: `n` and `size`
+  are plain integers, Kaiser's β an f64.
+- If you built a periodic window by hand as `window_hann(n, size + 1)` for
+  `n < size`, the new function gives the same bits for `size ≥ 2`; at
+  `size == 1` it is `[1]`, where that recipe gave the first sample of a
+  2-point window (0 for Hann, 0.08 for Hamming).
+- **Nothing moves:** `window_hann`, `window_hamming`, `window_blackman`,
+  `window_kaiser` and `window_kaiser_fill` stay the symmetric form, for FIR
+  design, and return the same bits as 2.4.10.
+- **`dist/abaco.deps` ships at the tag.** Your `cyrius deps` now vendors the 15
+  stdlib modules abaco needs on its own; a `[deps] stdlib` list that already
+  names them changes nothing. abaco's test-only modules (`assert`, `bench`,
+  `args`) are not in it.
+- **Literals** in an expression are now correctly rounded at any length. A
+  literal on or within a hair of the midpoint between two doubles can come out
+  1 ulp different from 2.4.10 — 2.4.10 was the one that was wrong. The edge
+  cases are the same rule: the exact midpoint between `DBL_MAX` and 2^1024 is
+  now +Inf, anything above 2^-1075 is now the smallest subnormal. A literal
+  off the fast path (an exponent past ±22, or more than ~15 significant
+  digits) costs ~40–50 ns more per literal (`1.602176634e-19`: ~0.48 µs per
+  evaluation).
 
 ### 2.4.10 — one new error code, and a few more correct last bits
 

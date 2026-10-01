@@ -388,11 +388,15 @@ fn hz_to_bpm(hz)  { return f64_mul(hz, f64_from(60)); }
 # and return the coefficient at that sample as an f64: 0 for n outside
 # [0, size), 1 for the one sample of a size-1 window.
 #
-# These are the SYMMETRIC forms (denominator size - 1, w(0) = w(size-1)), the
-# right shape for FIR design and for analysing one frame. For STFT overlap-add
-# use the periodic (DFT-even) form Harris 1978 tabulates: evaluate with
-# size + 1 and drop the last sample — the symmetric Hann at 50% overlap ripples
-# ~2.5% where the periodic one sums to exactly 1.
+# window_hann / _hamming / _blackman / _kaiser are the SYMMETRIC forms
+# (denominator size - 1, w(0) = w(size-1)), the right shape for FIR design and
+# for analysing one frame. The *_periodic variants are the DFT-even form Harris
+# 1978 tabulates for spectral analysis and STFT overlap-add: the symmetric
+# window of size + 1 with its last sample dropped (denominator size), so
+# w(n) = w(size-n) for 1 <= n < size — scipy's fftbins=True, and MATLAB's
+# 'periodic' for Hann / Hamming / Blackman (MATLAB's kaiser has no such flag).
+# At 50% overlap the periodic Hann sums to 1 where the symmetric one ripples
+# by about pi / (2 (size - 1)): ~2.5% at size 64, 0.6% at 256.
 # ================================================================
 
 # 1 when n is outside the window [0, size). Through 2.4.8 the generators took
@@ -409,31 +413,36 @@ var WIN_HAMM_B = 0x3FDD_70A3_D70A_3D71;   # 0.46
 var WIN_BLK_A  = 0x3FDA_E147_AE14_7AE1;   # 0.42
 var WIN_BLK_C  = 0x3FB4_7AE1_47AE_147B;   # 0.08
 
-# The cosine windows are evaluated on the CENTRED phase
-#   phi = pi * (2n - (N-1)) / (N-1)  in [-pi, pi],
-# not on 2*pi*n/(N-1). 2n - (N-1) is an exact integer and changes sign between
-# n and N-1-n, so phi is exactly negated, and cos is even bit for bit: every
-# window is exactly symmetric, w(n) == w(N-1-n), which is what makes an FIR
-# designed with it exactly linear-phase. Through 2.4.9 the two halves were
-# separate roundings, up to ~3 ulp apart (2.4.9 audit). With theta = phi + pi,
-# cos(theta) = -cos(phi) and cos(2 theta) = cos(2 phi), so the formulas below
-# are the textbook ones rewritten in phi.
-fn _win_phi(n, size) {
-    return f64_div(f64_mul(DSP_PI, f64_from(2 * n - (size - 1))), f64_from(size - 1));
+# The cosine windows are evaluated on the CENTRED phase over a denominator d,
+#   phi = pi * (2n - d) / d  in [-pi, pi],
+# not on 2*pi*n/d; d is size - 1 for the symmetric windows and size for the
+# periodic ones. 2n - d is an exact integer and changes sign between n and
+# d - n, so phi is exactly negated, and cos is even bit for bit: every window is
+# exactly symmetric about d/2 — w(n) == w(N-1-n) symmetric, w(n) == w(N-n)
+# periodic — which is what makes an FIR designed with it exactly linear-phase.
+# Through 2.4.9 the two halves were separate roundings, up to ~3 ulp apart
+# (2.4.9 audit). With theta = phi + pi, cos(theta) = -cos(phi) and
+# cos(2 theta) = cos(2 phi), so the formulas below are the textbook ones
+# rewritten in phi. The two forms evaluate the same expressions, d aside, so
+# a periodic window of size N is bit for bit the symmetric one of size N + 1.
+# The integer is formed as n + (n - d), which stays within [-d, d] for
+# 0 <= n <= d, and size + 1 is never formed, so no size overflows.
+fn _win_phi_d(n, d) {
+    return f64_div(f64_mul(DSP_PI, f64_from(n + (n - d))), f64_from(d));
 }
 
 # Hann: 0.5 * (1 - cos(2π n / (N-1))) = 0.5 * (1 + cos(phi))
 fn window_hann(n, size) {
     if (_win_outside(n, size) == 1) { return f64_from(0); }
     if (size == 1) { return DSP_ONE; }
-    return f64_mul(DSP_HALF, f64_add(DSP_ONE, f64_cos(_win_phi(n, size))));
+    return f64_mul(DSP_HALF, f64_add(DSP_ONE, f64_cos(_win_phi_d(n, size - 1))));
 }
 
 # Hamming: 0.54 - 0.46 * cos(2π n / (N-1)) = 0.54 + 0.46 * cos(phi)
 fn window_hamming(n, size) {
     if (_win_outside(n, size) == 1) { return f64_from(0); }
     if (size == 1) { return DSP_ONE; }
-    return f64_add(WIN_HAMM_A, f64_mul(WIN_HAMM_B, f64_cos(_win_phi(n, size))));
+    return f64_add(WIN_HAMM_A, f64_mul(WIN_HAMM_B, f64_cos(_win_phi_d(n, size - 1))));
 }
 
 # Blackman: 0.42 - 0.5*cos(2π n/(N-1)) + 0.08*cos(4π n/(N-1))
@@ -441,7 +450,39 @@ fn window_hamming(n, size) {
 fn window_blackman(n, size) {
     if (_win_outside(n, size) == 1) { return f64_from(0); }
     if (size == 1) { return DSP_ONE; }
-    var phase = _win_phi(n, size);
+    var phase = _win_phi_d(n, size - 1);
+    var t1 = f64_mul(DSP_HALF, f64_cos(phase));
+    var t2 = f64_mul(WIN_BLK_C, f64_cos(f64_add(phase, phase)));
+    return f64_add(f64_add(WIN_BLK_A, t1), t2);
+}
+
+# Periodic (DFT-even) windows, denominator size: the same expressions with
+# d = size, so window_hann_periodic(n, N) is window_hann(n, N + 1) bit for bit
+# for N >= 2 and every n in [0, N). Same conventions as the symmetric ones: 0
+# for n outside [0, size), so size <= 0 is an empty window, and a size-1
+# window is [1] — scipy and MATLAB's choice too, where the size + 1 recipe
+# would give the first sample of a 2-point symmetric window (0 for Hann, 0.08
+# for Hamming).
+# Hann, periodic: 0.5 * (1 - cos(2π n / N)) = 0.5 * (1 + cos(phi))
+fn window_hann_periodic(n, size) {
+    if (_win_outside(n, size) == 1) { return f64_from(0); }
+    if (size == 1) { return DSP_ONE; }
+    return f64_mul(DSP_HALF, f64_add(DSP_ONE, f64_cos(_win_phi_d(n, size))));
+}
+
+# Hamming, periodic: 0.54 - 0.46 * cos(2π n / N); see window_hann_periodic.
+fn window_hamming_periodic(n, size) {
+    if (_win_outside(n, size) == 1) { return f64_from(0); }
+    if (size == 1) { return DSP_ONE; }
+    return f64_add(WIN_HAMM_A, f64_mul(WIN_HAMM_B, f64_cos(_win_phi_d(n, size))));
+}
+
+# Blackman, periodic: 0.42 - 0.5*cos(2π n/N) + 0.08*cos(4π n/N); see
+# window_hann_periodic.
+fn window_blackman_periodic(n, size) {
+    if (_win_outside(n, size) == 1) { return f64_from(0); }
+    if (size == 1) { return DSP_ONE; }
+    var phase = _win_phi_d(n, size);
     var t1 = f64_mul(DSP_HALF, f64_cos(phase));
     var t2 = f64_mul(WIN_BLK_C, f64_cos(f64_add(phase, phase)));
     return f64_add(f64_add(WIN_BLK_A, t1), t2);
@@ -474,33 +515,61 @@ fn _bessel_i0(x) {
     return sum;
 }
 
+# Kaiser numerator I0(β * sqrt(1 - x^2)) at x = (2n - d) / d, i.e. 2n/d - 1 as
+# one exact-integer ratio, so x is exactly negated at d - n and the window is
+# bit-exact symmetric (see _win_phi_d). d is size - 1 symmetric, size periodic.
+fn _win_kaiser_num_d(n, d, beta) {
+    var x = f64_div(f64_from(n + (n - d)), f64_from(d));
+    return _bessel_i0(f64_mul(beta, f64_sqrt(f64_sub(DSP_ONE, f64_mul(x, x)))));
+}
+
+# Fill dst[0..size] with w(i) = num(i) * (1 / I0(β)), I0(β) computed once.
+# The single-sample generators divide by I0(β) instead, so a fill and its
+# generator agree to 1 ulp, not always bit for bit.
+fn _win_kaiser_fill_d(dst, size, d, beta) {
+    if (size <= 0) { return 0; }
+    if (size == 1) { store64(dst, DSP_ONE); return 0; }
+    var inv_denom = f64_div(DSP_ONE, _bessel_i0(beta));
+    var df = f64_from(d);
+    var i = 0;
+    while (i < size) {
+        # _win_kaiser_num_d inlined, with f64(d) hoisted: the same arithmetic.
+        var x = f64_div(f64_from(i + (i - d)), df);
+        var arg = f64_mul(beta, f64_sqrt(f64_sub(DSP_ONE, f64_mul(x, x))));
+        store64(dst + i * 8, f64_mul(_bessel_i0(arg), inv_denom));
+        i = i + 1;
+    }
+    return 0;
+}
+
 # Kaiser: I0(β * sqrt(1 - (2n/(N-1) - 1)^2)) / I0(β)
 # beta controls side-lobe attenuation (common values: 5, 8, 14).
 # For whole-window fills prefer window_kaiser_fill — it hoists the I0(β) denom.
 fn window_kaiser(n, size, beta) {
     if (_win_outside(n, size) == 1) { return f64_from(0); }
     if (size == 1) { return DSP_ONE; }
-    # 2n/(N-1) - 1 as one exact-integer ratio, so x is exactly negated at
-    # N-1-n and the window is bit-exact symmetric (see _win_phi).
-    var x = f64_div(f64_from(2 * n - (size - 1)), f64_from(size - 1));
-    var arg = f64_mul(beta, f64_sqrt(f64_sub(DSP_ONE, f64_mul(x, x))));
-    return f64_div(_bessel_i0(arg), _bessel_i0(beta));
+    return f64_div(_win_kaiser_num_d(n, size - 1, beta), _bessel_i0(beta));
 }
 
 # Fill dst[0..size] with a Kaiser window — computes I0(β) once.
 fn window_kaiser_fill(dst, size, beta) {
-    if (size <= 0) { return 0; }
-    if (size == 1) { store64(dst, DSP_ONE); return 0; }
-    var inv_denom = f64_div(DSP_ONE, _bessel_i0(beta));
-    var nm1 = f64_from(size - 1);
-    var i = 0;
-    while (i < size) {
-        var x = f64_div(f64_from(2 * i - (size - 1)), nm1);
-        var arg = f64_mul(beta, f64_sqrt(f64_sub(DSP_ONE, f64_mul(x, x))));
-        store64(dst + i * 8, f64_mul(_bessel_i0(arg), inv_denom));
-        i = i + 1;
-    }
-    return 0;
+    return _win_kaiser_fill_d(dst, size, size - 1, beta);
+}
+
+# Periodic (DFT-even) Kaiser, I0(β * sqrt(1 - (2n/N - 1)^2)) / I0(β): the
+# symmetric window of size N + 1 without its last sample, bit for bit, for
+# N >= 2. Conventions as window_hann_periodic (size 1 is [1]).
+fn window_kaiser_periodic(n, size, beta) {
+    if (_win_outside(n, size) == 1) { return f64_from(0); }
+    if (size == 1) { return DSP_ONE; }
+    return f64_div(_win_kaiser_num_d(n, size, beta), _bessel_i0(beta));
+}
+
+# Fill dst[0..size] with a periodic Kaiser window — computes I0(β) once; for
+# size >= 2 the first size samples of window_kaiser_fill(dst, size + 1, beta),
+# bit for bit (size 1 is [1]).
+fn window_kaiser_periodic_fill(dst, size, beta) {
+    return _win_kaiser_fill_d(dst, size, size, beta);
 }
 
 # ================================================================

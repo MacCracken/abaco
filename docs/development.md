@@ -113,7 +113,7 @@ watch.
 
 ```bash
 ./scripts/version-bump.sh X.Y.Z     # VERSION, CHANGELOG stub, consumer tags
-cyrius distlib                      # regenerate dist/abaco.cyr
+cyrius distlib                      # regenerate dist/abaco.cyr + dist/abaco.deps
 git add -A
 git commit -m "release X.Y.Z"
 git tag X.Y.Z                       # plain semver, no "v", no suffix

@@ -396,6 +396,256 @@ fn test_window_bounds() {
     return 0;
 }
 
+# Distance in ulps between two f64s: each bit pattern mapped onto one ordered
+# integer line (negatives mirrored below +0, so -0 and +0 are 0 apart). A NaN
+# on either side is never near anything. Across zero the distance is the sum of
+# the two magnitudes, up to 2 * 0x7FF0_0000_0000_0000 (-Inf to +Inf), which
+# does not fit in an i64: it saturates at i64 max. Subtracting the signed
+# positions wrapped instead, and a distance of exactly 2^63 came back as i64
+# min, which every `<= max_ulp` accepted.
+fn ulp_dist(a, b) {
+    var big = 0x7FFF_FFFF_FFFF_FFFF;
+    if (f64_eq(a, a) == 0 || f64_eq(b, b) == 0) { return big; }
+    var ma = a & big;
+    var mb = b & big;
+    var sa = 0;
+    if (a < 0) { sa = 1; }
+    var sb = 0;
+    if (b < 0) { sb = 1; }
+    if (sa == sb) {
+        # Same side: both magnitudes in [0, 2^63), so the difference fits.
+        var d = ma - mb;
+        if (d < 0) { d = 0 - d; }
+        return d;
+    }
+    if (ma > big - mb) { return big; }
+    return ma + mb;
+}
+
+fn near_ulp(actual, expected, max_ulp, name) {
+    assert(ulp_dist(actual, expected) <= max_ulp, name);
+    return 0;
+}
+
+# The helper itself; distances from python3 on the same ordered line. The first
+# two rows are exactly 2^63 apart, where the subtracting version wrapped to
+# i64 min and so passed near_ulp for any bound: -4.5359 against the
+# hann_p(5, 12) reference, and +Inf against -DBL_MIN.
+fn test_ulp_dist() {
+    var big = 0x7FFF_FFFF_FFFF_FFFF;
+    var hp = 0x3FED_DB3D_742C_2655;   # hann_p(5, 12), 0.9330127018922193
+    assert_eq(ulp_dist(0xC012_24C2_8BD3_D9AB, hp), big, "ulp_dist 2^63 apart saturates");
+    assert_eq(ulp_dist(hp, 0xC012_24C2_8BD3_D9AB), big, "ulp_dist 2^63 apart saturates, swapped");
+    assert_eq(ulp_dist(0x7FF0_0000_0000_0000, 0x8010_0000_0000_0000), big, "ulp_dist(+Inf, -DBL_MIN) saturates");
+    assert(ulp_dist(0xC012_24C2_8BD3_D9AB, hp) > 4, "near_ulp refuses -4.54 for 0.933");
+    assert_eq(ulp_dist(0x7FF0_0000_0000_0000, 0xFFF0_0000_0000_0000), big, "ulp_dist(+Inf, -Inf) saturates");
+    # Just inside: 2^63 - 1 and 2^63 - 2 apart are exact.
+    assert_eq(ulp_dist(0xC012_24C2_8BD3_D9AA, hp), big, "ulp_dist 2^63 - 1 apart");
+    assert_eq(ulp_dist(0xC012_24C2_8BD3_D9A9, hp), 0x7FFF_FFFF_FFFF_FFFE, "ulp_dist 2^63 - 2 apart");
+    assert_eq(ulp_dist(DSP_ONE, f64_neg(DSP_ONE)), 0x7FE0_0000_0000_0000, "ulp_dist(1, -1)");
+    assert_eq(ulp_dist(0, 0x8000_0000_0000_0000), 0, "ulp_dist(+0, -0) = 0");
+    assert_eq(ulp_dist(1, 0x8000_0000_0000_0001), 2, "ulp_dist across zero, smallest subnormals");
+    assert_eq(ulp_dist(DSP_ONE, 0x3FF0_0000_0000_0001), 1, "ulp_dist 1 up");
+    assert_eq(ulp_dist(DSP_ONE, 0x3FEF_FFFF_FFFF_FFFF), 1, "ulp_dist 1 down");
+    assert_eq(ulp_dist(0xBFF0_0000_0000_0001, f64_neg(DSP_ONE)), 1, "ulp_dist negative side");
+    assert_eq(ulp_dist(0x7FF0_0000_0000_0000, 0x7FEF_FFFF_FFFF_FFFF), 1, "ulp_dist(+Inf, DBL_MAX)");
+    assert_eq(ulp_dist(0x7FF8_0000_0000_0000, 0x7FF8_0000_0000_0000), big, "ulp_dist NaN is never near");
+    assert_eq(ulp_dist(DSP_ONE, 0x7FF8_0000_0000_0000), big, "ulp_dist NaN on the right");
+    return 0;
+}
+
+# 2.4.11: periodic (DFT-even) windows, w(n) = 0.5 - 0.5 cos(2 pi n / N) and
+# kin. References: python3, the exact rational phase 2 pi n / N in 50-digit
+# Decimal (Machin pi, Taylor cos, the A&S 9.6.12 I0 series), rounded once to
+# f64. Every sample of N = 2..130 sits within 5 ulp of its reference wherever
+# w >= 0.25 for the cosine windows (9 for Kaiser beta 8). Near the ends
+# 1 + cos(phi) cancels — the error there is ~1 ulp of the peak, not of the
+# sample (79 ulp at hann_p(1, 64); the textbook 0.5 - 0.5 cos cancels alike) —
+# so those rows use near_rel.
+fn test_window_periodic_values() {
+    near_ulp(window_hann_periodic(5, 12), 0x3FEDDB3D742C2655, 4, "hann_p(5,12)");
+    near_ulp(window_hann_periodic(20, 63), 0x3FE694A1C91366A1, 4, "hann_p(20,63)");
+    near_ulp(window_hann_periodic(45, 63), 0x3FE38F721C6048B0, 4, "hann_p(45,63)");
+    near_ulp(window_hann_periodic(300, 1001), 0x3FE4EA6553B32246, 4, "hann_p(300,1001)");
+    near_rel(window_hann_periodic(1, 64), 0x3F63B92E176D6D31, "hann_p(1,64)");
+    near_ulp(window_hamming_periodic(5, 12), 0x3FEE07240EB7FA4E, 4, "hamming_p(5,12)");
+    near_ulp(window_hamming_periodic(20, 63), 0x3FE7558A9A450C80, 4, "hamming_p(20,63)");
+    near_ulp(window_hamming_periodic(300, 1001), 0x3FE5CD6775F6B922, 4, "hamming_p(300,1001)");
+    near_ulp(window_hamming_periodic(1, 64), 0x3FB50C0B3EC0E7F0, 8, "hamming_p(1,64)");
+    near_ulp(window_blackman_periodic(5, 12), 0x3FEC938F5FB1450E, 4, "blackman_p(5,12)");
+    near_ulp(window_blackman_periodic(20, 63), 0x3FE253A129C9EA99, 4, "blackman_p(20,63)");
+    near_ulp(window_blackman_periodic(300, 1001), 0x3FE047643508BA58, 4, "blackman_p(300,1001)");
+    near_rel(window_blackman_periodic(1, 64), 0x3F4C85F0ACDD9B38, "blackman_p(1,64)");
+    near_ulp(window_kaiser_periodic(16, 64, f64_from(8)), 0x3FD79D3FC43011C1, 8, "kaiser_p(16,64,8)");
+    near_ulp(window_kaiser_periodic(40, 63, f64_from(5)), 0x3FEB1FECEFABA000, 8, "kaiser_p(40,63,5)");
+    near_ulp(window_kaiser_periodic(3, 10, f64_from(14)), 0x3FD4CABD3B2CAA4A, 8, "kaiser_p(3,10,14)");
+    near_ulp(window_kaiser_periodic(1, 64, f64_from(8)), 0x3F7599CDA9928F63, 8, "kaiser_p(1,64,8)");
+    near_rel(window_kaiser_periodic(16, 64, f64_from(50)), 0x3F55B50EC63EA1FA, "kaiser_p(16,64,50)");
+    near_rel(window_kaiser_periodic(16, 64, f64_from(100)), 0x3EBB63EA525D2E54, "kaiser_p(16,64,100)");
+    # An even size has its centre at phi = 0 exactly, where cos is 1 and the
+    # Kaiser numerator is the denominator.
+    assert_eq(window_hann_periodic(32, 64), DSP_ONE, "hann_p centre is exactly 1");
+    assert_eq(window_hann_periodic(1, 2), DSP_ONE, "hann_p(1,2) = 1");
+    assert_eq(window_kaiser_periodic(32, 64, f64_from(8)), DSP_ONE, "kaiser_p centre is exactly 1");
+    return 0;
+}
+
+# The DFT-even structure, bit for bit, at every size 2..257: the periodic
+# window of size N is the symmetric one of size N + 1 without its last sample
+# (Harris 1978), and w(n) == w(N - n) for 1 <= n < N.
+fn test_window_periodic_structure() {
+    var b8 = f64_from(8);
+    var ext = 0;
+    var sym = 0;
+    var size = 2;
+    while (size <= 257) {
+        var n = 0;
+        while (n < size) {
+            var h = window_hann_periodic(n, size);
+            var m = window_hamming_periodic(n, size);
+            var b = window_blackman_periodic(n, size);
+            var k = window_kaiser_periodic(n, size, b8);
+            if (h != window_hann(n, size + 1)) { ext = ext + 1; }
+            if (m != window_hamming(n, size + 1)) { ext = ext + 1; }
+            if (b != window_blackman(n, size + 1)) { ext = ext + 1; }
+            if (k != window_kaiser(n, size + 1, b8)) { ext = ext + 1; }
+            if (n >= 1) {
+                var r = size - n;
+                if (h != window_hann_periodic(r, size)) { sym = sym + 1; }
+                if (m != window_hamming_periodic(r, size)) { sym = sym + 1; }
+                if (b != window_blackman_periodic(r, size)) { sym = sym + 1; }
+                if (k != window_kaiser_periodic(r, size, b8)) { sym = sym + 1; }
+            }
+            n = n + 1;
+        }
+        size = size + 1;
+    }
+    assert_eq(ext, 0, "periodic(n, N) == symmetric(n, N + 1), N = 2..257");
+    assert_eq(sym, 0, "periodic w(n) == w(N - n), N = 2..257");
+    return 0;
+}
+
+# What the periodic form is for: at its hop it overlap-adds to a constant —
+# Hann and Hamming at N/2 (1 and 1.08), Blackman at N/3 (3 * 0.42 = 1.26) —
+# here each sum within 2^-50 of its constant (4 ulp: all three lie in [1, 2);
+# 2^-51 observed) for every size up to 256 that the hop divides, even sizes for
+# N/2 and multiples of 3 for N/3. The symmetric Hann at hop N/2 ripples by
+# about pi / (2 (N - 1)), ~2.5% at N = 64.
+fn test_window_periodic_cola() {
+    var tol = 0x3CD0000000000000;   # 2^-50, 4 ulp of 1.0
+    var c108 = f64_div(f64_from(108), f64_from(100));
+    var c126 = f64_div(f64_from(126), f64_from(100));
+    var bad = 0;
+    var ripple = f64_from(0);
+    var size = 2;
+    while (size <= 256) {
+        var h = size / 2;
+        var n = 0;
+        while (n < h) {
+            var sh = f64_add(window_hann_periodic(n, size), window_hann_periodic(n + h, size));
+            if (f64_gt(f64_abs(f64_sub(sh, DSP_ONE)), tol) == 1) { bad = bad + 1; }
+            var sm = f64_add(window_hamming_periodic(n, size), window_hamming_periodic(n + h, size));
+            if (f64_gt(f64_abs(f64_sub(sm, c108)), tol) == 1) { bad = bad + 1; }
+            if (size == 64) {
+                var ss = f64_add(window_hann(n, size), window_hann(n + h, size));
+                ripple = f64_max(ripple, f64_abs(f64_sub(ss, DSP_ONE)));
+            }
+            n = n + 1;
+        }
+        size = size + 2;
+    }
+    size = 3;
+    while (size <= 255) {
+        var t = size / 3;
+        var n = 0;
+        while (n < t) {
+            var s3 = f64_add(window_blackman_periodic(n, size), window_blackman_periodic(n + t, size));
+            s3 = f64_add(s3, window_blackman_periodic(n + 2 * t, size));
+            if (f64_gt(f64_abs(f64_sub(s3, c126)), tol) == 1) { bad = bad + 1; }
+            n = n + 1;
+        }
+        size = size + 3;
+    }
+    assert_eq(bad, 0, "periodic Hann / Hamming / Blackman overlap-add to a constant");
+    assert(f64_gt(ripple, f64_div(f64_from(2), f64_from(100))) == 1, "symmetric Hann at 50% ripples > 2%");
+    return 0;
+}
+
+# Same conventions as the symmetric generators: 0 outside [0, size), so
+# size <= 0 is empty, and [1] for size 1 — scipy's get_window(name, 1,
+# fftbins=True) and MATLAB's hann(1, 'periodic') — where the size + 1 recipe
+# would give the first sample of a 2-point symmetric window.
+fn test_window_periodic_bounds() {
+    var b8 = f64_from(8);
+    assert_eq(window_hann_periodic(64, 64), 0, "hann_p n = size is 0");
+    assert_eq(window_hann_periodic(0 - 1, 64), 0, "hann_p n = -1 is 0");
+    # The dropped sample stays dropped: symmetric(64, 65) is 0.08 for Hamming.
+    assert_eq(window_hamming_periodic(64, 64), 0, "hamming_p n = size is 0");
+    assert_eq(window_blackman_periodic(65, 64), 0, "blackman_p past the end is 0");
+    assert_eq(window_kaiser_periodic(64, 64, b8), 0, "kaiser_p n = size is 0");
+    assert_eq(window_kaiser_periodic(0 - 1, 64, b8), 0, "kaiser_p n = -1 is 0");
+    assert_eq(window_hann_periodic(0, 0), 0, "hann_p size 0 is empty");
+    assert_eq(window_hamming_periodic(2, 0 - 5), 0, "hamming_p negative size is empty");
+    assert_eq(window_kaiser_periodic(0, 0, b8), 0, "kaiser_p size 0 is empty");
+    assert_eq(window_hann_periodic(0, 1), DSP_ONE, "hann_p(0,1) = 1");
+    assert_eq(window_hamming_periodic(0, 1), DSP_ONE, "hamming_p(0,1) = 1");
+    assert_eq(window_blackman_periodic(0, 1), DSP_ONE, "blackman_p(0,1) = 1");
+    assert_eq(window_kaiser_periodic(0, 1, b8), DSP_ONE, "kaiser_p(0,1) = 1");
+    assert_eq(window_hamming_periodic(1, 1), 0, "hamming_p(1,1) is 0");
+    # The denominator is size itself — size + 1 is never formed — so the
+    # largest i64 size is a valid window, still DFT-even symmetric.
+    var big = 0x7FFF_FFFF_FFFF_FFFF;
+    near_ulp(window_hann_periodic(big / 2, big), DSP_ONE, 1, "hann_p(i64 max / 2, i64 max) ~ 1");
+    near_ulp(window_kaiser_periodic(big / 2, big, b8), DSP_ONE, 1, "kaiser_p(i64 max / 2, i64 max) ~ 1");
+    var hb = window_hann_periodic(1, big);
+    assert(f64_eq(hb, hb) == 1, "hann_p(1, i64 max) is a number");
+    assert_eq(hb, window_hann_periodic(big - 1, big), "hann_p(1, i64 max) == hann_p(i64 max - 1, i64 max)");
+    var kb = window_kaiser_periodic(1, big, b8);
+    assert(f64_eq(kb, kb) == 1, "kaiser_p(1, i64 max) is a number");
+    assert_eq(kb, window_kaiser_periodic(big - 1, big, b8), "kaiser_p(1, i64 max) symmetric");
+    return 0;
+}
+
+# window_kaiser_periodic_fill is the first N samples of window_kaiser_fill of
+# size N + 1, bit for bit. Like window_kaiser_fill it multiplies by 1 / I0(beta)
+# where the generator divides, so the two agree to 1 ulp, not bit for bit.
+fn test_window_kaiser_periodic_fill() {
+    var b14 = f64_from(14);
+    var w = alloc(259 * 8);
+    var s = alloc(259 * 8);
+    var ext = 0;
+    var far = 0;
+    var spill = 0;
+    var size = 2;
+    while (size <= 257) {
+        store64(w + size * 8, 0x7FF4_0000_DEAD_0002);
+        window_kaiser_periodic_fill(w, size, b14);
+        window_kaiser_fill(s, size + 1, b14);
+        var i = 0;
+        while (i < size) {
+            var v = load64(w + i * 8);
+            if (v != load64(s + i * 8)) { ext = ext + 1; }
+            if (ulp_dist(v, window_kaiser_periodic(i, size, b14)) > 1) { far = far + 1; }
+            i = i + 1;
+        }
+        if (load64(w + size * 8) != 0x7FF4_0000_DEAD_0002) { spill = spill + 1; }
+        size = size + 1;
+    }
+    assert_eq(ext, 0, "kaiser_periodic_fill(N) == kaiser_fill(N + 1)[0..N)");
+    assert_eq(far, 0, "kaiser_periodic_fill within 1 ulp of window_kaiser_periodic");
+    assert_eq(spill, 0, "kaiser_periodic_fill writes exactly size samples");
+    store64(w, 0x7FF4_0000_DEAD_0003);
+    window_kaiser_periodic_fill(w, 0, b14);
+    assert_eq(load64(w), 0x7FF4_0000_DEAD_0003, "kaiser_periodic_fill size 0 writes nothing");
+    window_kaiser_periodic_fill(w, 0 - 4, b14);
+    assert_eq(load64(w), 0x7FF4_0000_DEAD_0003, "kaiser_periodic_fill negative size writes nothing");
+    store64(w + 8, 0x7FF4_0000_DEAD_0004);
+    window_kaiser_periodic_fill(w, 1, b14);
+    assert_eq(load64(w), DSP_ONE, "kaiser_periodic_fill size 1 is [1]");
+    assert_eq(load64(w + 8), 0x7FF4_0000_DEAD_0004, "kaiser_periodic_fill size 1 writes one sample");
+    return 0;
+}
+
 fn test_interp_values() {
     near_rel(f64_cubic(f64_from(0), f64_from(1), f64_from(4), f64_from(9), f64_div(f64_from(1), f64_from(2))),
       f64_div(f64_from(9), f64_from(4)), "cubic(0,1,4,9,0.5) = 2.25");
@@ -466,7 +716,8 @@ fn test_nan_and_domain() {
     assert(f64_eq(r, r) == 0, "time_constant(NaN ms) is NaN (was exp(-1))");
     r = time_constant(f64_from(0 - 5), f64_from(44100));
     assert(f64_eq(r, r) == 0, "time_constant(-5 ms) is NaN");
-    near_rel(time_constant(f64_from(0), f64_from(44100)), 0x3FD78B56362CEF38, "time_constant(0 ms) clamps to one sample");
+    near_rel(time_constant(f64_from(0), f64_from(44100)), 0x3FD78B56362CEF38,
+      "time_constant(0 ms) clamps to one sample");
     # rms2 through hypot (2.4.8 squared first: +Inf and 0 here).
     near_rel(f64_rms2(0x6974E718D7D7625A, 0x6974E718D7D7625A), 0x6974E718D7D7625A, "rms2(1e200, 1e200) = 1e200");
     near_rel(f64_rms2(0x16687E92154EF7AC, 0x16687E92154EF7AC), 0x16687E92154EF7AC, "rms2(1e-200, 1e-200) = 1e-200");
@@ -598,6 +849,12 @@ fn main() {
     test_window_values();
     test_window_bounds();
     test_window_symmetry();
+    test_ulp_dist();
+    test_window_periodic_values();
+    test_window_periodic_structure();
+    test_window_periodic_cola();
+    test_window_periodic_bounds();
+    test_window_kaiser_periodic_fill();
     test_interp_values();
     test_round_edges();
     test_db_constants_exact();

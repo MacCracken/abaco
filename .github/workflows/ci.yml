@@ -62,7 +62,8 @@ jobs:
           done
 
       - name: Lint
-        # src is warning-clean as of 2.2.1; any new warning fails the gate.
+        # src is warning-clean as of 2.2.1, tests / benches / fuzz as of 2.4.11;
+        # any new warning in any of them fails the gate.
         # Cyrius 6.5.x added an untracked-deferral advisory that prints as
         # "deferral line N: ..." rather than "warn ...", so it needs its own
         # match or it slips through the gate silently (see CHANGELOG 2.3.4).
@@ -70,7 +71,7 @@ jobs:
         # with `|| true`, so a lint run that could not read the file passed.
         run: |
           fail=0
-          for f in src/*.cyr; do
+          for f in src/*.cyr tests/*.tcyr benches/*.bcyr fuzz/*.fcyr; do
             rc=0
             out=$(cyrius lint --exit-with-count "$f" 2>&1) || rc=$?
             if [ $rc -ne 0 ]; then
@@ -97,19 +98,26 @@ jobs:
       - name: Verify ELF
         run: xxd -l 4 build/abaco | grep -q "7f45 4c46"
 
-      - name: Verify dist bundle is current
+      - name: Verify dist bundle and sidecar are current
         # dist/abaco.cyr is the committed consumer bundle (dhvani, Abacus
-        # import it via `[deps.abaco] modules = ["dist/abaco.cyr"]`).
+        # import it via `[deps.abaco] modules = ["dist/abaco.cyr"]`), and since
+        # 2.4.11 dist/abaco.deps beside it lists the stdlib leaves it needs, which a
+        # consumer's `cyrius deps` reads. `distlib --check` byte-compares both
+        # against a fresh regen and writes nothing.
         # The manifest declares [lib] (not [lib.abaco]) since 2.4.6, so `cyrius distlib`
         # writes dist/abaco.cyr directly — no profile argument, no rename. While it was
         # [lib.abaco], a bare `cyrius distlib` errored "no [build] modules or [lib]
         # modules found": the bundle every consumer imports could not be regenerated
         # by the obvious command, only by `distlib abaco && mv`.
-        # Fails if the checked-in copy drifted.
+        # Fails if either checked-in file drifted. --check cannot see a test-only
+        # leaf that was regenerated and committed, so that is refused separately:
+        # test, bench and fuzz files include assert / bench / args themselves.
         run: |
-          cyrius distlib
-          git diff --exit-code dist/abaco.cyr || {
-            echo "::error::dist/abaco.cyr is stale — run 'cyrius distlib' and commit"; exit 1; }
+          cyrius distlib --check || {
+            echo "::error::dist/abaco.cyr or dist/abaco.deps is stale — run 'cyrius distlib' and commit"; exit 1; }
+          if grep -qxE 'assert|bench|args' dist/abaco.deps; then
+            echo "::error::test-only leaf in dist/abaco.deps — include it from the test file instead"; exit 1
+          fi
 
       - name: Test
         # Full suite, all tests gated (SIMD un-quarantined in 2.2.1 — the

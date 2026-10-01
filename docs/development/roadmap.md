@@ -534,22 +534,44 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
 - [x] US short / UK long ton; below absolute zero is `UERR_CONVERT`
 - [x] aarch64 CI lane (qemu), in the release gate too
 
+### 2.4.11 — correctly rounded literals, periodic windows, the sidecar ✅ (2026-09-30)
+
+- [x] Every literal correctly rounded at any length: a certified double-double
+      estimate (error < 2^-99, accepted only 2^-32 ulp clear of a boundary), with
+      an exact comparison against the midpoint (Clinger's AlgorithmR, Gay's
+      `bigcomp`) when it is not. 0 wrong of ~242,000 literals, and of over
+      400,000 more from two reviewers' own generators (2.4.10: ~25% of
+      adversarial midpoints wrong)
+- [x] Periodic (DFT-even) windows: `window_{hann,hamming,blackman,kaiser}_periodic`
+      and `window_kaiser_periodic_fill`; the symmetric ones unchanged bit for bit
+- [x] `dist/abaco.deps` committed (15 leaves): `assert` / `bench` / `args` out of
+      `[deps].stdlib`, CI and release on `distlib --check`
+- [x] The 11 test / fuzz lint warnings fixed; CI lints every source file
+
 ### Still open
 
 > The two residuals the 2.3.5 fix audit left open were closed in 2.4.0.
+>
+> Moving consumers onto a release, and auditing them for math they should take
+> from abaco, is the consumers' work, not abaco's. abaco's side of it is the
+> README, the docs and the upgrade notes in
+> [`../guides/consuming-abaco.md`](../guides/consuming-abaco.md).
 
-- [ ] **Move the live consumers to 2.4.9.** dhvani and jalwa ship the 2.4.6
-      bundle. dhvani must pass `f64_from(sample_rate)` to `time_constant`
-      (compressor, limiter) first — 2.4.9 answers NaN for the integer it
-      passes today. Then Abacus.
-- [ ] Audit consumers for duplicated math that should use `abaco::dsp` —
-      dhvani (first target; its chroma uses its own C0 literal), shruti, tarang
-- [ ] Standardize AGNOS projects on abaco for shared math
-- [ ] DSP expansion as consumer needs surface (filters, additional windows,
-      a periodic/DFT-even window variant)
+- [ ] DSP expansion as consumer needs surface (filters, additional windows)
 - [ ] **Currency TLS.** `CurrencyCache_fetch` works against a plaintext
-      loopback server only; `lib/tls.cyr` (or routing through hoosh, which
-      would add TLS) once the stdlib TLS API stabilizes
+      loopback server only. A 2.4.11 study found the stdlib's native TLS ready
+      (chain + hostname verification fail closed, x86_64 and aarch64) and
+      prototyped it behind `-D ABACO_TLS`: listing `tls` in `[deps].stdlib`
+      would grow the smoke binary 81,936 → 545,680 B and every compile by
+      ~0.85 s, so it must be opt-in. To ship with it: refuse the libssl backend
+      (it never checks the hostname), a main-thread `abaco_tls_init()` (first use
+      from two threads at once breaks every later handshake), and a
+      self-contained TLS test (fork + native `tls_accept`, fixture CA). hoosh is
+      not an alternative — it has no rates endpoint. Filed 2026-09-30 in
+      cyrius's `docs/development/issues/`, each with a repro:
+      `2026-09-30-tls-libssl-backend-no-hostname-verification.md` (High),
+      `2026-09-30-tls-first-use-thread-race.md` and
+      `2026-09-30-tls-client-memory-and-alert-gaps.md`
 - [ ] **Upstream (ganita)** — filed 2026-09-30 in ganita's
       `docs/development/issues/`, each with a self-proving repro and a tested fix:
       `2026-09-30-f64-hyperbolic-and-asin-cancellation-band.md` (`sinh` / `tanh` /
@@ -567,14 +589,7 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
       14 ms under qemu) and `2026-09-30-json-parse-flat-misassociates-values.md`
       (flat parser hands keys the wrong values; abaco's `_ccy_load_body` guards
       stay either way)
-- [ ] Literals exactly at a midpoint between doubles and written out past
-      their 36th significant digit can round the wrong way (an adversarial
-      9,000-literal set: 749 wrong, 2.4.9: 3,788). Closing it needs an
-      arbitrary-precision comparison (Clinger's AlgorithmR / bignum fallback)
-- [ ] A `tan` / `f64_tan` in the stdlib would let abaco drop its kernel and its
-      use of the private `_f64_rem_pio2`
-- [ ] Decide whether to commit the `dist/abaco.deps` sidecar. Since 2.4.6 its
-      name is exactly what a consumer's `cyrius deps` reads, but it lists every
-      `[deps].stdlib` module, including the test / bench-only `assert`, `bench`
-      and `args`; README.md's list is the contract today, and CI can move to
-      `distlib --check` only once the sidecar is committed
+- [ ] **Upstream (ganita), `tan`** — filed 2026-09-30 as
+      `2026-09-30-f64-tan-missing.md` (fdlibm `s_tan` / `k_tan` on
+      `_f64_rem_pio2`; repro exits 6). When it ships, abaco drops its kernel and
+      its use of the private `_f64_rem_pio2`

@@ -188,6 +188,49 @@ fn _bench_crossfade_mid() {
     return 0;
 }
 
+# One window sample. The periodic rows run at (16, 63), which is the same
+# phase as the symmetric (16, 64) — periodic(n, N) is symmetric(n, N + 1) bit
+# for bit — so each pair times the same arithmetic through the shared core.
+fn _bench_window_hann() {
+    window_hann(16, 64);
+    return 0;
+}
+
+fn _bench_window_hann_periodic() {
+    window_hann_periodic(16, 63);
+    return 0;
+}
+
+fn _bench_window_hamming() {
+    window_hamming(16, 64);
+    return 0;
+}
+
+fn _bench_window_hamming_periodic() {
+    window_hamming_periodic(16, 63);
+    return 0;
+}
+
+fn _bench_window_blackman() {
+    window_blackman(16, 64);
+    return 0;
+}
+
+fn _bench_window_blackman_periodic() {
+    window_blackman_periodic(16, 63);
+    return 0;
+}
+
+fn _bench_window_kaiser() {
+    window_kaiser(16, 64, f64_from(8));
+    return 0;
+}
+
+fn _bench_window_kaiser_periodic() {
+    window_kaiser_periodic(16, 63, f64_from(8));
+    return 0;
+}
+
 fn run_dsp_benches() {
     println("--- dsp ---");
 
@@ -269,6 +312,38 @@ fn run_dsp_benches() {
 
     b = bench_new("crossfade_mid");
     bench_run(b, &_bench_crossfade_mid, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("window_hann");
+    bench_run(b, &_bench_window_hann, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("window_hann_periodic");
+    bench_run(b, &_bench_window_hann_periodic, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("window_hamming");
+    bench_run(b, &_bench_window_hamming, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("window_hamming_periodic");
+    bench_run(b, &_bench_window_hamming_periodic, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("window_blackman");
+    bench_run(b, &_bench_window_blackman, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("window_blackman_periodic");
+    bench_run(b, &_bench_window_blackman_periodic, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("window_kaiser");
+    bench_run(b, &_bench_window_kaiser, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("window_kaiser_periodic");
+    bench_run(b, &_bench_window_kaiser_periodic, BENCH_ITERS);
     bench_report(b);
 
     return 0;
@@ -446,6 +521,17 @@ fn _bench_simd_abs_4096() {
     return 0;
 }
 
+# Whole 1024-sample Kaiser windows (beta 8), I0(beta) hoisted.
+fn _bench_kaiser_fill_1024() {
+    window_kaiser_fill(_batch_dst, 1024, f64_from(8));
+    return 0;
+}
+
+fn _bench_kaiser_periodic_fill_1024() {
+    window_kaiser_periodic_fill(_batch_dst, 1024, f64_from(8));
+    return 0;
+}
+
 var BATCH_ITERS = 1000;
 
 fn run_batch_benches() {
@@ -501,6 +587,16 @@ fn run_batch_benches() {
 
     b = bench_new("simd_abs_4096");
     bench_run(b, &_bench_simd_abs_4096, BATCH_ITERS);
+    bench_report(b);
+
+    println("--- windows (1024 samples) ---");
+
+    b = bench_new("kaiser_fill_1024");
+    bench_run(b, &_bench_kaiser_fill_1024, BATCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("kaiser_periodic_fill_1024");
+    bench_run(b, &_bench_kaiser_periodic_fill_1024, BATCH_ITERS);
     bench_report(b);
 
     return 0;

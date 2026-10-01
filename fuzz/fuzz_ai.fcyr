@@ -30,6 +30,8 @@
 #   - CurrencyCache_convert returns 0 with AI_ERR_CURRENCY exactly when a
 #     code is absent from the cache (decided from the known code set).
 
+include "lib/args.cyr"
+
 include "src/core.cyr"
 include "src/ntheory.cyr"
 include "src/dsp.cyr"

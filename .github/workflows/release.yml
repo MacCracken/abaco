@@ -74,11 +74,14 @@ jobs:
           CYRIUS_DCE=1 cyrius build src/main.cyr build/abaco
           echo "abaco: $(wc -c < build/abaco) bytes"
 
-      - name: Regenerate bundle
+      - name: Verify bundle
         # [lib] (not [lib.abaco]) since 2.4.6, so distlib writes the consumer path
-        # dist/abaco.cyr directly — no profile argument, no rename.
+        # dist/abaco.cyr directly — no profile argument, no rename. Since 2.4.11 the
+        # tag ships the committed bundle and sidecar as they are: --check fails the
+        # release if either differs from a fresh regen, instead of shipping a bundle
+        # that is not the one at the tag.
         run: |
-          cyrius distlib
+          cyrius distlib --check
 
       - name: Test
         run: |

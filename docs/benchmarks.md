@@ -48,6 +48,19 @@ the tokenizer). The DCE-built A/B also showed primality ~20% faster, but the
 non-DCE trail does not, so that is layout, not a win. Details: CHANGELOG
 [2.4.9] "Benchmarks".
 
+## Window rows (2.4.11)
+
+The `window_*` rows time one coefficient. Each window has a symmetric row at
+(16, 64) and a periodic row at (16, 63), the same phase —
+`window_hann_periodic(n, N)` is `window_hann(n, N + 1)` bit for bit — so each
+pair times the same arithmetic and should read alike: ~57 ns Hann / Hamming,
+~93 ns Blackman (two cosines), ~290 ns Kaiser (two I₀ series), medians of 7
+runs. `kaiser_fill_1024` and `kaiser_periodic_fill_1024` fill a whole window
+with I₀(β) hoisted, ~140 ns a sample. Adding the periodic forms moved no
+symmetric row: interleaved A/B of the four symmetric rows and
+`kaiser_fill_1024` against 2.4.10, 7 runs each, medians within ±4% with mixed
+signs (1–2 ns on the cosine rows, which report whole ns).
+
 ## Running
 
 ```bash

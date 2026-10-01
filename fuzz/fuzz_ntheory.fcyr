@@ -12,6 +12,8 @@
 #     otherwise the smallest prime above n.
 #   - abaco_binomial obeys Pascal's rule whenever all three terms fit.
 
+include "lib/args.cyr"
+
 include "src/core.cyr"
 include "src/ntheory.cyr"
 

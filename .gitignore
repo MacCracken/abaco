@@ -3,17 +3,9 @@
 
 # Resolved deps — `cyrius deps` vendors the pinned stdlib snapshot into
 # lib/ from cyrius.cyml [deps].stdlib. It's a build artifact, not source;
-# never commit it. (dist/abaco.cyr IS committed — it's the consumer bundle.)
+# never commit it. (dist/abaco.cyr and dist/abaco.deps ARE committed — the
+# consumer bundle and its stdlib sidecar.)
 /lib/
-
-# distlib sidecar — `cyrius distlib` writes dist/abaco.deps beside the bundle:
-# the stdlib leaves a consumer's `cyrius deps` should resolve for it. Not
-# committed: README.md's hand-written stdlib list is the contract, and the
-# sidecar lists every [deps].stdlib module, including assert, bench and args,
-# which only abaco's own tests and benches need. Whether to ship it is an open
-# roadmap item. Until then CI checks the bundle with `distlib && git diff`,
-# because `distlib --check` counts an uncommitted sidecar as stale.
-/dist/*.deps
 
 # CI bench artifact — the "Bench (non-fatal)" step tees its output to
 # bench-results.txt in the repo root. Ephemeral on a runner, but it dirties a

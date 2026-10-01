@@ -17,6 +17,11 @@
 #     execution reached any function but four).
 #   - Whitespace idempotence: " 2 + 3 " == "2+3".
 #   - Commutativity: a + b == b + a, a * b == b * a (on valid expressions).
+#   - Literals at, just above, just below and truncated from a midpoint between
+#     two doubles parse to the correct neighbour, ties to even (2.4.11; the
+#     oracle is the harness's own big integer, see _fz_literal_midpoint).
+
+include "lib/args.cyr"
 
 include "src/core.cyr"
 include "src/ntheory.cyr"
@@ -247,7 +252,13 @@ var _FZ_ARG_N = 7;
 fn _fz_arg_text(kind, small) {
     var b = alloc(32);
     if (kind == 0) { var n0 = fmt_int_buf(small, b); store8(b + n0, 0); return b; }
-    if (kind == 1) { store8(b, 48); store8(b + 1, 45); var n1 = fmt_int_buf(small + 1, b + 2); store8(b + 2 + n1, 0); return b; }
+    if (kind == 1) {
+        store8(b, 48);
+        store8(b + 1, 45);
+        var n1 = fmt_int_buf(small + 1, b + 2);
+        store8(b + 2 + n1, 0);
+        return b;
+    }
     if (kind == 2) { return "2.5"; }
     if (kind == 3) { if (small % 2 == 0) { return "1e300"; } return "0-1e300"; }
     if (kind == 4) { return "9223372036854775808"; }
@@ -272,7 +283,10 @@ fn _fz_choose(n, k) {
             while (c <= 60) {
                 var v = 0;
                 if (c == 0 || c == r) { v = 1; }
-                elif (c < r) { v = load64(_FZ_PASCAL + ((r - 1) * 61 + c - 1) * 8) + load64(_FZ_PASCAL + ((r - 1) * 61 + c) * 8); }
+                elif (c < r) {
+                    var up = _FZ_PASCAL + (r - 1) * 61 * 8;
+                    v = load64(up + (c - 1) * 8) + load64(up + c * 8);
+                }
                 store64(_FZ_PASCAL + (r * 61 + c) * 8, v);
                 c = c + 1;
             }
@@ -355,7 +369,197 @@ fn _fz_call_shape(e) {
         return 0;
     }
     if (nan == 1 && (fi == 10 || fi == 11 || fi == 12)) {
-        if (err != ABACO_ERR_NONE || f64_eq(r, r) == 1) { _fz_puts(buf); _fz_fail(" statistic of a NaN argument is not NaN"); }
+        if (err != ABACO_ERR_NONE || f64_eq(r, r) == 1) {
+            _fz_puts(buf);
+            _fz_fail(" statistic of a NaN argument is not NaN");
+        }
+    }
+    return 0;
+}
+
+# ---- Literal rounding at midpoints (2.4.11) ----
+#
+# The oracle never touches the parser's arithmetic. A random double x = m * 2^e
+# (zero, subnormal, normal, DBL_MAX) has an upper neighbour whose bit pattern
+# is x's plus one (+Inf above DBL_MAX), and the midpoint between them,
+# M = (2m + 1) * 2^(e - 1), has a finite decimal expansion: (2m + 1) * 2^(e - 1)
+# for e >= 1, (2m + 1) * 5^(1 - e) * 10^(e - 1) otherwise. The harness writes
+# those digits out with its own schoolbook big integer and checks that
+#   - M exactly, and M with zeros appended, is a tie: the even one of x, next;
+#   - M plus one unit in a far digit is next; M minus one is x;
+#   - M cut to 20 or more significant digits (dropping a nonzero digit) is x.
+# Every perturbation is far smaller than half an ulp, so these are the right
+# answers whatever the digit count; the 2.4.10 parser got ~25% of them wrong.
+
+# Scratch, allocated once: this harness is single-threaded.
+var _FZ_BIG = 0;      # base-10^9 limbs, least significant first (100 slots)
+var _FZ_DIG = 0;      # M's decimal digits, ASCII (1024 bytes)
+var _FZ_LIT = 0;      # one literal under test (2048 bytes)
+
+# _FZ_BIG (nl limbs) *= f for f <= 10^9; returns the new limb count.
+fn _fz_big_mul(nl, f) {
+    var carry = 0;
+    var i = 0;
+    while (i < nl) {
+        var t = load64(_FZ_BIG + i * 8) * f + carry;
+        store64(_FZ_BIG + i * 8, t % 1000000000);
+        carry = t / 1000000000;
+        i = i + 1;
+    }
+    while (carry > 0) {
+        store64(_FZ_BIG + nl * 8, carry % 1000000000);
+        carry = carry / 1000000000;
+        nl = nl + 1;
+    }
+    return nl;
+}
+
+# Write mm * 2^b (b >= 0) or mm * 5^-b (b < 0) into _FZ_DIG; returns the digit
+# count. Every digit is kept, trailing zeros too.
+fn _fz_mid_digits(mm, b) {
+    store64(_FZ_BIG, mm % 1000000000);
+    store64(_FZ_BIG + 8, mm / 1000000000);
+    var nl = 2;
+    if (load64(_FZ_BIG + 8) == 0) { nl = 1; }
+    var k = b;
+    var f = 2;
+    if (b < 0) { k = 0 - b; f = 5; }
+    while (k >= 12) {
+        var step = f * f * f * f * f * f;
+        nl = _fz_big_mul(nl, step * step);
+        k = k - 12;
+    }
+    while (k > 0) { nl = _fz_big_mul(nl, f); k = k - 1; }
+    var nd = 0;
+    var li = nl - 1;
+    var top = load64(_FZ_BIG + li * 8);
+    nd = fmt_int_buf(top, _FZ_DIG);
+    li = li - 1;
+    while (li >= 0) {
+        var v = load64(_FZ_BIG + li * 8);
+        var j = 8;
+        while (j >= 0) {
+            store8(_FZ_DIG + nd + j, 48 + v % 10);
+            v = v / 10;
+            j = j - 1;
+        }
+        nd = nd + 9;
+        li = li - 1;
+    }
+    return nd;
+}
+
+# Render digits _FZ_DIG[0..nd) (+ `zeros` zeros, then `tail` if > 0) times
+# 10^xe as a literal in _FZ_LIT, in one of four spellings: integer digits,
+# d.ddd, 0.ddd, and 0.000ddd with leading fractional zeros.
+fn _fz_lit_write(nd, zeros, tail, xe) {
+    var style = _fz_u(4);
+    var p = 0;
+    var total = nd + zeros;
+    if (tail > 0) { total = total + 1; }
+    var ex = xe;
+    if (style >= 2) { store8(_FZ_LIT, 48); store8(_FZ_LIT + 1, 46); p = 2; ex = xe + total; }
+    if (style == 3) {
+        var lz = 1 + _fz_u(40);
+        var q = 0;
+        while (q < lz) { store8(_FZ_LIT + p, 48); p = p + 1; q = q + 1; }
+        ex = ex + lz;
+    }
+    var i = 0;
+    while (i < total) {
+        var dch = 48;
+        if (i < nd) { dch = load8(_FZ_DIG + i); }
+        elif (i >= nd + zeros) { dch = 48 + tail; }
+        store8(_FZ_LIT + p, dch);
+        p = p + 1;
+        if (style == 1 && i == 0 && total > 1) { store8(_FZ_LIT + p, 46); p = p + 1; ex = xe + total - 1; }
+        i = i + 1;
+    }
+    if (ex != 0 || style == 0) {
+        store8(_FZ_LIT + p, 101);
+        p = p + 1;
+        if (ex < 0) { store8(_FZ_LIT + p, 45); p = p + 1; ex = 0 - ex; }
+        p = p + fmt_int_buf(ex, _FZ_LIT + p);
+    }
+    store8(_FZ_LIT + p, 0);
+    return p;
+}
+
+fn _fz_lit_check(e, want, what) {
+    var got = Evaluator_eval(e, _FZ_LIT);
+    if (eval_err(e) != ABACO_ERR_NONE || got != want) {
+        _fz_puts(_FZ_LIT);
+        _fz_puts(" -> ");
+        fmt_hex(got);
+        _fz_puts(", want ");
+        fmt_hex(want);
+        _fz_puts(": ");
+        _fz_fail(what);
+    }
+    return 0;
+}
+
+fn _fz_literal_midpoint(e) {
+    if (_FZ_BIG == 0) {
+        _FZ_BIG = alloc(100 * 8);
+        _FZ_DIG = alloc(1024);
+        _FZ_LIT = alloc(2048);
+    }
+    # x: uniform bit patterns, subnormals, binade ends, the range ends.
+    var kind = _fz_u(6);
+    var bits = _fz_u(0x7FF0_0000_0000_0000);
+    if (kind == 1) { bits = _fz_u(0x0010_0000_0000_0000); }
+    if (kind == 2) { bits = bits & 0x7FF0_0000_0000_0000; }                 # a power of two
+    if (kind == 3) { bits = bits | 0x000F_FFFF_FFFF_FFFF; }                 # just below one
+    if (kind == 4) { bits = 0x7FEF_FFFF_FFFF_FFFF - _fz_u(4); }             # top of the range
+    if (kind == 5) { bits = _fz_u(2); }                                     # 0 or 2^-1074
+    if (bits >= 0x7FF0_0000_0000_0000) { bits = 0x7FEF_FFFF_FFFF_FFFF; }
+    var be = bits >> 52;
+    var m = bits & 0x000F_FFFF_FFFF_FFFF;
+    var ex = 0 - 1074;
+    if (be > 0) { m = m | 0x0010_0000_0000_0000; ex = be - 1075; }
+    var b = ex - 1;
+    var nd = _fz_mid_digits(2 * m + 1, b);
+    var xe = 0;
+    if (b < 0) { xe = b; }
+    var lo = bits;
+    var hi = bits + 1;
+    var tie = lo;
+    if ((bits & 1) == 1) { tie = hi; }
+
+    _fz_lit_write(nd, 0, 0, xe);
+    _fz_lit_check(e, tie, "an exact midpoint is not rounded to even");
+    var z = _fz_u(40);
+    _fz_lit_write(nd, z, 0, xe - z);
+    _fz_lit_check(e, tie, "a midpoint with trailing zeros is not rounded to even");
+    _fz_lit_write(nd, z, 1 + _fz_u(9), xe - z - 1);
+    _fz_lit_check(e, hi, "a value just above a midpoint is not rounded up");
+
+    # M * 10^(z+1) - 1: decrement the digit string, then append z+1 nines.
+    var i = nd - 1;
+    var borrow = 1;
+    while (i >= 0 && borrow == 1) {
+        var dch = load8(_FZ_DIG + i);
+        if (dch == 48) { store8(_FZ_DIG + i, 57); }
+        else { store8(_FZ_DIG + i, dch - 1); borrow = 0; }
+        i = i - 1;
+    }
+    var k = 0;
+    while (k <= z) { store8(_FZ_DIG + nd + k, 57); k = k + 1; }
+    _fz_lit_write(nd + z + 1, 0, 0, xe - z - 1);
+    _fz_lit_check(e, lo, "a value just below a midpoint is not rounded down");
+
+    # Cut to t significant digits, 20 <= t < nd (rebuild M first).
+    nd = _fz_mid_digits(2 * m + 1, b);
+    if (nd > 20) {
+        var t = 20 + _fz_u(nd - 20);
+        var nz = 0;
+        var j = t;
+        while (j < nd) { if (load8(_FZ_DIG + j) != 48) { nz = 1; } j = j + 1; }
+        var want = lo;
+        if (nz == 0) { want = tie; }
+        _fz_lit_write(t, 0, 0, xe + nd - t);
+        _fz_lit_check(e, want, "a truncated midpoint is not rounded down");
     }
     return 0;
 }
@@ -432,6 +636,7 @@ fn main() {
         # relying on the random stream to stumble into it.
         if (iter % 4 == 0) { _fz_pathological(_fz_u(5), ev); }
         if (iter % 4 == 1) { _fz_call_shape(ev); }
+        _fz_literal_midpoint(ev);
 
         # Whitespace idempotence + commutativity on synthesized valid exprs.
         # a in [1..1000), b in [1..1000).

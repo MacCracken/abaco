@@ -97,14 +97,40 @@ source. No magic numbers.
     the Discrete Fourier Transform." *Proc. IEEE*, 66(1), 51–83. doi:10.1109/PROC.1978.10837
   - Hann / Hamming (a₀ = 0.54, a₁ = 0.46); Blackman (0.42, 0.5, 0.08);
     Kaiser window via the zeroth-order modified Bessel function I₀(β).
-  - abaco's windows are the **symmetric** form (denominator size − 1), the
-    filter-design convention. Since 2.4.10 they are evaluated on the centred
+  - `window_hann` / `_hamming` / `_blackman` / `_kaiser` (and
+    `window_kaiser_fill`) are the **symmetric** form (denominator size − 1),
+    the filter-design convention. Since 2.4.10 they are evaluated on the centred
     phase φ = π(2n − (N−1))/(N−1) (cos θ = −cos φ for θ = 2πn/(N−1)), which is
     exactly negated at N−1−n, so w(n) and w(N−1−n) are the same double and an
-    FIR built from them is exactly linear-phase. For spectral analysis with overlap-add, Harris
-    tabulates the **periodic** (DFT-even) form: evaluate with size + 1 and
-    drop the last sample. An index outside [0, size) is 0 and a 1-point
-    window is 1 (2.4.9; out-of-range indices used to wrap onto the cosine).
+    FIR built from them is exactly linear-phase. An index outside [0, size) is
+    0 and a 1-point window is 1 (2.4.9; out-of-range indices used to wrap onto
+    the cosine).
+  - **Periodic (DFT-even) windows** (2.4.11) — `window_hann_periodic`,
+    `window_hamming_periodic`, `window_blackman_periodic`,
+    `window_kaiser_periodic`, `window_kaiser_periodic_fill`. Harris defines
+    the windows for harmonic analysis as DFT-even sequences: w(n) = w(N − n)
+    for 1 ≤ n < N, which is the symmetric window of N + 1 points with its last
+    sample dropped (denominator N), so the window is one period of a periodic
+    sequence and its N-point DFT is real. abaco evaluates them on the same
+    centred phase with denominator N, φ = π(2n − N)/N, so periodic(n, N) is
+    symmetric(n, N + 1) bit for bit (N ≥ 2) and w(n) == w(N − n) exactly; N + 1
+    is never formed, so any i64 size works. Conventions follow
+    `scipy.signal.get_window(name, N, fftbins=True)` for all four windows and
+    MATLAB's `'periodic'` flag for Hann, Hamming and Blackman (MATLAB's
+    `kaiser(L, beta)` has no such flag), including a 1-point window of [1]
+    (the N + 1 recipe would give the first sample of a 2-point symmetric
+    window); out-of-range indices and size ≤ 0 answer 0, as for the symmetric
+    forms.
+  - At its hop the periodic window overlap-adds to a constant (COLA): Hann and
+    Hamming at N/2 (sums 1 and 1.08), Blackman at N/3 (3 · 0.42 = 1.26) — the
+    condition for exact STFT resynthesis; the symmetric Hann at hop N/2
+    ripples by about π/(2(N − 1)), ~2.5% at N = 64. The test suite checks
+    each sum within 2⁻⁵⁰ of its constant (4 ulp, as all three lie in [1, 2);
+    2⁻⁵¹ observed) for every size up to 256 that the hop divides: even sizes
+    for N/2, multiples of 3 for N/3.
+    - Allen, J. B. & Rabiner, L. R. (1977). "A unified approach to short-time
+      Fourier analysis and synthesis." *Proc. IEEE*, 65(11), 1558–1564.
+      doi:10.1109/PROC.1977.10770
   - I₀ is summed from its power series until a term no longer changes the
     sum (capped at 2000 terms). Through 2.4.8 it stopped at a fixed 29 terms;
     the terms grow until k ≈ x/2, so I₀ and every Kaiser window were wrong for
@@ -193,15 +219,52 @@ source. No magic numbers.
 - **Parser depth bound (`ABACO_MAX_DEPTH`)** — guards against stack-exhaustion DoS
   from deeply nested input, in the spirit of the SandboxJS recursion-limit
   class of fixes. Documented inline in `eval.cyr`.
-- **Single rounding of literals (2.4.10).** A literal with up to 36 significant
-  digits is held as a double-double mantissa (two 18-digit halves), scaled by a
-  double-double 10^k, and rounded once: a normal result at 53 bits, a
-  subnormal one straight to the subnormal grid (hi rounded to the grid in one
-  multiply, then nudged by the sign of its residual plus lo). Digits past the
-  36th set a sticky bit (counted as half a unit of the last kept digit). An
-  exact tie written out past 36 digits needs arbitrary precision to decide.
-  - Clinger 1990 (above) — the AlgorithmR / bignum comparison abaco does not
-    implement.
+- **Correctly rounded literals (2.4.11).** Every literal parses to the
+  IEEE 754 round-half-even double of its exact decimal value, at any length:
+  normals, subnormals, underflow to +0, overflow to +Inf from the threshold
+  2¹⁰²⁴ − 2⁹⁷⁰ up. Three tiers in `parse_number` / `_lit_value`:
+  1. Clinger's fast path — mantissa below 2⁵³ and |exponent| ≤ 22 — one exact
+     IEEE operation, unchanged.
+  2. A double-double estimate (`_lit_mant`, `_lit_approx`): up to 36
+     significant digits as a pair, digits past the 36th as half a unit of the
+     36th, scaled by a double-double 10ᵏ, renormalised to (hi, lo) · 2^B with
+     1 ≤ hi + lo < 2. Its relative error is below 72u² < 2⁻⁹⁹ (derivation in
+     `_lit_round`; measured worst 2⁻¹⁰³·⁷), budgeted at 2⁻⁹⁰. `_lit_round`
+     accepts its decision only when the estimate clears the rounding boundary
+     — the midpoint c + ½ on the result's grid, uniform through the
+     subnormals — by more than 2⁻³² ulp, sixteen times the worst error.
+  3. Otherwise `_lit_cmp_mid` compares the literal's digits exactly against
+     that one midpoint M = (2c + 1) · 2^(q−1): M's decimal expansion (at most
+     768 significant digits, the bound for (2⁵⁴ − 1) · 5¹⁰⁷⁵) is built in a
+     96-limb base-10⁹ integer on the stack, and the literal's digits are
+     streamed against it from the input text, so no digit is ever truncated
+     and the cost is linear in the literal's length. Equal is a tie, settled
+     to even.
+  Through 2.4.10 tier 2 was the answer, rounded once: right on 32,000 random
+  literals, wrong on 7,101 of 28,272 built on or beside midpoints. 2.4.11's
+  corpus of 60,316 (CPython's correctly rounded `float()` as oracle) has no
+  error, on x86_64 and aarch64; the fallback fires only within 2⁻³² ulp of a
+  boundary (4 of 29,493 random literals that reach tier 2, all exact ties).
+  - Clinger, W. D. (1990). "How to read floating point numbers accurately."
+    *ACM SIGPLAN PLDI*, 92–101. doi:10.1145/93542.93557 — the fast path, and
+    AlgorithmR's principle: settle the rounding by an exact big-integer
+    comparison of the input with the candidate's halfway point.
+  - Gay, D. M. (1990). "Correctly Rounded Binary-Decimal and Decimal-Binary
+    Conversions." Numerical Analysis Manuscript 90-10, AT&T Bell Laboratories.
+    Its `strtod` (netlib `dtoa.c`, later revisions) adds `bigcomp`, which
+    compares the input's digits with the decimal digits of the halfway case —
+    the shape of `_lit_cmp_mid`.
+  - Lemire, D. (2021). "Number parsing at a gigabyte per second." *Software:
+    Practice and Experience* 51(8), 1700–1727. doi:10.1002/spe.2984 — the same
+    fast-estimate-then-exact-fallback structure, with a 128-bit
+    power-of-five table (not adopted: abaco has no 64 × 64 → 128 multiply and
+    keeps no ~10 KB table).
+  - Simple Decimal Conversion (Go `strconv/decimal.go`, and Nigel Tao's 2020
+    write-up of it for Wuffs) was considered and not used: it shifts an
+    800-digit buffer and keeps only a "truncated" flag for the rest, where
+    streaming the input against the midpoint needs no truncation argument.
+  - IEEE 754-2019 §4.3.1, roundTiesToEven — including its rule that a result
+    of magnitude at least 2¹⁰²³ · (2 − 2⁻⁵³) = 2¹⁰²⁴ − 2⁹⁷⁰ rounds to ∞.
 - **Literal grammar.** Digits with at most one '.', and an exponent only when
   a digit follows the e/E (and its optional sign): a second '.' ends the
   literal, so `1.2.3` is a parse error rather than 1.23, and `2e` is 2 times
@@ -217,8 +280,8 @@ source. No magic numbers.
   and the written exponent are combined and *then* clamped — clamping them
   separately lets a long fraction and a large exponent cancel into the wrong
   magnitude. The clamp is +340 above (10³⁰⁹ is already +Inf) and
-  −(340 + 18) below, the mantissa headroom that keeps genuine subnormals from
-  being rounded up to nonzero. Adversarial `1e999…` inputs terminate in bounded
+  −(340 + 36) below, the headroom of a 36-digit significand, so a clamped
+  literal still rounds to 0 exactly as the unclamped one does. Adversarial `1e999…` inputs terminate in bounded
   work.
   - IEEE 754-2019, *Standard for Floating-Point Arithmetic*.
 - **Integer exponents via binary exponentiation** — `eval_pow` resolves whole
@@ -298,8 +361,9 @@ source. No magic numbers.
   10^k is carried as a two-term (hi, lo) pair giving ~106 bits of significand,
   built with Dekker's error-compensated product; the 18-digit mantissa is split
   the same way, since it exceeds f64's exact-integer limit of 2⁵³ and would
-  otherwise spend the last ulp before scaling even begins. Measured over a
-  5000-literal corpus: 99.74% bit-exact, worst case 1 ulp.
+  otherwise spend the last ulp before scaling even begins. Since 2.4.11 this is
+  the certified estimate of the correctly rounded literal entry above, not the
+  answer itself (through 2.4.10: within 1 ulp, wrong only near midpoints).
   - Dekker, T. J. (1971). "A floating-point technique for extending the
     available precision." *Numerische Mathematik*, 18(3), 224–242.
     doi:10.1007/BF01397083 (the splitting and two-product algorithms).
@@ -311,9 +375,6 @@ source. No magic numbers.
     exact in f64, so a single multiplication is provably correctly rounded and
     no compensation is needed.
   - IEEE 754-2019 §3.3 (the exactly-representable decimal range).
-  - Reaching 100% correctly-rounded requires a bignum fallback
-    (Clinger's slow path, or Eisel–Lemire); not implemented — the residual is
-    bounded at 1 ulp and occurs only at the rounding boundary.
 - **tan (`_eval_tan`, 2.4.10)** — fdlibm 5.3 `s_tan.c` + `k_tan.c` (FreeBSD
   msun): Cody–Waite / Payne–Hanek reduction by the stdlib's own fdlibm port
   `_f64_rem_pio2` (`lib/math.cyr`), then a 13-term odd minimax polynomial on
