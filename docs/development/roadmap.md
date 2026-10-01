@@ -535,15 +535,25 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
       would add TLS) once the stdlib TLS API stabilizes
 - [ ] **aarch64 CI lane.** Nothing builds or tests aarch64; the 2.4.9 audit ran
       the suites under qemu by hand (all green after 2.4.9's `ev_near` fix)
-- [ ] **Upstream (ganita):** `sinh` / `tanh` / `asinh` / `atanh` lose up to
-      ~3.7e7 ulp for small |x|, `acosh` near 1 and `asin` near ±1 likewise;
-      `atan2` misses C99's signed-zero and (±Inf, ±Inf) rows. abaco passes NaN
-      through; the cancellation needs the stdlib kernels. `tan` as sin/cos is
-      ~2 ulp — a `k_tan` kernel would make it 1
-- [ ] **Upstream (bayan):** aarch64 `bayan_u64_mulmod` is always the 128-bit
-      bit-serial path (~300× x86 in `is_prime`); a 64-bit fast path when the
-      product fits would close most of it. (ganita's `binomial` refusal is moot
-      for abaco since `abaco_binomial`, but still worth fixing upstream)
+- [ ] **Upstream (ganita)** — filed 2026-09-30 in ganita's
+      `docs/development/issues/`, each with a self-proving repro and a tested fix:
+      `2026-09-30-f64-hyperbolic-and-asin-cancellation-band.md` (`sinh` / `tanh` /
+      `asinh` / `atanh` up to ~1.3e8 ulp just above their small-|x| cutoffs,
+      `acosh` near 1, `asin` near ±1; fix via fdlibm expm1 / log1p);
+      `2026-09-30-f64-atan2-infinite-arguments.md` (the four (±∞, ±∞) rows — the
+      companion to hisab's `2026-09-30-f64-atan2-signed-zero-and-nan.md`, which
+      covers the signed-zero and NaN rows); and
+      `2026-09-30-binomial-refuses-representable-values.md` (moot for abaco since
+      `abaco_binomial`). When ganita ships them and cyrius re-vendors it, re-pin and
+      retest; abaco's NaN guard on `atan2` can stay
+- [ ] **Upstream (bayan)** — filed 2026-09-30 in bayan's `docs/development/issues/`:
+      `2026-09-30-u64-mulmod-aarch64-always-wide.md` (aarch64 mulmod ~2,000× x86
+      under qemu, ~300× on hardware by estimate; tested asm fix, `is_prime` 4.3 s →
+      14 ms under qemu) and `2026-09-30-json-parse-flat-misassociates-values.md`
+      (flat parser hands keys the wrong values; abaco's `_ccy_load_body` guards
+      stay either way)
+- [ ] `tan` is sin/cos in the evaluator, ~2 ulp; a `k_tan`-style kernel would
+      make it 1
 - [ ] **Literal rounding residual** — subnormal results are rounded twice and
       digits past the 18th carry no sticky bit, so ~0.3% of literals are 1 ulp
       off (either direction). Round once at the target precision and keep a
