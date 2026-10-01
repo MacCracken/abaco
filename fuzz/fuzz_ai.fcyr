@@ -29,6 +29,26 @@
 #     remote name that only starts with a loopback one (2.4.7).
 #   - CurrencyCache_convert returns 0 with AI_ERR_CURRENCY exactly when a
 #     code is absent from the cache (decided from the known code set).
+#   - 2.4.12 HTTPS parsers, against grammars written out in this file:
+#     _ccy_https_split accepts exactly the valid https URLs (host 1..253 bytes
+#     of [A-Za-z0-9.-] — so never '@', '?', '#' or a control byte — port
+#     1..65535, path of visible ASCII without '#'), returns that host, port
+#     and a path inside the URL; _ccy_https_request is refused exactly past
+#     2048 bytes and is otherwise GET + Host + Connection with CRLF only;
+#     _ccy_http_split accepts exactly the valid responses (HTTP/1.x, a status
+#     of 3 digits in 100..999, Content-Length present, 1*DIGIT, equal when
+#     repeated and equal to the body, no Transfer-Encoding, obs-fold, bare
+#     CR/LF or control byte in the head), its body ends at len and starts at
+#     the head's end, every truncation and every extra byte is refused, and its
+#     verdict never depends on a byte past len.
+#   - 2.4.12 review: _ccy_cert_ip_san finds the address exactly when the
+#     generated certificate's FIRST subjectAltName lists it as a 4-byte
+#     primitive [7] iPAddress — never as a dNSName, a constructed [7], a
+#     16-byte entry, a second SAN or under [2] — whatever the length forms and
+#     the extensions around it; every truncation is refused; its verdict never
+#     depends on a byte past len; mutated and raw bytes never crash it.
+#     _ccy_pem_cert_count counts exactly the BEGIN CERTIFICATE markers placed,
+#     and on every prefix exactly those that end inside it.
 
 include "lib/args.cyr"
 
@@ -465,6 +485,616 @@ fn _fz_skip_blanks(s) {
     return s;
 }
 
+# ================================================================
+# HTTPS parsers (2.4.12): _ccy_https_split, _ccy_https_request,
+# _ccy_http_head / _ccy_http_split. Each generator records whether what it
+# built is valid under the grammar written out HERE, and the parser must
+# agree in both directions — accept every valid one, refuse every other.
+# ================================================================
+
+# 0..m-1 from the HIGH bits of the LCG. _fz_u takes r % m, and an LCG's low
+# bits are periodic — bit 0 alternates — so consecutive _fz_u draws are
+# correlated (an even draw is always followed by an odd one, so a _fz_u(10)
+# right after _fz_u(30) == 0 never returns 0). The HTTPS generators chain many
+# small draws, so they use this.
+fn _fz_v(m) {
+    var r = (_fz_rand() >> 33) & 0x3FFFFFFF;
+    return r % m;
+}
+
+# Append cstr s at buf+pos; returns the new pos.
+fn _fz_put(buf, pos, s) {
+    var n = strlen(s);
+    memcpy(buf + pos, s, n);
+    return pos + n;
+}
+
+fn _fz_put_num(buf, pos, n) {
+    var dig[24];
+    var nd = 0;
+    if (n == 0) { store8(&dig, 48); nd = 1; }
+    while (n > 0) { store8(&dig + nd, 48 + n % 10); n = n / 10; nd = nd + 1; }
+    while (nd > 0) { nd = nd - 1; store8(buf + pos, load8(&dig + nd)); pos = pos + 1; }
+    return pos;
+}
+
+# A host byte: valid ones mostly, sometimes one the grammar refuses.
+fn _fz_host_byte(bad) {
+    if (bad == 1) {
+        var k = _fz_v(10);
+        if (k == 0) { return 64; }        # @
+        if (k == 1) { return 63; }        # ?
+        if (k == 2) { return 35; }        # #
+        if (k == 3) { return 95; }        # _
+        if (k == 4) { return 91; }        # [
+        if (k == 5) { return 92; }        # backslash
+        if (k == 6) { return 37; }        # %
+        if (k == 7) { return 1 + _fz_v(31); }
+        if (k == 8) { return 128 + _fz_v(128); }
+        return 32;
+    }
+    var v = _fz_v(5);
+    if (v == 0) { return 48 + _fz_v(10); }
+    if (v == 1) { return 65 + _fz_v(26); }
+    if (v == 2) {
+        if (_fz_v(2) == 0) { return 46; }   # '.'
+        return 45;                          # '-'
+    }
+    return 97 + _fz_v(26);
+}
+
+# 1 when the grammar here allows byte b in a host.
+fn _fz_is_host_byte(b) {
+    if (b >= 97 && b <= 122) { return 1; }
+    if (b >= 65 && b <= 90) { return 1; }
+    if (b >= 48 && b <= 57) { return 1; }
+    if (b == 45 || b == 46) { return 1; }
+    return 0;
+}
+
+# Build an https URL into u (cap 2400); fills exp[0] = valid, exp[8] = host
+# length, exp[16] = port (443 when none), exp[24] = path offset (-1 = none).
+fn _fz_https_url(u, exp) {
+    var valid = 1;
+    var pos = _fz_put(u, 0, "https://");
+    if (_fz_v(40) == 0) { pos = _fz_put(u, 0, "http://"); valid = 0; }
+    var hstart = pos;
+    var hl = _fz_v(14);
+    if (_fz_v(60) == 0) { hl = 250 + _fz_v(8); }
+    var i = 0;
+    while (i < hl) {
+        var b = _fz_host_byte(_fz_v(30) == 0);
+        if (b == 0) { b = 64; }
+        if (_fz_is_host_byte(b) == 0) { valid = 0; }
+        store8(u + pos, b);
+        pos = pos + 1;
+        i = i + 1;
+    }
+    if (hl == 0 || hl > 253) { valid = 0; }
+    # A host byte the grammar refuses ends the host for the parser too; what
+    # follows decides nothing more, as the whole URL is then invalid.
+    var port = 443;
+    if (_fz_v(3) == 0) {
+        store8(u + pos, 58);
+        pos = pos + 1;
+        var nd = _fz_v(7);
+        var pv = 0;
+        var d = 0;
+        while (d < nd) {
+            var dg = _fz_v(10);
+            pv = pv * 10 + dg;
+            store8(u + pos, 48 + dg);
+            pos = pos + 1;
+            d = d + 1;
+        }
+        if (nd == 0 || nd > 5 || pv < 1 || pv > 65535) { valid = 0; }
+        port = pv;
+    }
+    var poff = 0 - 1;
+    var pk = _fz_v(4);
+    if (pk != 0) {
+        poff = pos;
+        store8(u + pos, 47);
+        pos = pos + 1;
+        var pl = _fz_v(20);
+        if (_fz_v(20) == 0) { pl = 1960 + _fz_v(80); }   # around the 2048-byte request cap
+        var j = 0;
+        while (j < pl) {
+            var c = 33 + _fz_v(94);
+            if (pl < 100 && _fz_v(25) == 0) { c = _fz_byte(); }
+            if (pl >= 100 && c == 35) { c = 36; }    # keep the long ones valid
+            if (c == 0) { c = 65; }
+            if (c <= 32 || c >= 127 || c == 35) { valid = 0; }
+            store8(u + pos, c);
+            pos = pos + 1;
+            j = j + 1;
+        }
+    } elif (_fz_v(15) == 0) {
+        store8(u + pos, 63);         # '?' straight after the authority
+        pos = pos + 1;
+        valid = 0;
+    }
+    store8(u + pos, 0);
+    store64(exp, valid);
+    store64(exp + 8, hl);
+    store64(exp + 16, port);
+    store64(exp + 24, poff);
+    return hstart;
+}
+
+fn _fz_check_https_split() {
+    var u = alloc(2400);
+    var exp[32];
+    var hstart = _fz_https_url(u, &exp);
+    var parts[24];
+    store64(&parts, 0);
+    var r = _ccy_https_split(u, &parts);
+    var valid = load64(&exp);
+    if (valid == 1 && r != 0) { _fz_fail("https_split refused a URL the grammar allows"); }
+    if (valid == 0 && r == 0) { _fz_fail("https_split accepted a URL the grammar refuses"); }
+    if (r != 0) { return 0; }
+    var host = load64(&parts);
+    var hl = load64(&exp + 8);
+    if (strlen(host) != hl || memeq(host, u + hstart, hl) == 0) { _fz_fail("https_split host is not the URL's host"); }
+    var hi = 0;
+    while (hi < hl) {
+        var hb = load8(host + hi);
+        if (hb == 64 || hb == 63 || hb == 35 || hb < 33 || hb > 126) {
+            _fz_fail("https_split host has a refused byte");
+        }
+        hi = hi + 1;
+    }
+    var port = load64(&parts + 8);
+    if (port < 1 || port > 65535 || port != load64(&exp + 16)) { _fz_fail("https_split port out of range / wrong"); }
+    var path = load64(&parts + 16);
+    var poff = load64(&exp + 24);
+    var ul = strlen(u);
+    if (poff < 0) {
+        if (streq(path, "/") == 0) { _fz_fail("https_split path without one is not /"); }
+    } else {
+        if (path != u + poff) { _fz_fail("https_split path is not inside the URL"); }
+        if (path < u || path >= u + ul) { _fz_fail("https_split path pointer out of the URL"); }
+    }
+    # The request: refused only past 2048 bytes, otherwise exactly the shape.
+    var req = _ccy_https_request(host, port, path);
+    var plen = 0;
+    if (port != 443) {
+        plen = 2;
+        if (port >= 10) { plen = 3; }
+        if (port >= 100) { plen = 4; }
+        if (port >= 1000) { plen = 5; }
+        if (port >= 10000) { plen = 6; }
+    }
+    var need = 4 + strlen(path) + 17 + hl + plen + 23 + 1;
+    if (need > 2048) {
+        if (req != 0) { _fz_fail("https_request built a request past 2048 bytes"); }
+        return 0;
+    }
+    if (req == 0) { _fz_fail("https_request refused a request within 2048 bytes"); }
+    if (strlen(req) + 1 != need) { _fz_fail("https_request length is not the computed one"); }
+    var crlf = 0;
+    var ri = 0;
+    while (load8(req + ri) != 0) {
+        var rb = load8(req + ri);
+        if (rb == 13) {
+            if (load8(req + ri + 1) != 10) { _fz_fail("https_request has a bare CR"); }
+            crlf = crlf + 1;
+        } elif (rb == 10) {
+            if (ri == 0 || load8(req + ri - 1) != 13) { _fz_fail("https_request has a bare LF"); }
+        } elif (rb < 32 || rb == 127) { _fz_fail("https_request has a control byte"); }
+        ri = ri + 1;
+    }
+    if (crlf != 4) { _fz_fail("https_request is not exactly 3 lines + the blank one"); }
+    if (memeq(req, "GET /", 5) == 0) { _fz_fail("https_request does not start GET /"); }
+    return 0;
+}
+
+# A response head + body into r (cap 4096). exp[0] = valid, exp[8] = status,
+# exp[16] = head length, exp[24] = body length. Invalid-by-construction
+# variants are drawn rarely so most iterations exercise the accepting path.
+fn _fz_http_resp(r, exp) {
+    var valid = 1;
+    var pos = 0;
+    var vk = _fz_v(30);
+    if (vk == 0) { pos = _fz_put(r, pos, "HTTP/2 "); valid = 0; }
+    elif (vk == 1) { pos = _fz_put(r, pos, "http/1.1 "); valid = 0; }
+    elif (vk == 2) { pos = _fz_put(r, pos, "HTTP/1.x "); valid = 0; }
+    elif (_fz_v(2) == 0) { pos = _fz_put(r, pos, "HTTP/1.0 "); }
+    else { pos = _fz_put(r, pos, "HTTP/1.1 "); }
+    var status = 100 + _fz_v(900);
+    if (_fz_v(30) == 0) {
+        pos = _fz_put(r, pos, "0");
+        pos = _fz_put_num(r, pos, 10 + _fz_v(90));
+        valid = 0;
+    } else {
+        pos = _fz_put_num(r, pos, status);
+    }
+    var rk = _fz_v(4);
+    if (rk == 0) { pos = _fz_put(r, pos, "\r\n"); }
+    elif (rk == 1 && _fz_v(10) == 0) { pos = _fz_put(r, pos, "X\r\n"); valid = 0; }
+    else { pos = _fz_put(r, pos, " OK\r\n"); }
+    var blen = _fz_v(60);
+    var ncl = 0;
+    var clv = 0 - 1;
+    var bad_cl = 0;
+    var nh = _fz_v(6);
+    var h = 0;
+    while (h < nh) {
+        var kind = _fz_v(14);
+        if (kind < 6) {
+            # A Content-Length line: name in any case, OWS, the value.
+            var nm = "content-length";
+            var ni = 0;
+            while (ni < 14) {
+                var nc = load8(nm + ni);
+                if (_fz_v(2) == 0 && nc >= 97) { nc = nc - 32; }
+                store8(r + pos, nc);
+                pos = pos + 1;
+                ni = ni + 1;
+            }
+            store8(r + pos, 58);
+            pos = pos + 1;
+            var ows = _fz_v(3);
+            while (ows > 0) {
+                var ow = 32;
+                if (_fz_v(2) == 0) { ow = 9; }
+                store8(r + pos, ow);
+                pos = pos + 1;
+                ows = ows - 1;
+            }
+            var vv = blen;
+            var vkind = 8 + _fz_v(4);                # exact (8..11: plain, OWS)
+            if (_fz_v(4) == 0) { vkind = _fz_v(8); }  # a quarter: one of the variants
+            if (vkind == 0) { vv = blen + 1; }
+            if (vkind == 1 && blen > 0) { vv = blen - 1; }
+            if (vkind == 2) { pos = _fz_put(r, pos, "+"); bad_cl = 1; }
+            if (vkind == 3) { pos = _fz_put(r, pos, "0"); }
+            if (vkind == 4) { bad_cl = 1; }          # an empty value
+            if (vkind != 4) { pos = _fz_put_num(r, pos, vv); }
+            if (vkind == 5) { pos = _fz_put(r, pos, ", "); pos = _fz_put_num(r, pos, vv); bad_cl = 1; }
+            if (vkind == 6) { pos = _fz_put(r, pos, "x"); bad_cl = 1; }
+            if (vkind == 7) { pos = _fz_put(r, pos, " \t"); }
+            pos = _fz_put(r, pos, "\r\n");
+            if (clv >= 0 && clv != vv) { bad_cl = 1; }
+            clv = vv;
+            ncl = ncl + 1;
+        } elif (kind == 6) {
+            pos = _fz_put(r, pos, "Transfer-Encoding: chunked\r\n");
+            valid = 0;
+        } elif (kind == 7 && _fz_v(3) == 0) {
+            pos = _fz_put(r, pos, " folded\r\n");
+            valid = 0;
+        } elif (kind == 8 && _fz_v(3) == 0) {
+            var bk = _fz_v(4);
+            if (bk == 0) { pos = _fz_put(r, pos, "X-Bad: a\nb\r\n"); }
+            elif (bk == 1) { pos = _fz_put(r, pos, "X-Bad: a\rb\r\n"); }
+            elif (bk == 2) {
+                pos = _fz_put(r, pos, "X-Bad: a");
+                store8(r + pos, 0);
+                pos = _fz_put(r, pos + 1, "\r\n");
+            }
+            else { pos = _fz_put(r, pos, "NoColonHere\r\n"); }
+            valid = 0;
+        } elif (kind == 9 && _fz_v(3) == 0) {
+            pos = _fz_put(r, pos, "X-Space : 1\r\n");
+            valid = 0;
+        } else {
+            pos = _fz_put(r, pos, "X-");
+            pos = _fz_put_num(r, pos, _fz_v(1000));
+            pos = _fz_put(r, pos, ": v");
+            if (_fz_v(5) == 0) { store8(r + pos, 128 + _fz_v(128)); pos = pos + 1; }
+            pos = _fz_put(r, pos, "\r\n");
+        }
+        h = h + 1;
+    }
+    if (ncl == 0 && _fz_v(5) != 0) {
+        pos = _fz_put(r, pos, "Content-Length: ");
+        pos = _fz_put_num(r, pos, blen);
+        pos = _fz_put(r, pos, "\r\n");
+        clv = blen;
+        ncl = 1;
+    }
+    if (ncl == 0 || bad_cl == 1 || clv != blen) { valid = 0; }
+    pos = _fz_put(r, pos, "\r\n");
+    var hlen = pos;
+    var b = 0;
+    while (b < blen) { store8(r + pos, _fz_v(256)); pos = pos + 1; b = b + 1; }
+    store64(exp, valid);
+    store64(exp + 8, status);
+    store64(exp + 16, hlen);
+    store64(exp + 24, blen);
+    return pos;
+}
+
+fn _fz_check_http_split() {
+    var r = alloc(4096);
+    var exp[32];
+    var len = _fz_http_resp(r, &exp);
+    var out[24];
+    var res = _ccy_http_split(r, len, &out);
+    var valid = load64(&exp);
+    if (valid == 1 && res != 0) { _fz_fail("http_split refused a response the grammar allows"); }
+    if (valid == 0 && res == 0) { _fz_fail("http_split accepted a response the grammar refuses"); }
+    if (res == 0) {
+        var st = load64(&out);
+        if (st < 100 || st > 999 || st != load64(&exp + 8)) { _fz_fail("http_split status wrong / out of 100..999"); }
+        var body = load64(&out + 8);
+        var bl = load64(&out + 16);
+        if (body < r || body > r + len) { _fz_fail("http_split body pointer outside the buffer"); }
+        if (body + bl != r + len) { _fz_fail("http_split body does not end at len (Content-Length rule)"); }
+        if (body != r + load64(&exp + 16) || bl != load64(&exp + 24)) { _fz_fail("http_split body span wrong"); }
+        # Any truncation of an accepted response is refused, and so is any
+        # extra byte past it.
+        var cut = _fz_v(len);
+        if (_ccy_http_split(r, cut, &out) == 0) { _fz_fail("http_split accepted a truncated response"); }
+        store8(r + len, 123);
+        if (_ccy_http_split(r, len + 1, &out) == 0) { _fz_fail("http_split accepted a byte past Content-Length"); }
+    }
+    # Never reads past len: the verdict on r[0..len) cannot depend on what
+    # follows it. Copy with two different tails and compare.
+    var cut2 = _fz_v(len + 1);
+    var a = alloc(cut2 + 64);
+    var bb = alloc(cut2 + 64);
+    memcpy(a, r, cut2);
+    memcpy(bb, r, cut2);
+    memset(a + cut2, 0, 64);
+    var t = 0;
+    while (t < 64) { store8(bb + cut2 + t, load8("\r\n\r\nContent-Length: 0\r\n\r\n0123456789" + t % 32)); t = t + 1; }
+    var oa[24];
+    var ob[24];
+    var ra = _ccy_http_split(a, cut2, &oa);
+    var rb = _ccy_http_split(bb, cut2, &ob);
+    if (ra != rb) { _fz_fail("http_split verdict depends on bytes past len"); }
+    var ha[24];
+    var hb2[24];
+    if (_ccy_http_head(a, cut2, &ha) != _ccy_http_head(bb, cut2, &hb2)) {
+        _fz_fail("http_head depends on bytes past len");
+    }
+    # One byte of a generated response changed: no crash, and an accepted
+    # result still obeys the body rule.
+    if (len > 0) {
+        store8(r + _fz_v(len), _fz_v(256));
+        if (_ccy_http_split(r, len, &out) == 0) {
+            if (load64(&out + 8) + load64(&out + 16) != r + len) { _fz_fail("http_split mutated: body not to len"); }
+            if (load64(&out) < 100 || load64(&out) > 999) { _fz_fail("http_split mutated: status out of range"); }
+        }
+    }
+    # Raw bytes: no crash, and an accepted one still obeys the body rule.
+    var raw = _fz_str(200);
+    var rl = strlen(raw);
+    if (_ccy_http_split(raw, rl, &out) == 0) {
+        if (load64(&out + 8) + load64(&out + 16) != raw + rl) { _fz_fail("http_split raw: body not to len"); }
+    }
+    return 0;
+}
+
+# ================================================================
+# 2.4.12 review: _ccy_cert_ip_san (the IP-literal SAN check) and
+# _ccy_pem_cert_count (the CA bundle bound). The generator builds DER whose
+# answer it knows by construction.
+# ================================================================
+
+# Append the TLV (tag, c[0..n)) at buf+pos; the length in short form or, at
+# random, in a long one of 1..3 bytes (non-minimal ones too: the walker, like
+# sigil's der_walk, accepts them). Returns the new pos.
+fn _fz_tlv(buf, pos, tag, c, n) {
+    store8(buf + pos, tag);
+    var p = pos + 1;
+    var nb = 0;                         # long-form length bytes; 0 = short form
+    var k = _fz_v(10);
+    if (n < 128 && k >= 7) { nb = k - 6; }
+    if (n >= 128) { nb = 1 + _fz_v(3); }
+    if (n >= 256 && nb == 1) { nb = 2; }
+    if (nb == 0) {
+        store8(buf + p, n);
+        p = p + 1;
+    } else {
+        store8(buf + p, 128 + nb);
+        var i = nb;
+        while (i > 0) {
+            store8(buf + p + i, (n >> ((nb - i) * 8)) & 255);
+            i = i - 1;
+        }
+        p = p + 1 + nb;
+    }
+    memcpy(buf + p, c, n);
+    return p + n;
+}
+
+# n random bytes at buf.
+fn _fz_fill(buf, n) {
+    var i = 0;
+    while (i < n) { store8(buf + i, _fz_v(256)); i = i + 1; }
+    return n;
+}
+
+# One GeneralName at g+pos (returns the new pos); exp[0] |= 1 when it is the
+# target address as a primitive 4-byte [7].
+fn _fz_gn(g, pos, ip, exp) {
+    var t = alloc(64);
+    var k = _fz_v(8);
+    if (k == 0) { return _fz_tlv(g, pos, 130, "rates.example", 13); }       # dNSName
+    if (k == 1) { store64(exp, 1); return _fz_tlv(g, pos, 135, ip, 4); }    # the address
+    if (k == 2) {
+        _fz_fill(t, 4);
+        if (memeq(t, ip, 4) == 1) { store8(t, load8(t) ^ 1); }
+        return _fz_tlv(g, pos, 135, t, 4);                                  # another one
+    }
+    if (k == 3) {
+        _fz_fill(t, 16);
+        if (_fz_v(2) == 0) { memcpy(t, ip, 4); }
+        return _fz_tlv(g, pos, 135, t, 16);                                 # IPv6
+    }
+    if (k == 4) { return _fz_tlv(g, pos, 130, ip, 4); }                    # its bytes as a dNSName
+    if (k == 5) { return _fz_tlv(g, pos, 167, ip, 4); }                    # a constructed [7]
+    if (k == 6) { return _fz_tlv(g, pos, 129, "a@b.example", 11); }        # rfc822Name
+    var dn = alloc(64);
+    var dl = _fz_tlv(dn, 0, 48, ip, 4);
+    return _fz_tlv(g, pos, 164, dn, dl);                                    # directoryName
+}
+
+# An Extension at buf+pos: the SAN (san == 1) over a GeneralNames list built
+# by _fz_gn, or another extension. Returns the new pos.
+fn _fz_ext(buf, pos, san, ip, exp) {
+    var e = alloc(1600);
+    var g = alloc(1200);
+    var oid = alloc(8);
+    store8(oid, 85);
+    store8(oid + 1, 29);
+    store8(oid + 2, 17);
+    if (san == 0) {
+        var other = _fz_v(4);
+        store8(oid + 2, 15);                                                # keyUsage
+        if (other == 1) { store8(oid + 2, 18); }                            # issuerAltName
+        if (other == 2) { store8(oid + 2, 19); }                            # basicConstraints
+        if (other == 3) { store8(oid + 2, 37); }                            # extKeyUsage
+    }
+    var ep = _fz_tlv(e, 0, 6, oid, 3);
+    if (_fz_v(3) == 0) { ep = _fz_tlv(e, ep, 1, "\xFF", 1); }               # critical
+    var gp = 0;
+    if (san == 1) {
+        var ng = _fz_v(7);
+        var i = 0;
+        while (i < ng) { gp = _fz_gn(g, gp, ip, exp); i = i + 1; }
+        var seq = alloc(1300);
+        var sl = _fz_tlv(seq, 0, 48, g, gp);
+        ep = _fz_tlv(e, ep, 4, seq, sl);
+    } else {
+        var junk = alloc(16);
+        ep = _fz_tlv(e, ep, 4, junk, _fz_fill(junk, _fz_v(12)));
+    }
+    return _fz_tlv(buf, pos, 48, e, ep);
+}
+
+# A certificate into d; returns its length, with exp[0] = 1 exactly when its
+# first SAN lists `ip` as a 4-byte primitive [7] under [3].
+fn _fz_cert(d, ip, exp) {
+    store64(exp, 0);
+    var x = alloc(6000);
+    var xp = 0;
+    var next = _fz_v(5);
+    var sanat = _fz_v(next + 1);       # == next: no SAN at all
+    var i = 0;
+    var first = alloc(8);
+    var later = alloc(8);
+    store64(first, 0);
+    store64(later, 0);
+    while (i < next) {
+        if (i == sanat) { xp = _fz_ext(x, xp, 1, ip, first); }
+        elif (i > sanat && _fz_v(4) == 0) { xp = _fz_ext(x, xp, 1, ip, later); }   # a second SAN
+        else { xp = _fz_ext(x, xp, 0, ip, later); }
+        i = i + 1;
+    }
+    var xs = alloc(6100);
+    var xsl = _fz_tlv(xs, 0, 48, x, xp);
+    var tbs = alloc(6400);
+    var tp = 0;
+    var nf = _fz_v(5);
+    var f = 0;
+    var fc = alloc(32);
+    while (f < nf) {
+        var ft = 2;
+        var fk = _fz_v(6);
+        if (fk == 1) { ft = 48; }
+        if (fk == 2) { ft = 49; }
+        if (fk == 3) { ft = 160; }
+        if (fk == 4) { ft = 161; }
+        if (fk == 5) { ft = 12; }
+        tp = _fz_tlv(tbs, tp, ft, fc, _fz_fill(fc, _fz_v(20)));
+        f = f + 1;
+    }
+    var wrap = 163;
+    var wk = _fz_v(12);
+    if (wk == 0) { wrap = 162; }       # [2]: not the extensions
+    if (wk != 1) { tp = _fz_tlv(tbs, tp, wrap, xs, xsl); }   # wk == 1: no extensions
+    if (wrap == 163 && wk != 1 && sanat < next) { store64(exp, load64(first)); }
+    var body = alloc(6600);
+    var bp = _fz_tlv(body, 0, 48, tbs, tp);
+    bp = _fz_tlv(body, bp, 48, "\x06\x03\x2A\x03\x04", 5);
+    bp = _fz_tlv(body, bp, 3, fc, _fz_fill(fc, _fz_v(24)));
+    return _fz_tlv(d, 0, 48, body, bp);
+}
+
+fn _fz_check_cert_ip_san() {
+    var ip = alloc(8);
+    _fz_fill(ip, 4);
+    var d = alloc(7000);
+    var exp[8];
+    var dl = _fz_cert(d, ip, &exp);
+    var r = _ccy_cert_ip_san(d, dl, ip);
+    if (r != load64(&exp)) {
+        if (r == 1) { _fz_fail("cert_ip_san found an address the first SAN does not list as iPAddress"); }
+        _fz_fail("cert_ip_san missed an iPAddress the first SAN lists");
+    }
+    if (_ccy_cert_ip_san(d, _fz_v(dl), ip) != 0) { _fz_fail("cert_ip_san accepted a truncated certificate"); }
+    # The verdict on d[0..cut) never depends on what follows it.
+    var cut = _fz_v(dl + 1);
+    var a = alloc(cut + 64);
+    var b = alloc(cut + 64);
+    memcpy(a, d, cut);
+    memcpy(b, d, cut);
+    memset(a + cut, 0, 64);
+    var t = 0;
+    while (t < 64) {
+        store8(b + cut + t, load8(ip + t % 4));
+        if (t % 6 == 0) { store8(b + cut + t, 135); }
+        t = t + 1;
+    }
+    if (_ccy_cert_ip_san(a, cut, ip) != _ccy_cert_ip_san(b, cut, ip)) {
+        _fz_fail("cert_ip_san verdict depends on bytes past len");
+    }
+    # A mutated certificate and raw bytes: no crash, a 0/1 verdict.
+    store8(d + _fz_v(dl), _fz_v(256));
+    var rm = _ccy_cert_ip_san(d, dl, ip);
+    if (rm != 0 && rm != 1) { _fz_fail("cert_ip_san mutated: verdict not 0/1"); }
+    var raw = _fz_str(300);
+    var rr = _ccy_cert_ip_san(raw, strlen(raw), ip);
+    if (rr != 0 && rr != 1) { _fz_fail("cert_ip_san raw: verdict not 0/1"); }
+    return 0;
+}
+
+# A PEM-ish buffer of junk (never '-'), certificate markers and near-misses,
+# each piece followed by one junk byte; the count must be the markers placed,
+# and on any prefix those that end inside it.
+fn _fz_check_pem_count() {
+    var buf = alloc(4096);
+    var ends = alloc(64 * 8);
+    var nm = 0;
+    var pos = 0;
+    var np = _fz_v(12);
+    var i = 0;
+    while (i < np) {
+        var k = _fz_v(6);
+        if (k == 0 || k == 1) {
+            pos = _fz_put(buf, pos, "-----BEGIN CERTIFICATE-----");
+            store64(ends + nm * 8, pos);
+            nm = nm + 1;
+        }
+        if (k == 2) { pos = _fz_put(buf, pos, "-----BEGIN CERTIFICATE----"); }
+        if (k == 3) { pos = _fz_put(buf, pos, "-----END CERTIFICATE-----"); }
+        if (k == 4) { pos = _fz_put(buf, pos, "-----BEGIN PRIVATE KEY-----"); }
+        var jn = 1 + _fz_v(40);
+        while (jn > 0) {
+            var jb = _fz_v(256);
+            if (jb == 45) { jb = 10; }
+            store8(buf + pos, jb);
+            pos = pos + 1;
+            jn = jn - 1;
+        }
+        i = i + 1;
+    }
+    if (_ccy_pem_cert_count(buf, pos) != nm) { _fz_fail("pem_cert_count is not the markers placed"); }
+    var cut = _fz_v(pos + 1);
+    var want = 0;
+    var m = 0;
+    while (m < nm) {
+        if (load64(ends + m * 8) <= cut) { want = want + 1; }
+        m = m + 1;
+    }
+    if (_ccy_pem_cert_count(buf, cut) != want) { _fz_fail("pem_cert_count on a prefix counts a marker past it"); }
+    return 0;
+}
+
 fn main() {
     alloc_init();
     args_init();
@@ -713,6 +1343,12 @@ fn main() {
         if (_ccy_validate_url("https://ok.example.com") != 0) {
             _fz_fail("validate_url rejected a plain https URL");
         }
+
+        # --- HTTPS URL / request / response parsers (2.4.12) ------------
+        _fz_check_https_split();
+        _fz_check_http_split();
+        _fz_check_cert_ip_san();
+        _fz_check_pem_count();
 
         pass = pass + 1;
         iter = iter + 1;

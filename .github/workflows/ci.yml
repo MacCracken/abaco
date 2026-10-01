@@ -140,7 +140,7 @@ jobs:
             echo "$out"
             echo "::endgroup::"
             if [ $rc -ne 0 ]; then echo "FAIL: $name (exit $rc)"; fail=1; fi
-            n=$(echo "$out" | grep -oE '[0-9]+ passed' | head -1 | awk '{print $1}')
+            n=$(echo "$out" | grep -oE '[0-9]+ passed, [0-9]+ failed \([0-9]+ total\)' | tail -1 | awk '{print $1}')
             total=$((total + ${n:-0}))
             # Second, INDEPENDENT gate on the reported failure count. Until
             # 2.4.4 every .tcyr called assert_summary() and then `return 0;`,
@@ -151,7 +151,10 @@ jobs:
             # exactly 256 failures would wrap back to 0). A single `return 0;`
             # creeping back would silently disarm that again, so also read the
             # summary line. Absent/unparseable counts as a failure, not a pass.
-            f=$(echo "$out" | grep -oE '[0-9]+ failed' | head -1 | awk '{print $1}')
+            # Match the summary's whole shape and take the last one: a suite's
+            # own progress lines can say "N failed" first (test_ccy_tls's
+            # threaded child prints "24 threaded fetches ok, 0 failed").
+            f=$(echo "$out" | grep -oE '[0-9]+ passed, [0-9]+ failed \([0-9]+ total\)' | tail -1 | awk '{print $3}')
             if [ -z "$f" ]; then echo "FAIL: $name — no 'N failed' summary line"; fail=1
             elif [ "$f" -ne 0 ]; then echo "FAIL: $name ($f assertions failed)"; fail=1; fi
           done
@@ -247,7 +250,7 @@ jobs:
             echo "$out"
             echo "::endgroup::"
             if [ $rc -ne 0 ]; then echo "FAIL: $name (exit $rc)"; fail=1; fi
-            f=$(echo "$out" | grep -oE '[0-9]+ failed' | head -1 | awk '{print $1}')
+            f=$(echo "$out" | grep -oE '[0-9]+ passed, [0-9]+ failed \([0-9]+ total\)' | tail -1 | awk '{print $3}')
             if [ -z "$f" ]; then echo "FAIL: $name — no 'N failed' summary line"; fail=1
             elif [ "$f" -ne 0 ]; then echo "FAIL: $name ($f assertions failed)"; fail=1; fi
           done

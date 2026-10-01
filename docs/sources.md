@@ -459,6 +459,79 @@ source. No magic numbers.
 - **U+2212 MINUS SIGN** (UTF-8 E2 88 92) is mapped to ASCII `-` by `nl_parse`:
   it is the minus of typeset text (Unicode code chart *Mathematical Operators*,
   U+2200–U+22FF).
+- **HTTPS currency fetch (2.4.12, opt-in `-D ABACO_TLS`).** The transport is
+  Cyrius `lib/tls.cyr`'s native backend, which offers TLS 1.3 only unless a
+  ctx is pinned to 1.2 (abaco does not pin it, so a TLS 1.2-only server is
+  refused); abaco adds the URL, request and response framing around it and
+  refuses the libssl backend.
+  - RFC 8446 (2018), *The Transport Layer Security (TLS) Protocol Version 1.3*
+    — §6.1 (closure alerts: `close_notify`), §4.4.3 (CertificateVerify).
+  - RFC 5246 (2008), *The TLS Protocol Version 1.2* — §7.2 (alert protocol;
+    cited for the alert taxonomy lib/tls.cyr reports, not because the fetch
+    speaks 1.2).
+  - RFC 9525 (2023), *Service Identity in TLS* (obsoletes RFC 6125) — the
+    server's identity is the requested host, matched against the
+    certificate's DNS-ID (dNSName) or IP-ID (iPAddress) subjectAltName;
+    the native backend enforces it, libssl's (Cyrius 6.6.12) does not, which
+    is why abaco refuses that backend. §6.3 (RFC 6125 §6.2.1 before it): an
+    IP-address reference identity matches an iPAddress entry only — never a
+    dNSName, and a wildcard never matches an IP. Cyrius 6.6.12's native
+    `_tn_cert_san_match` also tries an IP-literal host against every dNSName,
+    so `_ccy_cert_ip_san` re-checks the verified leaf for an IPv4 literal
+    (cyrius issue `2026-10-01-tls-ip-literal-dnsname.md`).
+  - RFC 5280 §4.1 (Certificate, TBSCertificate, `extensions [3]`) and
+    §4.2.1.6 (SubjectAltName: `GeneralNames`, `iPAddress [7] OCTET STRING`
+    of 4 octets for IPv4, in network byte order) — the path
+    `_ccy_cert_ip_san` walks.
+  - ITU-T X.690 (02/2021), *ASN.1 encoding rules: BER, CER and DER* — §8.1.2
+    (identifier octets; tag number 31 = the high-tag form, which the walk
+    refuses), §8.1.3 (definite length: short form, or 0x80 + N length
+    octets; 0x80 alone is BER's indefinite form), §10.1 (DER requires the
+    minimal length form; the walk, like sigil's `der_walk`, accepts a longer
+    one, since it reads a certificate the chain check has already accepted).
+  - RFC 8446 §5: a TLS 1.3 peer may receive an unprotected
+    ChangeCipherSpec only between the first ClientHello and the peer's
+    Finished; otherwise it MUST abort (`unexpected_message`). Cyrius 6.6.12's
+    `_tn_sock_read_record_skip_ccs` skips any number of them, in the
+    handshake and after it, and its reads have no deadline — so abaco bounds
+    the whole fetch (30 s; cyrius issue `2026-10-01-tls-native-no-deadline.md`).
+  - The deadline's mechanics. futex(2): `FUTEX_WAIT` with a relative timeout
+    (CLOCK_MONOTONIC), `FUTEX_WAKE`. shutdown(2) (POSIX.1-2017): `SHUT_RD`
+    wakes a blocked read, which then returns end of stream; Linux still
+    returns data already queued and discards what arrives after (measured on
+    7.2: ~128 KB of a flood read out, then 0), and a write after `SHUT_WR`
+    raises SIGPIPE — hence `SHUT_RD`, then dup2(2) over the descriptor with
+    `/dev/null`, so every later read is end of stream at once.
+  - RFC 6066 (2011), *TLS Extensions*, §3 (Server Name Indication, set from
+    the host).
+  - RFC 5280 (2008), *Internet X.509 PKI Certificate and CRL Profile*, §6
+    (path validation to a trust anchor — the system store, or the cache's CA
+    file in its place).
+  - RFC 9110 (2022), *HTTP Semantics* — §8.6 (Content-Length: 1*DIGIT; a
+    list or differing values are invalid), §6.4 (content and its length),
+    §15.4 (3xx: abaco follows no redirect), §7.2 (Host carries the port when
+    it is not the scheme's default), §4.2.4 (a fragment is never sent), §5.5
+    (CR, LF and NUL in a field value are invalid).
+  - RFC 9112 (2022), *HTTP/1.1* — §6.1 (no Transfer-Encoding in answer to an
+    HTTP/1.0 request), §6.3 (message body length), §5.1 (no whitespace
+    between field name and colon), §5.2 (obs-fold), §2.2 (bare CR / LF).
+  - RFC 1945 (1996), *Hypertext Transfer Protocol — HTTP/1.0* — the request
+    abaco sends (`GET <path> HTTP/1.0`, `Host`, `Connection: close`).
+  - RFC 3986 (2005), *URI: Generic Syntax*, §3.2 (authority: userinfo, host,
+    port — abaco accepts a reg-name or IPv4 host only, no userinfo).
+  - RFC 1035 (1987), *Domain Names*, §2.3.4 (a name is at most 255 octets on
+    the wire, 253 characters as text — abaco's host bound).
+  - RFC 6761 (2013), *Special-Use Domain Names*, §6.3 (`.localhost` resolves
+    to loopback — a test host name not in the fixture SAN) and §6.4
+    (`.invalid` — the fixture certificate issued for the wrong name).
+  - Why Content-Length is required: lib/tls.cyr's native read returns 0 for
+    any alert, fatal or `close_notify` alike, so end-of-stream cannot vouch for
+    a complete body (cyrius issue
+    `2026-09-30-tls-client-memory-and-alert-gaps.md`, (c)).
+  - Why `abaco_tls_init()`: cyrius issue
+    `2026-09-30-tls-first-use-thread-race.md` (sigil's check-then-set table
+    builders, and sigil ADR 0007's main-thread prewarm contract for
+    `ecdsa_p256_warm` / `ecdsa_p384_warm`).
 
 ## Constants
 

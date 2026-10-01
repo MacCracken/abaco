@@ -48,6 +48,37 @@ fn _bench_eval_fact170() { Evaluator_eval(_ev, "170!"); return 0; }
 # whole history on every push through 2.4.8 (CHANGELOG 2.4.9).
 fn _bench_nl_parse_convert() { nl_parse("convert 5 MW to kW"); return 0; }
 fn _bench_history_push_full() { CalcHistory_push(_hist, "2 + 3", "5", "2026-09-30T00:00:00Z"); return 0; }
+# 2.4.12: the HTTPS response splitter on a typical rates response (a server's
+# usual head, a short body) — the framing check every HTTPS fetch runs once.
+var _ccy_resp = 0;
+var _ccy_resp_len = 0;
+fn _bench_ccy_resp() {
+    var r = alloc(512);
+    var p = 0;
+    var part = "HTTP/1.1 200 OK\r\nDate: Wed, 30 Sep 2026 12:00:00 GMT\r\nServer: nginx\r\n";
+    memcpy(r + p, part, strlen(part));
+    p = p + strlen(part);
+    part = "Content-Type: application/json; charset=utf-8\r\nContent-Length: 46\r\n";
+    memcpy(r + p, part, strlen(part));
+    p = p + strlen(part);
+    part = "Cache-Control: max-age=3600\r\nConnection: close\r\n\r\n";
+    memcpy(r + p, part, strlen(part));
+    p = p + strlen(part);
+    part = "{\"base\":\"USD\",\"rates\":{\"EUR\":0.92,\"GBP\":0.79}}";
+    memcpy(r + p, part, strlen(part) + 1);
+    return r;
+}
+fn _bench_ccy_http_split() {
+    var o[24];
+    _ccy_http_split(_ccy_resp, _ccy_resp_len, &o);
+    return 0;
+}
+# 2.4.12 review: the IP-literal SAN check on the test leaf (P-256, SAN
+# DNS:localhost + IP:127.0.0.1) — what a fetch to an IPv4 literal runs once.
+var _ccy_leaf = 0;
+var _ccy_leaf_len = 0;
+var _ccy_ip = 0;
+fn _bench_ccy_cert_ip_san() { _ccy_cert_ip_san(_ccy_leaf, _ccy_leaf_len, _ccy_ip); return 0; }
 fn _bench_eval_sci_add() { Evaluator_eval(_ev, "1.5e10 + 2.3e9"); return 0; }
 fn _bench_eval_sci_mul() { Evaluator_eval(_ev, "1e-3 * 1e3"); return 0; }
 # 2.4.11: literals past Clinger's fast path. 40 digits take the certified
@@ -228,6 +259,22 @@ fn main() {
     b = bench_new("nl_parse_convert");
     bench_run(b, &_bench_nl_parse_convert, BENCH_ITERS);
     bench_report(b);
+
+    _ccy_resp = _bench_ccy_resp();
+    _ccy_resp_len = strlen(_ccy_resp);
+    b = bench_new("ccy_http_split");
+    bench_run(b, &_bench_ccy_http_split, BENCH_ITERS);
+    bench_report(b);
+
+    _ccy_leaf = alloc(4096);
+    _ccy_leaf_len = file_read_all("tests/fixtures/tls/server-cert.der", _ccy_leaf, 4096);
+    _ccy_ip = alloc(8);
+    store64(_ccy_ip, 0x0100007F);
+    if (_ccy_leaf_len > 0 && _ccy_cert_ip_san(_ccy_leaf, _ccy_leaf_len, _ccy_ip) == 1) {
+        b = bench_new("ccy_cert_ip_san");
+        bench_run(b, &_bench_ccy_cert_ip_san, BENCH_ITERS);
+        bench_report(b);
+    }
 
     _hist = CalcHistory_new(1000);
     var hi = 0;

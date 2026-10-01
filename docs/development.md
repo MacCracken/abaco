@@ -35,9 +35,20 @@ cyrius test
 cyrius test tests/test_ai.tcyr
 ```
 
-Expected output: `7 passed, 0 failed` (one per suite). Each suite prints its
+Expected output: `9 passed, 0 failed` (one per suite). Each suite prints its
 own `N passed, 0 failed (N total)` line; the current assertion count is in
 [`development/state.md`](development/state.md).
+
+`tests/test_ccy_tls.tcyr` (HTTPS currency fetch, `#define ABACO_TLS` at its
+top) forks its own TLS servers, and raw TCP servers that stall or misbehave
+mid-handshake, on ephemeral 127.0.0.1 ports — nothing leaves loopback, and
+each server exits on its own after 240 s idle (it is killed at the end of a
+normal run). The stall cases run in forked children under a 1.5–4 s deadline
+and the silent-server case waits out the 10 s read timeout, all alongside the
+rest, so the suite takes ~12 s (~3 min under qemu). Its certificates are
+committed under `tests/fixtures/tls/`; `scripts/gen-tls-fixtures.sh`
+regenerates them (OpenSSL ≥ 3.4). `tests/test_ccy_tls_libssl.tcyr` builds the
+libssl-only configuration and checks that HTTPS is refused there.
 
 ## Bench
 
@@ -133,13 +144,15 @@ abaco/
 ├── VERSION               # single source of truth
 ├── src/                  # library modules (core, ntheory, dsp,
 │                         # eval, units, ai, main)
-├── tests/                # *.tcyr — auto-discovered by `cyrius test`
+├── tests/                # *.tcyr — auto-discovered by `cyrius test`;
+│                         # fixtures/tls: HTTPS test certificates
 ├── benches/              # *.bcyr — run by `cyrius bench`
 ├── fuzz/                 # fuzz_eval / fuzz_ntheory / fuzz_units / fuzz_ai
 ├── programs/             # runnable demos (basic.cyr)
 ├── lib/                  # vendored Cyrius stdlib (gitignored;
 │                         # `cyrius deps`, checked by cyrius.lock)
-├── scripts/              # bench-history.sh, version-bump.sh
+├── scripts/              # bench-history.sh, version-bump.sh,
+│                         # gen-tls-fixtures.sh
 ├── docs/                 # this directory
 └── build/                # gitignored — compiled artifacts
 ```

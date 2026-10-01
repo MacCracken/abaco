@@ -927,6 +927,330 @@ fn test_history_empty_json() {
     return 0;
 }
 
+# ================================================================
+# 2.4.12 HTTPS parsers — always compiled, so these run without -D ABACO_TLS.
+# The transport itself is tests/test_ccy_tls.tcyr.
+# ================================================================
+
+# _ccy_https_split(url) == 0 with these parts.
+fn _https_ok(url, host, port, path, name) {
+    var parts[24];
+    var r = _ccy_https_split(url, &parts);
+    assert_eq(r, 0, name);
+    if (r != 0) { return 0; }
+    assert(streq(load64(&parts), host) == 1, name);
+    assert_eq(load64(&parts + 8), port, name);
+    assert(streq(load64(&parts + 16), path) == 1, name);
+    return 0;
+}
+
+fn _https_bad(url, name) {
+    var parts[24];
+    assert_eq(_ccy_https_split(url, &parts), AI_ERR_HTTP, name);
+    return 0;
+}
+
+fn test_https_split() {
+    _https_ok("https://h", "h", 443, "/", "bare host");
+    _https_ok("https://api.example.com:8443/v1/rates", "api.example.com", 8443, "/v1/rates", "host, port, path");
+    _https_ok("https://127.0.0.1:1/x?y=1", "127.0.0.1", 1, "/x?y=1", "IPv4 literal, port 1, query");
+    _https_ok("https://Example-1.COM:00443/", "Example-1.COM", 443, "/", "case kept, leading zeros");
+    _https_ok("https://h:65535", "h", 65535, "/", "port 65535");
+    _https_bad("http://h", "plaintext scheme");
+    _https_bad("HTTPS://h", "scheme is case-sensitive here, as in _ccy_validate_url");
+    _https_bad("https://", "empty host");
+    _https_bad("https://:443/x", "empty host with port");
+    _https_bad("https:///x", "empty host with path");
+    _https_bad("https://user@h/x", "userinfo");
+    _https_bad("https://h@evil.example/x", "userinfo before another host");
+    _https_bad("https://h?x=1", "query straight after the host");
+    _https_bad("https://h#frag", "fragment after the host");
+    _https_bad("https://h/a#frag", "fragment in the path");
+    _https_bad("https://h/a b", "space in the path");
+    _https_bad("https://h/a\x7F", "DEL in the path");
+    _https_bad("https://h/a\xC3\xA9", "non-ASCII in the path");
+    _https_bad("https://h:0", "port 0");
+    _https_bad("https://h:65536", "port 65536");
+    _https_bad("https://h:", "empty port");
+    _https_bad("https://h:123456", "six port digits");
+    _https_bad("https://h:44x/", "junk after the port");
+    _https_bad("https://[::1]/x", "IPv6 literal (IPv4-only resolver)");
+    _https_bad("https://h_x.example/x", "underscore in the host");
+    _https_bad("https://h\\x.example/x", "backslash in the host");
+    _https_bad("https://h%2e.example/x", "percent in the host");
+    var long = alloc(300);
+    memcpy(long, "https://", 8);
+    memset(long + 8, 97, 254);
+    store8(long + 262, 0);
+    _https_bad(long, "254-byte host");
+    store8(long + 261, 0);
+    var parts[24];
+    assert_eq(_ccy_https_split(long, &parts), 0, "253-byte host");
+    assert_eq(strlen(load64(&parts)), 253, "and it is copied whole");
+    assert_eq(_ccy_https_split(0, &parts), AI_ERR_HTTP, "null URL");
+    # The host is a copy: the URL buffer can change afterwards.
+    var u = alloc(32);
+    memcpy(u, "https://abc/x", 14);
+    _ccy_https_split(u, &parts);
+    store8(u + 8, 120);
+    assert(streq(load64(&parts), "abc") == 1, "host copied");
+    return 0;
+}
+
+fn test_https_request() {
+    var r = _ccy_https_request("h.example", 443, "/rates");
+    assert(streq(r, "GET /rates HTTP/1.0\r\nHost: h.example\r\nConnection: close\r\n\r\n") == 1,
+      "request on 443: no port in Host");
+    var r2 = _ccy_https_request("127.0.0.1", 8443, "/v1/rates?x=1");
+    assert(streq(r2, "GET /v1/rates?x=1 HTTP/1.0\r\nHost: 127.0.0.1:8443\r\nConnection: close\r\n\r\n") == 1,
+      "request on 8443: Host carries the port");
+    var r3 = _ccy_https_request("h", 1, "/");
+    assert(streq(r3, "GET / HTTP/1.0\r\nHost: h:1\r\nConnection: close\r\n\r\n") == 1, "port 1");
+    # 2048 bytes with the NUL is the most a request may take.
+    var fixed = 4 + 17 + 1 + 23 + 1;
+    var path = alloc(2100);
+    store8(path, 47);
+    memset(path + 1, 97, 2047 - fixed);
+    store8(path + 2048 - fixed, 0);
+    var at = _ccy_https_request("h", 443, path);
+    assert(at != 0, "a request of exactly 2048 bytes is built");
+    assert_eq(strlen(at) + 1, 2048, "and is 2048 bytes with its NUL");
+    store8(path + 2048 - fixed, 97);
+    store8(path + 2049 - fixed, 0);
+    assert_eq(_ccy_https_request("h", 443, path), 0, "one byte more is refused");
+    return 0;
+}
+
+# _ccy_http_split on a cstr response.
+fn _split(resp, out) { return _ccy_http_split(resp, strlen(resp), out); }
+
+fn test_http_split() {
+    var out[24];
+    var ok = "HTTP/1.0 200 OK\r\nContent-Length: 46\r\n\r\n{\"base\":\"USD\",\"rates\":{\"EUR\":0.92,\"GBP\":0.79}}";
+    assert_eq(_split(ok, &out), 0, "a framed 200");
+    assert_eq(load64(&out), 200, "status 200");
+    assert_eq(load64(&out + 16), 46, "body length 46");
+    assert_eq(load64(&out + 8), ok + strlen(ok) - 46, "body pointer at the head's end");
+    assert_eq(_split("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n", &out), 0, "a framed 404 splits");
+    assert_eq(load64(&out), 404, "status 404");
+    assert_eq(_split("HTTP/1.1 200\r\nContent-Length: 2\r\n\r\n{}", &out), 0, "a status line without a reason");
+    assert_eq(_split("HTTP/1.1 200 OK\r\ncontent-LENGTH:2\r\n\r\n{}", &out), 0, "field names any case, no OWS");
+    assert_eq(_split("HTTP/1.1 200 OK\r\nContent-Length: \t2 \t\r\n\r\n{}", &out), 0, "OWS around the value");
+    assert_eq(_split("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}", &out), 0,
+      "two equal Content-Lengths");
+    assert_eq(_split("HTTP/1.1 200 OK\r\nContent-Length: 0002\r\n\r\n{}", &out), 0, "leading zeros");
+    assert_eq(_split("HTTP/1.0 200 OK\r\nX-A: b\r\nContent-Length: 2\r\nX-C: \xC3\xA9\r\n\r\n{}", &out), 0,
+      "other fields, obs-text in a value");
+    # Refused framing.
+    assert_eq(_split("HTTP/1.0 200 OK\r\n\r\n{}", &out), AI_ERR_HTTP, "no Content-Length");
+    assert_eq(_split("HTTP/1.0 200 OK\r\nContent-Length: 3\r\n\r\n{}", &out), AI_ERR_HTTP, "body shorter");
+    assert_eq(_split("HTTP/1.0 200 OK\r\nContent-Length: 1\r\n\r\n{}", &out), AI_ERR_HTTP, "body longer");
+    assert_eq(_split("HTTP/1.0 200 OK\r\nContent-Length: 2\r\nContent-Length: 3\r\n\r\n{}", &out), AI_ERR_HTTP,
+      "two differing Content-Lengths");
+    assert_eq(_split("HTTP/1.0 200 OK\r\nContent-Length: 3\r\nContent-Length: 2\r\n\r\n{}", &out), AI_ERR_HTTP,
+      "two differing Content-Lengths, the right one last");
+    assert_eq(_split("HTTP/1.0 200 OK\r\nContent-Length: 2, 2\r\n\r\n{}", &out), AI_ERR_HTTP, "a list value");
+    assert_eq(_split("HTTP/1.0 200 OK\r\nContent-Length: +2\r\n\r\n{}", &out), AI_ERR_HTTP, "a signed value");
+    assert_eq(_split("HTTP/1.0 200 OK\r\nContent-Length:\r\n\r\n{}", &out), AI_ERR_HTTP, "an empty value");
+    assert_eq(_split("HTTP/1.0 200 OK\r\nContent-Length: 65537\r\n\r\n{}", &out), AI_ERR_HTTP, "past 64 KB");
+    assert_eq(_split("HTTP/1.0 200 OK\r\nContent-Length: 99999999999999999999999\r\n\r\n{}", &out), AI_ERR_HTTP,
+      "a value that would overflow");
+    assert_eq(_split("HTTP/1.0 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 2\r\n\r\n{}", &out),
+      AI_ERR_HTTP, "Transfer-Encoding");
+    assert_eq(_split("HTTP/1.0 200 OK\r\nX: a\r\n Content-Length: 2\r\n\r\n{}", &out), AI_ERR_HTTP, "obs-fold");
+    assert_eq(_split("HTTP/1.0 200 OK\r\nContent-Length : 2\r\n\r\n{}", &out), AI_ERR_HTTP,
+      "whitespace before the colon");
+    assert_eq(_split("HTTP/1.0 200 OK\r\nNoColon\r\nContent-Length: 2\r\n\r\n{}", &out), AI_ERR_HTTP,
+      "a field line without ':'");
+    assert_eq(_split("HTTP/1.0 200 OK\nContent-Length: 2\r\n\r\n{}", &out), AI_ERR_HTTP, "a bare LF");
+    assert_eq(_split("HTTP/1.0 200 OK\rX: 1\r\nContent-Length: 2\r\n\r\n{}", &out), AI_ERR_HTTP, "a bare CR");
+    assert_eq(_split("HTTP/1.0 200 OK\r\nX: \x01\r\nContent-Length: 2\r\n\r\n{}", &out), AI_ERR_HTTP,
+      "a control byte in the head");
+    assert_eq(_split("HTTP/1.0 200 OK\r\nContent-Length: 2\r\n", &out), AI_ERR_HTTP, "head not finished");
+    # Refused status lines.
+    assert_eq(_split("HTTP/2 200 OK\r\nContent-Length: 2\r\n\r\n{}", &out), AI_ERR_HTTP, "HTTP/2");
+    assert_eq(_split("HTTP/1.0 099 X\r\nContent-Length: 2\r\n\r\n{}", &out), AI_ERR_HTTP, "status under 100");
+    assert_eq(_split("HTTP/1.0 2000 X\r\nContent-Length: 2\r\n\r\n{}", &out), AI_ERR_HTTP, "four-digit status");
+    assert_eq(_split("HTTP/1.0 2x0 X\r\nContent-Length: 2\r\n\r\n{}", &out), AI_ERR_HTTP, "non-digit status");
+    assert_eq(_split("ICY 200 OK\r\nContent-Length: 2\r\n\r\n{}", &out), AI_ERR_HTTP, "not HTTP");
+    assert_eq(_ccy_http_split(ok, 0, &out), AI_ERR_HTTP, "zero length");
+    assert_eq(_ccy_http_split(0, 10, &out), AI_ERR_HTTP, "null buffer");
+    # The incremental head parse the read loop uses: 0 = keep reading.
+    var h[24];
+    assert_eq(_ccy_http_head(ok, 20, &h), 0, "head incomplete: keep reading");
+    assert_eq(_ccy_http_head(ok, 41, &h), strlen(ok), "head complete: the whole message length");
+    assert_eq(load64(&h + 8), 39, "body offset");
+    assert_eq(_ccy_http_head("HTTP/1.0 200 OK\r\n\r\n", 19, &h), 0 - 1, "complete head without a length: refused");
+    return 0;
+}
+
+# Without -D ABACO_TLS (this suite) an https:// URL is refused as AI_ERR_TLS
+# once it parses — not AI_ERR_HTTP, which it was through 2.4.11.
+fn test_https_without_tls() {
+    var c = CurrencyCache_new("https://localhost:1");
+    assert_eq(CurrencyCache_fetch(c), AI_ERR_TLS, "https:// without -D ABACO_TLS: AI_ERR_TLS");
+    assert_eq(ai_last_err(), AI_ERR_TLS, "last_err = TLS");
+    assert_eq(abaco_tls_init(), AI_ERR_TLS, "abaco_tls_init: no TLS in this build");
+    var cb = CurrencyCache_new("https://user@localhost:1");
+    assert_eq(CurrencyCache_fetch(cb), AI_ERR_HTTP, "a malformed https URL is still AI_ERR_HTTP");
+    assert_eq(AI_ERR_HTTP, 4, "AiError values before AI_ERR_TLS unchanged");
+    assert_eq(AI_ERR_TLS, 5, "AI_ERR_TLS appended");
+    # The CA path is copied, like the base URL; 0 restores the system store.
+    var p = alloc(32);
+    memcpy(p, "/tmp/ca.crt", 12);
+    CurrencyCache_set_ca_file(c, p);
+    store8(p + 5, 88);
+    assert(streq(ccy_ca_file(c), "/tmp/ca.crt") == 1, "CA path copied");
+    assert_eq(ccy_ca_file(CurrencyCache_new("https://h")), 0, "a new cache trusts the system store");
+    CurrencyCache_set_ca_file(c, 0);
+    assert_eq(ccy_ca_file(c), 0, "path 0 restores the system store");
+    return 0;
+}
+
+# ================================================================
+# 2.4.12 review: the IP-literal SAN check and the CA bundle count — pure, so
+# they run here; the fetches that use them are tests/test_ccy_tls.tcyr.
+# ================================================================
+
+# Hex digits (no separators) into out; returns the byte count.
+fn _unhex(hex, out) {
+    var n = 0;
+    var i = 0;
+    while (load8(hex + i) != 0) {
+        var v = 0;
+        var k = 0;
+        while (k < 2) {
+            var c = load8(hex + i + k);
+            if (c >= 97) { c = c - 87; }
+            elif (c >= 65) { c = c - 55; }
+            else { c = c - 48; }
+            v = v * 16 + c;
+            k = k + 1;
+        }
+        store8(out + n, v);
+        n = n + 1;
+        i = i + 2;
+    }
+    return n;
+}
+
+# _ccy_cert_ip_san against 127.0.0.1 on the DER spelled by hex `a` then `b`
+# (two parts so a long one fits on a line).
+fn _ipsan_hex(a, b) {
+    var d = alloc(256);
+    var n = _unhex(a, d);
+    n = n + _unhex(b, d + n);
+    var ip[8];
+    store64(&ip, 0x0100007F);
+    return _ccy_cert_ip_san(d, n, &ip);
+}
+
+# _ccy_cert_ip_san on a fixture certificate against a.b.c.d.
+fn _ipsan_file(path, a, b, c, d) {
+    var buf = alloc(4096);
+    var n = file_read_all(path, buf, 4096);
+    if (n <= 0) { return 0 - 1; }
+    var ip[8];
+    store64(&ip, a + b * 256 + c * 65536 + d * 16777216);
+    return _ccy_cert_ip_san(buf, n, &ip);
+}
+
+fn test_der_tlv() {
+    var b = alloc(300);
+    var t[16];
+    _unhex("0403616263", b);
+    assert_eq(_ccy_der_tlv(b, 5, 0, &t), 4, "short form: tag");
+    assert_eq(load64(&t), 2, "short form: content offset");
+    assert_eq(load64(&t + 8), 3, "short form: length");
+    assert_eq(_ccy_der_tlv(b, 4, 0, &t), 0 - 1, "content past end refused");
+    assert_eq(_ccy_der_tlv(b, 1, 0, &t), 0 - 1, "no length byte");
+    assert_eq(_ccy_der_tlv(b, 5, 5, &t), 0 - 1, "at end");
+    _unhex("308103616263", b);
+    assert_eq(_ccy_der_tlv(b, 6, 0, &t), 48, "0x81 long form");
+    assert_eq(load64(&t), 3, "0x81: content after 3 header bytes");
+    _unhex("30820003616263", b);
+    assert_eq(_ccy_der_tlv(b, 7, 0, &t), 48, "0x82 long form, not minimal: accepted");
+    assert_eq(load64(&t + 8), 3, "0x82: length");
+    _unhex("3083000003616263", b);
+    assert_eq(_ccy_der_tlv(b, 8, 0, &t), 48, "0x83 long form");
+    _unhex("308400000003616263", b);
+    assert_eq(_ccy_der_tlv(b, 9, 0, &t), 0 - 1, "0x84 refused");
+    _unhex("3080616263", b);
+    assert_eq(_ccy_der_tlv(b, 5, 0, &t), 0 - 1, "indefinite length refused");
+    _unhex("1F0100", b);
+    assert_eq(_ccy_der_tlv(b, 3, 0, &t), 0 - 1, "high tag number refused");
+    _unhex("3082FFFF00", b);
+    assert_eq(_ccy_der_tlv(b, 5, 0, &t), 0 - 1, "declared length past end refused");
+    return 0;
+}
+
+fn test_cert_ip_san() {
+    # Built in DER by hand: Certificate > tbsCertificate > [3] > SEQUENCE OF
+    # Extension > { 2.5.29.17, [critical,] OCTET STRING > GeneralNames }.
+    assert_eq(_ipsan_hex("301A3018A316301430120603551D11", "0101FF0408300687047F000001"), 1,
+      "critical SAN with the iPAddress");
+    assert_eq(_ipsan_hex("30173015A3133011300F0603551D11", "0408300687047F000001"), 1, "SAN, not critical");
+    assert_eq(_ipsan_hex("30173015A3133011300F0603551D11", "0408300687047F000002"), 0, "another address");
+    assert_eq(_ipsan_hex("30173015A3133011300F0603551D12", "0408300687047F000001"), 0,
+      "issuerAltName is not the subject's");
+    assert_eq(_ipsan_hex("30173015A3133011300F0603551D11", "0408300682047F000001"), 0,
+      "the same 4 bytes as a dNSName do not count");
+    assert_eq(_ipsan_hex("30173015A3133011300F0603551D11", "04083006A7047F000001"), 0,
+      "a constructed [7] is not an iPAddress");
+    assert_eq(_ipsan_hex("30173015A2133011300F0603551D11", "0408300687047F000001"), 0,
+      "extensions under [2], not [3]: none");
+    assert_eq(_ipsan_hex("302D302BA329302730140603551D11040D300B8209612E6578616D706C65",
+        "300F0603551D110408300687047F000001"), 0, "only the first SAN extension counts");
+    assert_eq(_ipsan_hex("3081173015A3133011300F0603551D11", "0408300687047F000001"), 1, "long-form outer length");
+    assert_eq(_ipsan_hex("302C302AA328302630240603551D11041D301B871000000000000000000000",
+        "00000000000082017887047F000001"), 1, "an IPv6 entry, a DNS entry, then the IPv4 one");
+    assert_eq(_ipsan_hex("302D302BA00302010202020102A320301E300B0603551D0F040403020780",
+        "300F0603551D110408300687047F000001"), 1, "version, serial and a key-usage extension first");
+    assert_eq(_ipsan_hex("30173015A3133011300F0603551D11", "0408300787047F000001"), 0,
+      "GeneralNames longer than its OCTET STRING: refused");
+    # The fixtures (scripts/gen-tls-fixtures.sh).
+    assert_eq(_ipsan_file("tests/fixtures/tls/server-cert.der", 127, 0, 0, 1), 1,
+      "server-cert: IP:127.0.0.1 listed");
+    assert_eq(_ipsan_file("tests/fixtures/tls/p384-cert.der", 127, 0, 0, 1), 1, "p384-cert: IP:127.0.0.1 listed");
+    assert_eq(_ipsan_file("tests/fixtures/tls/server-cert.der", 127, 0, 0, 2), 0, "server-cert: not 127.0.0.2");
+    assert_eq(_ipsan_file("tests/fixtures/tls/dns-ip-cert.der", 127, 0, 0, 1), 0,
+      "DNS:127.0.0.1 is not an iPAddress (RFC 9525 §6.3)");
+    assert_eq(_ipsan_file("tests/fixtures/tls/wild-ip-cert.der", 127, 0, 0, 1), 0, "DNS:*.0.0.1 is not either");
+    assert_eq(_ipsan_file("tests/fixtures/tls/wrong-name-cert.der", 127, 0, 0, 1), 0, "DNS:abaco.invalid: no");
+    # Every truncation of a matching certificate is refused, and bytes past
+    # its end never change the verdict.
+    var buf = alloc(4200);
+    var n = file_read_all("tests/fixtures/tls/server-cert.der", buf, 4096);
+    assert(n > 100, "server-cert read");
+    var ip[8];
+    store64(&ip, 0x0100007F);
+    var cut = 0;
+    var bad = 0;
+    while (cut < n) {
+        if (_ccy_cert_ip_san(buf, cut, &ip) != 0) { bad = bad + 1; }
+        cut = cut + 1;
+    }
+    assert_eq(bad, 0, "no truncation of server-cert matches");
+    memset(buf + n, 135, 64);
+    assert_eq(_ccy_cert_ip_san(buf, n, &ip), 1, "trailing bytes ignored");
+    assert_eq(_ccy_cert_ip_san(0, n, &ip), 0, "null DER");
+    return 0;
+}
+
+fn test_pem_cert_count() {
+    var m = "-----BEGIN CERTIFICATE-----";
+    assert_eq(_ccy_pem_cert_count(m, 27), 1, "one marker");
+    assert_eq(_ccy_pem_cert_count(m, 26), 0, "a marker cut short is not counted");
+    assert_eq(_ccy_pem_cert_count("", 0), 0, "empty");
+    var two = "x\n-----BEGIN CERTIFICATE-----\nAA\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\n";
+    assert_eq(_ccy_pem_cert_count(two, strlen(two)), 2, "two blocks");
+    assert_eq(_ccy_pem_cert_count("-----BEGIN PRIVATE KEY-----", 27), 0, "a key block is not a certificate");
+    var buf = alloc(8192);
+    var n = file_read_all("tests/fixtures/tls/rsa-ca.crt", buf, 8192);
+    assert_eq(_ccy_pem_cert_count(buf, n), 1, "rsa-ca.crt: one certificate");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco ai tests ===");
@@ -976,6 +1300,13 @@ fn main() {
     test_security_rate_sanity_rejects_nan();
     test_security_rate_sanity_rejects_negative();
     test_security_rate_sanity_all_bad();
+    test_https_split();
+    test_https_request();
+    test_http_split();
+    test_https_without_tls();
+    test_der_tlv();
+    test_cert_ip_san();
+    test_pem_cert_count();
     # Propagate failure to the process exit code. assert_summary() RETURNS
     # _assert_fail; discarding it and returning 0 made a red suite exit 0, and
     # CI gates on the exit code — so failures shipped green (fixed 2.4.4).

@@ -1,0 +1,963 @@
+# abaco HTTPS currency fetch (2.4.12) — hermetic. Forked children serve TLS
+# with lib/tls.cyr's own native tls_accept on ephemeral 127.0.0.1 ports, using
+# the fixtures in tests/fixtures/tls (scripts/gen-tls-fixtures.sh). Nothing
+# leaves loopback, and every server exits on its own when idle, so a failing
+# or killed run cannot leave CI waiting.
+#
+# Five TLS servers, one certificate each (the native server picks no cert by
+# SNI): GOOD is a P-256 leaf from ca.crt for localhost + 127.0.0.1, WRONG the
+# same key from the same CA for abaco.invalid only, RSA a P-384 leaf signed by
+# rsa-ca.crt (an RSA chain signature and a P-384 CertificateVerify — the
+# native server cannot serve an RSA key), DNSIP and WILDIP leaves whose only
+# SAN is DNS:127.0.0.1 / DNS:*.0.0.1. Each forks per connection and picks its
+# response from the request path, so no case depends on another's order. Six
+# raw TCP servers (no TLS) misbehave after the ClientHello — they drip,
+# flood ChangeCipherSpec records, stay silent, hang up or send an alert — for
+# the deadline and the error-code cases; the stalls run in forked children
+# under a short deadline, so a regression fails the suite instead of hanging.
+#define ABACO_TLS
+
+include "lib/syscalls.cyr"
+include "lib/alloc.cyr"
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/tagged.cyr"
+include "lib/hashmap.cyr"
+include "lib/fnptr.cyr"
+include "lib/math.cyr"
+include "lib/io.cyr"
+include "lib/net.cyr"
+include "lib/http.cyr"
+include "lib/bayan.cyr"
+include "lib/thread.cyr"
+include "lib/tls.cyr"
+include "lib/assert.cyr"
+
+include "src/core.cyr"
+include "src/ntheory.cyr"
+include "src/dsp.cyr"
+include "src/eval.cyr"
+include "src/units.cyr"
+include "src/ai.cyr"
+
+enum TlsTest {
+    # A server with no connection for SRV_IDLE_S exits — past MT_WAIT_S +
+    # STALL_WAIT_S, as under qemu a server can sit unused that long.
+    SRV_IDLE_S = 240;
+    SRV_MAX_CONN = 400;     # and never serves more than this many
+    CONN_TIMEOUT_S = 5;     # per-connection socket timeouts in the server
+    MT_THREADS = 3;         # concurrent fetching threads per round
+    MT_FETCHES = 4;         # fetches per thread, alternating the two chains
+    MT_ROUNDS = 2;          # rounds, each with fresh threads
+    MT_WAIT_S = 120;        # the threaded child is killed past this (qemu is slow)
+    FD_LOOPS = 2;           # error-path loop count for the fd-leak check
+    SNAP_N = 36;            # lazy-init flags in the snapshot
+    STALL_MS = 1500;        # the deadline the stall cases run under
+    STALL_WAIT_S = 60;      # a stall child is killed past this
+}
+
+# What a raw server does after reading the ClientHello.
+enum RawMode {
+    RAW_DRIP = 1;           # a record header for 16000 bytes, then 1 byte / 250 ms
+    RAW_CCS_SLOW = 2;       # one plaintext ChangeCipherSpec record / 200 ms
+    RAW_CCS_FAST = 3;       # CCS records as fast as the socket takes them
+    RAW_SILENT = 4;         # nothing (past the client's 10 s read timeout)
+    RAW_CLOSE = 5;          # hang up: end of stream mid-handshake
+    RAW_ALERT = 6;          # a fatal handshake_failure alert record
+}
+
+var FX_CA = "tests/fixtures/tls/ca.crt";
+var FX_OTHER_CA = "tests/fixtures/tls/other-ca.crt";
+var FX_RSA_CA = "tests/fixtures/tls/rsa-ca.crt";
+var FX_KEY = "tests/fixtures/tls/server-key.der";
+var RATES = "{\"base\":\"USD\",\"rates\":{\"EUR\":0.92,\"GBP\":0.79}}";
+
+# ================================================================
+# Helpers
+# ================================================================
+
+# Append cstr `s` at buf+pos; returns the new pos.
+fn _put(buf, pos, s) {
+    var n = strlen(s);
+    memcpy(buf + pos, s, n);
+    return pos + n;
+}
+
+# Append the decimal digits of n >= 0 at buf+pos; returns the new pos.
+fn _put_num(buf, pos, n) {
+    var dig[24];
+    var nd = 0;
+    if (n == 0) { store8(&dig, 48); nd = 1; }
+    while (n > 0) { store8(&dig + nd, 48 + n % 10); n = n / 10; nd = nd + 1; }
+    while (nd > 0) { nd = nd - 1; store8(buf + pos, load8(&dig + nd)); pos = pos + 1; }
+    return pos;
+}
+
+# "https://<host>:<port><path>" in a fresh buffer.
+fn _url(host, port, path) {
+    var u = alloc(256);
+    var pos = _put(u, 0, "https://");
+    pos = _put(u, pos, host);
+    store8(u + pos, 58);
+    pos = _put_num(u, pos + 1, port);
+    pos = _put(u, pos, path);
+    store8(u + pos, 0);
+    return u;
+}
+
+# A cache for `url` that trusts `ca` (0 = the system store).
+fn _cache(url, ca) {
+    var c = CurrencyCache_new(url);
+    if (ca != 0) { CurrencyCache_set_ca_file(c, ca); }
+    return c;
+}
+
+fn _fetch(host, port, path, ca) { return CurrencyCache_fetch(_cache(_url(host, port, path), ca)); }
+
+# 1 when a fetched cache converts 100 USD to 92 EUR.
+fn _rates_loaded(c) {
+    var r = CurrencyCache_convert(c, f64_from(100), "USD", "EUR");
+    if (r == 0) { return 0; }
+    var d = f64_sub(cr_to_value(r), f64_from(92));
+    if (f64_lt(f64_abs(d), f64_div(f64_from(1), f64_from(1000000))) == 1) { return 1; }
+    return 0;
+}
+
+# Open file descriptors of this process (/proc/self/fd entries, minus the
+# directory's own fd, ".", "..").
+fn _fd_count() {
+    var fd = sys_open("/proc/self/fd", O_RDONLY | O_DIRECTORY, 0);
+    if (fd < 0) { return 0 - 1; }
+    var buf = alloc(8192);
+    var n = 0;
+    var go = 1;
+    while (go == 1) {
+        var got = sys_getdents64(fd, buf, 8192);
+        if (got <= 0) { go = 0; }
+        else {
+            var off = 0;
+            while (off < got) {
+                var reclen = load16(buf + off + 16);
+                var nm = buf + off + 19;
+                if (streq(nm, ".") == 0 && streq(nm, "..") == 0) { n = n + 1; }
+                off = off + reclen;
+            }
+        }
+    }
+    sys_close(fd);
+    return n - 1;
+}
+
+# Threads of this process (/proc/self/task entries).
+fn _task_count() {
+    var fd = sys_open("/proc/self/task", O_RDONLY | O_DIRECTORY, 0);
+    if (fd < 0) { return 0 - 1; }
+    var buf = alloc(8192);
+    var n = 0;
+    var got = sys_getdents64(fd, buf, 8192);
+    while (got > 0) {
+        var off = 0;
+        while (off < got) {
+            var nm = buf + off + 19;
+            if (streq(nm, ".") == 0 && streq(nm, "..") == 0) { n = n + 1; }
+            off = off + load16(buf + off + 16);
+        }
+        got = sys_getdents64(fd, buf, 8192);
+    }
+    sys_close(fd);
+    return n;
+}
+
+# Wait for child `pid` up to `secs`, then SIGKILL it. Returns its wait status.
+fn _wait_child(pid, secs) {
+    var wst[8];
+    store64(&wst, 0);
+    var waited = 0;
+    while (waited < secs * 20) {
+        if (sys_waitpid(pid, &wst, 1) == pid) { return load64(&wst); }   # WNOHANG
+        sleep_ms(50);
+        waited = waited + 1;
+    }
+    sys_kill(pid, 9);
+    sys_waitpid(pid, &wst, 0);
+    return 0 - 1;
+}
+
+# ================================================================
+# The servers (forked; each connection in its own grandchild)
+# ================================================================
+
+# Read the request head; returns its byte count.
+fn _srv_read_req(tc, buf, cap) {
+    var total = 0;
+    while (total < cap - 1) {
+        var n = tls_read(tc, buf + total, cap - 1 - total);
+        if (n <= 0) { return total; }
+        total = total + n;
+        store8(buf + total, 0);
+        if (total >= 4 && memeq(buf + total - 4, "\r\n\r\n", 4) == 1) { return total; }
+    }
+    return total;
+}
+
+# The request path: the token after "GET ", in a fresh cstr.
+fn _srv_path(req, n) {
+    var p = alloc(256);
+    store8(p, 0);
+    if (n < 5 || memeq(req, "GET ", 4) == 0) { return p; }
+    var i = 4;
+    var k = 0;
+    while (i < n && load8(req + i) != 32 && k < 255) { store8(p + k, load8(req + i)); i = i + 1; k = k + 1; }
+    store8(p + k, 0);
+    return p;
+}
+
+fn _send(tc, s) { return tls_write(tc, s, strlen(s)); }
+
+# "HTTP/1.0 200 OK\r\n" + extra + "Content-Length: <cl>\r\n\r\n" + body.
+fn _resp(extra, cl, body) {
+    var r = alloc(1024);
+    var pos = _put(r, 0, "HTTP/1.0 200 OK\r\n");
+    pos = _put(r, pos, extra);
+    pos = _put(r, pos, "Content-Length: ");
+    pos = _put_num(r, pos, cl);
+    pos = _put(r, pos, "\r\n\r\n");
+    pos = _put(r, pos, body);
+    store8(r + pos, 0);
+    return r;
+}
+
+# Answer one request according to its path.
+fn _srv_respond(tc, cfd, path) {
+    var bl = strlen(RATES);
+    if (streq(path, "/404/rates") == 1) { _send(tc, "HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\n\r\n"); return 0; }
+    if (streq(path, "/301/rates") == 1) {
+        # A relative Location on this same server: following it would succeed.
+        _send(tc, "HTTP/1.0 301 Moved Permanently\r\nLocation: /ok/rates\r\nContent-Length: 0\r\n\r\n");
+        return 0;
+    }
+    if (streq(path, "/trunc/rates") == 1) { _send(tc, _resp("", 999, RATES)); return 0; }
+    if (streq(path, "/longer/rates") == 1) { _send(tc, _resp("", bl - 6, RATES)); return 0; }
+    if (streq(path, "/nocl/rates") == 1) {
+        var r = alloc(256);
+        var pos = _put(r, 0, "HTTP/1.0 200 OK\r\n\r\n");
+        pos = _put(r, pos, RATES);
+        store8(r + pos, 0);
+        _send(tc, r);
+        return 0;
+    }
+    if (streq(path, "/twocl/rates") == 1) { _send(tc, _resp("Content-Length: 47\r\n", bl, RATES)); return 0; }
+    if (streq(path, "/samecl/rates") == 1) { _send(tc, _resp("content-length: 46\r\n", bl, RATES)); return 0; }
+    if (streq(path, "/te/rates") == 1) { _send(tc, _resp("Transfer-Encoding: chunked\r\n", bl, RATES)); return 0; }
+    if (streq(path, "/badcl/rates") == 1) { _send(tc, _resp("Content-Length: 4x\r\n", bl, RATES)); return 0; }
+    if (streq(path, "/fold/rates") == 1) { _send(tc, _resp("X-A: 1\r\n Content-Length: 9\r\n", bl, RATES)); return 0; }
+    if (streq(path, "/badjson/rates") == 1) { _send(tc, _resp("", 8, "not json")); return 0; }
+    if (streq(path, "/big/rates") == 1) {
+        _send(tc, "HTTP/1.0 200 OK\r\nContent-Length: 70000\r\n\r\n");
+        var pad = alloc(70000);
+        memset(pad, 32, 70000);
+        tls_write(tc, pad, 70000);
+        return 0;
+    }
+    if (streq(path, "/bighead/rates") == 1) {
+        _send(tc, "HTTP/1.0 200 OK\r\nX-Pad: ");
+        var hp = alloc(70000);
+        memset(hp, 97, 70000);
+        tls_write(tc, hp, 70000);
+        return 0;
+    }
+    if (streq(path, "/frag/rates") == 1) {
+        # One TLS record per byte: past the client's read-call bound.
+        var fr = _resp("", bl, RATES);
+        var fi = 0;
+        while (load8(fr + fi) != 0) { tls_write(tc, fr + fi, 1); fi = fi + 1; }
+        return 0;
+    }
+    if (streq(path, "/split/rates") == 1) {
+        # The head and the body in four records: framing across reads.
+        _send(tc, "HTTP/1.0 200 OK\r\nContent-Length: 46\r\n\r\n");
+        tls_write(tc, RATES, 10);
+        tls_write(tc, RATES + 10, 20);
+        tls_write(tc, RATES + 30, bl - 30);
+        return 0;
+    }
+    if (streq(path, "/ccs/rates") == 1) {
+        # No response: plaintext ChangeCipherSpec records on the raw socket,
+        # one per 200 ms. They need no key — any on-path box can send them —
+        # and lib/tls.cyr skips them after the handshake too, so only the
+        # fetch's deadline ends this.
+        var ccs = alloc(8);
+        _ccs_rec(ccs);
+        var k = 0;
+        while (k < 300) {
+            if (sys_write(cfd, ccs, 6) != 6) { return 0; }
+            sleep_ms(200);
+            k = k + 1;
+        }
+        return 0;
+    }
+    if (streq(path, "/rstmid/rates") == 1) {
+        # Half the response, then a TCP reset while the client waits for the rest.
+        var hr = _resp("", bl, RATES);
+        tls_write(tc, hr, strlen(hr) - 20);
+        sleep_ms(150);
+        var lm[8];
+        store32(&lm, 1);
+        store32(&lm + 4, 0);
+        sys_setsockopt(cfd, 1, 13, &lm, 8);   # SOL_SOCKET, SO_LINGER {on, 0 s}
+        sock_close(cfd);
+        sys_exit(0);
+    }
+    if (streq(path, "/rst/rates") == 1) {
+        # The whole response, then a TCP reset instead of close_notify + FIN.
+        _send(tc, _resp("", bl, RATES));
+        var lg[8];
+        store32(&lg, 1);
+        store32(&lg + 4, 0);
+        sys_setsockopt(cfd, 1, 13, &lg, 8);   # SOL_SOCKET, SO_LINGER {on, 0 s}
+        sock_close(cfd);
+        sys_exit(0);
+    }
+    _send(tc, _resp("", bl, RATES));
+    return 0;
+}
+
+fn _srv_conn(cfd, cert, clen, key, klen) {
+    sock_set_recv_timeout(cfd, CONN_TIMEOUT_S, 0);
+    sock_set_send_timeout(cfd, CONN_TIMEOUT_S, 0);
+    var tc = tls_accept(cfd, cert, clen, key, klen);
+    if (tc == 0) { sock_close(cfd); return 0; }
+    var req = alloc(4096);
+    var n = _srv_read_req(tc, req, 4096);
+    _srv_respond(tc, cfd, _srv_path(req, n));
+    tls_close(tc);
+    sock_close(cfd);
+    return 0;
+}
+
+fn _srv_loop(lfd, cert, clen, key, klen) {
+    signal_ignore(SIGPIPE);      # a client that hangs up must not kill a grandchild mid-write
+    crypto_tls_main_init();      # warm once, so each forked connection starts warm
+    ecdsa_p256_warm();
+    ecdsa_p384_warm();
+    sock_set_recv_timeout(lfd, SRV_IDLE_S, 0);
+    var served = 0;
+    var wst[8];
+    while (served < SRV_MAX_CONN) {
+        var at, cfd = sock_accept(lfd);
+        if (is_err_result(at) == 1) { return 0; }   # idle past SRV_IDLE_S: done
+        var cp = sys_fork();
+        if (cp == 0) {
+            sock_close(lfd);
+            _srv_conn(cfd, cert, clen, key, klen);
+            sys_exit(0);
+        }
+        sock_close(cfd);
+        while (sys_waitpid(0 - 1, &wst, 1) > 0) { }
+        served = served + 1;
+    }
+    return 0;
+}
+
+# A plaintext ChangeCipherSpec record, 14 03 03 00 01 01, at buf.
+fn _ccs_rec(buf) {
+    store8(buf, 20);
+    store8(buf + 1, 3);
+    store8(buf + 2, 3);
+    store8(buf + 3, 0);
+    store8(buf + 4, 1);
+    store8(buf + 5, 1);
+    return 0;
+}
+
+# One raw connection: read the ClientHello, then misbehave per `mode`. Every
+# loop is bounded, and ends as soon as the client hangs up (a write fails).
+fn _raw_conn(cfd, mode) {
+    sock_set_recv_timeout(cfd, CONN_TIMEOUT_S, 0);
+    sock_set_send_timeout(cfd, CONN_TIMEOUT_S, 0);
+    var hello = alloc(4096);
+    sys_read(cfd, hello, 4096);
+    var b = alloc(6144);
+    var k = 0;
+    if (mode == RAW_DRIP) {
+        store8(b, 22);                          # handshake record, TLS 1.2,
+        store8(b + 1, 3);                       # 0x3E80 = 16000 bytes long
+        store8(b + 2, 3);
+        store8(b + 3, 62);
+        store8(b + 4, 128);
+        store8(b + 5, 2);                       # then ServerHello's type byte
+        if (sys_write(cfd, b, 5) != 5) { return 0; }
+        while (k < 400) {
+            sleep_ms(250);
+            if (sys_write(cfd, b + 5, 1) != 1) { return 0; }
+            k = k + 1;
+        }
+    }
+    if (mode == RAW_CCS_SLOW) {
+        _ccs_rec(b);
+        while (k < 300) {
+            if (sys_write(cfd, b, 6) != 6) { return 0; }
+            sleep_ms(200);
+            k = k + 1;
+        }
+    }
+    if (mode == RAW_CCS_FAST) {
+        while (k < 1024) { _ccs_rec(b + k * 6); k = k + 1; }
+        k = 0;
+        while (k < 100000) {
+            if (sys_write(cfd, b, 6144) <= 0) { return 0; }
+            k = k + 1;
+        }
+    }
+    if (mode == RAW_SILENT) { sleep_ms(15000); }
+    if (mode == RAW_ALERT) {
+        store8(b, 21);                          # alert record, TLS 1.2, 2 bytes:
+        store8(b + 1, 3);                       # fatal (2), handshake_failure (40)
+        store8(b + 2, 3);
+        store8(b + 3, 0);
+        store8(b + 4, 2);
+        store8(b + 5, 2);
+        store8(b + 6, 40);
+        sys_write(cfd, b, 7);
+        sleep_ms(500);
+    }
+    return 0;                                   # RAW_CLOSE: hang up at once
+}
+
+# Start a raw server; out[0] = pid, out[8] = port.
+fn _raw_start(mode, out) {
+    var lt, lfd = tcp_socket();
+    if (is_err_result(lt) == 1) { return 0 - 1; }
+    sock_reuse(lfd);
+    var bt, bv = sock_bind(lfd, INADDR_LOOPBACK(), 0);
+    var st, sv = sock_listen(lfd, 16);
+    if (is_err_result(bt) == 1 || is_err_result(st) == 1) { return 0 - 1; }
+    var sa[16];
+    var salen[8];
+    store64(&salen, 16);
+    sys_getsockname(lfd, &sa, &salen);
+    var pid = sys_fork();
+    if (pid == 0) {
+        signal_ignore(SIGPIPE);
+        sock_set_recv_timeout(lfd, SRV_IDLE_S, 0);
+        var served = 0;
+        var wst[8];
+        while (served < SRV_MAX_CONN) {
+            var at, cfd = sock_accept(lfd);
+            if (is_err_result(at) == 1) { sys_exit(0); }
+            var cp = sys_fork();
+            if (cp == 0) {
+                sock_close(lfd);
+                _raw_conn(cfd, mode);
+                sock_close(cfd);
+                sys_exit(0);
+            }
+            sock_close(cfd);
+            while (sys_waitpid(0 - 1, &wst, 1) > 0) { }
+            served = served + 1;
+        }
+        sys_exit(0);
+    }
+    sock_close(lfd);
+    store64(out, pid);
+    store64(out + 8, load8(&sa + 2) * 256 + load8(&sa + 3));
+    return 0;
+}
+
+# In a forked child: fetch `url` (trusting `ca`) under a deadline of `ms` (0 =
+# the default), print the code and the time, and exit 0 when the code is
+# `want` and the time is in [lo, hi) ms, else 1. Returns the child's pid. The
+# child warms TLS itself when it starts cold (it is its process's main thread).
+fn _timed_child(name, url, ca, ms, want, lo, hi) {
+    var pid = sys_fork();
+    if (pid != 0) { return pid; }
+    abaco_tls_init();
+    var c = _cache(url, ca);
+    if (ms > 0) { _ccy_set_deadline_ms(c, ms); }
+    var t0 = clock_now_ms();
+    var e = CurrencyCache_fetch(c);
+    var dt = clock_now_ms() - t0;
+    print("  ", 2);
+    print(name, strlen(name));
+    print(": code ", 7);
+    print_num(e);
+    print(" after ", 7);
+    print_num(dt);
+    println(" ms");
+    if (e == want && dt >= lo && dt < hi) { sys_exit(0); }
+    sys_exit(1);
+    return 0;
+}
+
+# Write `copies` copies of the PEM file `src` to `dst`; returns the size.
+fn _bundle(src, dst, copies) {
+    var one = alloc(8192);
+    var n = file_read_all(src, one, 8192);
+    if (n <= 0) { return 0 - 1; }
+    var all = alloc(n * copies);
+    var i = 0;
+    while (i < copies) { memcpy(all + i * n, one, n); i = i + 1; }
+    if (file_write_all(dst, all, n * copies) != n * copies) { return 0 - 1; }
+    return n * copies;
+}
+
+# "/tmp/abaco-test-ccy-<tag>-<pid>.crt" in a fresh buffer.
+fn _tmp_path(tag) {
+    var p = alloc(128);
+    var pos = _put(p, 0, "/tmp/abaco-test-ccy-");
+    pos = _put(p, pos, tag);
+    store8(p + pos, 45);
+    pos = _put_num(p, pos + 1, sys_getpid());
+    pos = _put(p, pos, ".crt");
+    store8(p + pos, 0);
+    return p;
+}
+
+# Start a server for cert/key files; out[0] = pid, out[8] = port.
+fn _srv_start(certf, keyf, out) {
+    var cert = alloc(4096);
+    var clen = file_read_all(certf, cert, 4096);
+    var key = alloc(4096);
+    var klen = file_read_all(keyf, key, 4096);
+    if (clen <= 0 || klen <= 0) { return 0 - 1; }
+    var lt, lfd = tcp_socket();
+    if (is_err_result(lt) == 1) { return 0 - 1; }
+    sock_reuse(lfd);
+    var bt, bv = sock_bind(lfd, INADDR_LOOPBACK(), 0);
+    var st, sv = sock_listen(lfd, 64);
+    if (is_err_result(bt) == 1 || is_err_result(st) == 1) { return 0 - 1; }
+    var sa[16];
+    var salen[8];
+    store64(&salen, 16);
+    sys_getsockname(lfd, &sa, &salen);
+    var pid = sys_fork();
+    if (pid == 0) {
+        _srv_loop(lfd, cert, clen, key, klen);
+        sys_exit(0);
+    }
+    sock_close(lfd);
+    store64(out, pid);
+    store64(out + 8, load8(&sa + 2) * 256 + load8(&sa + 3));
+    return 0;
+}
+
+# ================================================================
+# Lazy-init flags of the native TLS client (Cyrius 6.6.12 sigil and
+# tls_native). After abaco_tls_init() a fetch must flip none of them: one that
+# flips is an initialiser a worker thread would run first.
+# ================================================================
+fn _snap(out) {
+    store64(out, _crypto_tls_inited);
+    store64(out + 8, _sha256_inited);
+    store64(out + 16, _sha_ni_K);
+    store64(out + 24, _sha512_inited);
+    store64(out + 32, _aes_inited);
+    store64(out + 40, _ed25519_inited);
+    store64(out + 48, _ed_p_inited);
+    store64(out + 56, _p256_inited);
+    store64(out + 64, _onc_inited);
+    store64(out + 72, _p256_inv_inited);
+    store64(out + 80, _p256fi_inited);
+    store64(out + 88, _p256_ninv_inited);
+    store64(out + 96, _p256si_inited);
+    store64(out + 104, _ptd_inited);
+    store64(out + 112, _pta_inited);
+    store64(out + 120, _ptm_inited);
+    store64(out + 128, _p256_Gt_inited);
+    store64(out + 136, _ecq_inited);
+    store64(out + 144, _ecv_inited);
+    store64(out + 152, _ecs256_inited);
+    store64(out + 160, _p384_inited);
+    store64(out + 168, _p384_inv_inited);
+    store64(out + 176, _p384_ninv_inited);
+    store64(out + 184, _onc384_inited);
+    store64(out + 192, _ptd384_inited);
+    store64(out + 200, _pta384_inited);
+    store64(out + 208, _ptm384_inited);
+    store64(out + 216, _p384_Gt_inited);
+    store64(out + 224, _ecq384_inited);
+    store64(out + 232, _ecv384_inited);
+    store64(out + 240, _ecs384_inited);
+    store64(out + 248, _x509_oids_inited);
+    store64(out + 256, _x509_mdays_inited);
+    store64(out + 264, _xp_alloced);
+    store64(out + 272, _pem_inited);
+    store64(out + 280, _tn_ca_len);
+    return 0;
+}
+
+# ================================================================
+# The threaded case, in a child forked before this process touches TLS, so
+# its state is cold: init on main, then concurrent threads over both chains.
+# ================================================================
+
+# arg: [port_good, port_rsa, thread index, ok, failed, last error]
+fn _mt_worker(arg) {
+    var k = 0;
+    while (k < MT_FETCHES) {
+        var c = 0;
+        if ((k + load64(arg + 16)) % 2 == 0) { c = _cache(_url("localhost", load64(arg), ""), FX_CA); }
+        else { c = _cache(_url("localhost", load64(arg + 8), ""), FX_RSA_CA); }
+        var e = CurrencyCache_fetch(c);
+        if (e == 0 && _rates_loaded(c) == 1) { store64(arg + 24, load64(arg + 24) + 1); }
+        else { store64(arg + 32, load64(arg + 32) + 1); store64(arg + 40, e); }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# Exit status: the number of failed fetches (0 = all good).
+fn _mt_child(pg, pr) {
+    var bad = 0;
+    # Cold process: a fetch before abaco_tls_init() is refused, touching nothing.
+    if (CurrencyCache_fetch(_cache(_url("localhost", pg, ""), FX_CA)) != AI_ERR_TLS) { bad = bad + 1; }
+    if (abaco_tls_init() != 0) { bad = bad + 1; }
+    var round = 0;
+    var ok = 0;
+    while (round < MT_ROUNDS) {
+        var slots = alloc(MT_THREADS * 48);
+        var th = alloc(MT_THREADS * 8);
+        var t = 0;
+        while (t < MT_THREADS) {
+            var a = slots + t * 48;
+            store64(a, pg);
+            store64(a + 8, pr);
+            store64(a + 16, t + round);
+            store64(a + 24, 0);
+            store64(a + 32, 0);
+            store64(a + 40, 0);
+            store64(th + t * 8, thread_create(&_mt_worker, a));
+            t = t + 1;
+        }
+        t = 0;
+        while (t < MT_THREADS) {
+            thread_join(load64(th + t * 8));
+            var a2 = slots + t * 48;
+            ok = ok + load64(a2 + 24);
+            bad = bad + load64(a2 + 32);
+            if (load64(a2 + 24) + load64(a2 + 32) != MT_FETCHES) { bad = bad + 1; }   # did not run
+            t = t + 1;
+        }
+        round = round + 1;
+    }
+    # The main thread fetches after the workers (worker-first use crashed it).
+    var cm = _cache(_url("localhost", pr, ""), FX_RSA_CA);
+    if (CurrencyCache_fetch(cm) != 0 || _rates_loaded(cm) == 0) { bad = bad + 1; }
+    print_num(ok);
+    print(" threaded fetches ok, ", 22);
+    print_num(bad);
+    println(" failed");
+    if (bad > 100) { bad = 100; }
+    return bad;
+}
+
+# A worker thread may not run abaco_tls_init: arg[0] gets its result.
+# Stands in for the watchdog mid-cut: 50 ms later it marks the cut complete
+# (w[16] = 1), then publishes FIRED, as _ccy_wd_main does after its dup2.
+fn _wd_fire_later(w) {
+    sleep_ms(50);
+    store64(w + 16, 1);
+    atomic_store(w, CCY_WD_FIRED);
+    syscall(SYS_FUTEX, w, FUTEX_WAKE, 1, 0, 0, 0);
+    return 0;
+}
+
+fn _init_from_worker(arg) {
+    store64(arg, abaco_tls_init());
+    return 0;
+}
+
+# ================================================================
+# main
+# ================================================================
+fn main() {
+    alloc_init();
+    var tasks0 = _task_count();      # 1 natively; qemu-user adds a thread of its own
+    var sg[16];
+    var sw[16];
+    var sr[16];
+    var sd[16];
+    var sx[16];
+    assert_eq(_srv_start("tests/fixtures/tls/server-cert.der", FX_KEY, &sg), 0, "GOOD server up");
+    assert_eq(_srv_start("tests/fixtures/tls/wrong-name-cert.der", FX_KEY, &sw), 0, "WRONG-name server up");
+    assert_eq(_srv_start("tests/fixtures/tls/p384-cert.der", "tests/fixtures/tls/p384-key.der", &sr), 0,
+      "RSA-chain server up");
+    assert_eq(_srv_start("tests/fixtures/tls/dns-ip-cert.der", FX_KEY, &sd), 0, "DNSIP server up");
+    assert_eq(_srv_start("tests/fixtures/tls/wild-ip-cert.der", FX_KEY, &sx), 0, "WILDIP server up");
+    var raw = alloc(7 * 16);
+    var mi = 1;
+    while (mi <= 6) {
+        assert_eq(_raw_start(mi, raw + mi * 16), 0, "raw server up");
+        mi = mi + 1;
+    }
+    var pg = load64(&sg + 8);
+    var pw = load64(&sw + 8);
+    var pr = load64(&sr + 8);
+    var pdi = load64(&sd + 8);
+    var pwi = load64(&sx + 8);
+
+    # --- a silent server: the 10 s read timeout, in a child started first so
+    # its wait overlaps everything below. A read timeout is a network failure,
+    # AI_ERR_HTTP (through the first 2.4.12 cut it was AI_ERR_TLS). ---------
+    var silent = _timed_child("silent server, default deadline",
+      _url("localhost", load64(raw + RAW_SILENT * 16 + 8), ""), FX_CA, 0, AI_ERR_HTTP, 9000, 25000);
+
+    # --- threaded, in a cold child (before this process touches TLS) --------
+    var mp = sys_fork();
+    if (mp == 0) { sys_exit(_mt_child(pg, pr)); }
+    var mst = _wait_child(mp, MT_WAIT_S);
+    assert_eq(mst, 0, "threads: init on main, then concurrent fetches over ECDSA + RSA chains all ok");
+
+    # --- before abaco_tls_init ----------------------------------------------
+    var c0 = _cache(_url("localhost", pg, ""), FX_CA);
+    assert_eq(CurrencyCache_fetch(c0), AI_ERR_TLS, "fetch before abaco_tls_init refused");
+    assert_eq(ai_last_err(), AI_ERR_TLS, "last_err = TLS");
+    assert_eq(_tn_ca_len, 0, "and the refusal touched no TLS state");
+    var wa = alloc(8);
+    store64(wa, 0 - 1);
+    thread_join(thread_create(&_init_from_worker, wa));
+    assert_eq(load64(wa), AI_ERR_TLS, "abaco_tls_init off the main thread refused");
+    assert_eq(CurrencyCache_fetch(c0), AI_ERR_TLS, "still refused after the worker's attempt");
+    assert_eq(_crypto_tls_inited, 0, "the worker's attempt touched no sigil state");
+    assert_eq(abaco_tls_init(), 0, "abaco_tls_init on main");
+    assert_eq(abaco_tls_init(), 0, "abaco_tls_init again (idempotent)");
+
+    # --- stalls cut by the deadline, each in its own child, all at once and
+    # alongside the cases below (collected at the end). A peer that keeps
+    # every read under the 10 s timeout — no key needed — held a fetch forever
+    # through the first 2.4.12 cut. ------------------------------------------
+    var kids = alloc(4 * 8);
+    store64(kids, _timed_child("drip, 1 byte / 250 ms in the handshake",
+        _url("localhost", load64(raw + RAW_DRIP * 16 + 8), ""), FX_CA, STALL_MS, AI_ERR_HTTP, STALL_MS - 100, 12000));
+    store64(kids + 8, _timed_child("ChangeCipherSpec / 200 ms in the handshake",
+        _url("localhost", load64(raw + RAW_CCS_SLOW * 16 + 8), ""), FX_CA, STALL_MS, AI_ERR_HTTP, STALL_MS - 100,
+        12000));
+    store64(kids + 16, _timed_child("ChangeCipherSpec flood in the handshake",
+        _url("localhost", load64(raw + RAW_CCS_FAST * 16 + 8), ""), FX_CA, STALL_MS, AI_ERR_HTTP, STALL_MS - 100,
+        12000));
+    store64(kids + 24, _timed_child("ChangeCipherSpec / 200 ms after the request",
+        _url("localhost", pg, "/ccs"), FX_CA, 4000, AI_ERR_HTTP, 3900, 15000));
+
+    # --- trusted round trips; init covered every lazy initialiser -----------
+    var s0 = alloc(SNAP_N * 8);
+    var s1 = alloc(SNAP_N * 8);
+    _snap(s0);
+    var a0 = alloc_used();
+    var cg = _cache(_url("localhost", pg, ""), FX_CA);
+    assert_eq(CurrencyCache_fetch(cg), 0, "https fetch through the fixture CA");
+    var per_fetch = alloc_used() - a0;
+    assert_eq(_rates_loaded(cg), 1, "rates installed (100 USD = 92 EUR)");
+    var ci = _cache(_url("127.0.0.1", pg, ""), FX_CA);
+    assert_eq(CurrencyCache_fetch(ci), 0, "an IP literal matches the iPAddress SAN");
+    var cr = _cache(_url("localhost", pr, ""), FX_RSA_CA);
+    assert_eq(CurrencyCache_fetch(cr), 0, "RSA-signed chain, P-384 leaf");
+    assert_eq(_rates_loaded(cr), 1, "rates installed over the RSA chain");
+    var cri = _cache(_url("127.0.0.1", pr, ""), FX_RSA_CA);
+    assert_eq(CurrencyCache_fetch(cri), 0, "an IP literal over the RSA chain");
+    _snap(s1);
+    var si = 0;
+    var flipped = 0;
+    while (si < SNAP_N) {
+        if (load64(s0 + si * 8) != load64(s1 + si * 8)) {
+            flipped = flipped + 1;
+            print("  lazy init flipped by a fetch: slot ", 37);
+            print_num(si);
+            println("");
+        }
+        si = si + 1;
+    }
+    assert_eq(flipped, 0, "no lazy initialiser runs first in a fetch after abaco_tls_init");
+    print("  retained per fetch: ", 22);
+    print_num(per_fetch);
+    println(" bytes");
+    assert(per_fetch < 2097152, "a fetch retains under 2 MiB");
+
+    # --- trust and name failures -------------------------------------------
+    assert_eq(_fetch("localhost", pg, "", FX_OTHER_CA), AI_ERR_TLS, "chain to an untrusted CA refused");
+    assert_eq(_fetch("localhost", pr, "", FX_CA), AI_ERR_TLS, "RSA chain against the wrong CA refused");
+    assert_eq(_fetch("localhost", pg, "", 0), AI_ERR_TLS, "system store does not trust the fixture CA");
+    assert_eq(_fetch("localhost", pw, "", FX_CA), AI_ERR_TLS, "valid chain, wrong DNS name refused");
+    assert_eq(_fetch("127.0.0.1", pw, "", FX_CA), AI_ERR_TLS, "valid chain, IP not in the SAN refused");
+    assert_eq(_fetch("abaco.localhost", pg, "", FX_CA), AI_ERR_TLS, "name not in the SAN refused (RFC 6761 loopback)");
+    # RFC 9525 §6.3: an IP literal matches an iPAddress entry only. lib/tls.cyr
+    # alone accepted both of these (cyrius issue 2026-10-01-tls-ip-literal-dnsname).
+    assert_eq(_fetch("127.0.0.1", pdi, "", FX_CA), AI_ERR_TLS, "an IP literal never matches DNS:127.0.0.1");
+    assert_eq(_fetch("127.0.0.1", pwi, "", FX_CA), AI_ERR_TLS, "nor a wildcard DNS:*.0.0.1");
+    assert_eq(_fetch("localhost", pg, "", "tests/fixtures/tls/missing.crt"), AI_ERR_TLS, "missing CA file");
+    # Read before any socket exists, and never a fallback to the system store:
+    # with nothing listening on port 1 a fallback would answer AI_ERR_HTTP.
+    assert_eq(_fetch("localhost", 1, "", "tests/fixtures/tls/missing.crt"), AI_ERR_TLS,
+      "an unreadable CA file fails before connecting");
+    assert_eq(_fetch("localhost", pg, "", "/dev/null"), AI_ERR_TLS, "empty CA file");
+    assert_eq(_fetch("localhost", pg, "", "tests/fixtures/tls"), AI_ERR_TLS, "CA path is a directory");
+    assert_eq(_fetch("localhost", pg, "", "tests/fixtures/tls/server-cert.der"), AI_ERR_TLS, "CA file holds no PEM");
+    assert_eq(_fetch("localhost", 1, "", "tests/fixtures/tls/server-cert.der"), AI_ERR_TLS,
+      "a CA file with no PEM certificate fails before connecting");
+
+    # --- a CA bundle: at most 300 certificates (lib/tls.cyr's TLS_CA_MAX_ROOTS),
+    # and the cache re-reads it into the same buffer -------------------------
+    var b300 = _tmp_path("ca300");
+    var b301 = _tmp_path("ca301");
+    var n300 = _bundle(FX_CA, b300, 300);
+    assert(n300 > 0 && _bundle(FX_CA, b301, 301) > 0, "bundles written");
+    var cb = _cache(_url("localhost", pg, ""), b300);
+    var m0 = alloc_used();
+    assert_eq(CurrencyCache_fetch(cb), 0, "a 300-certificate bundle is used");
+    var m1 = alloc_used();
+    assert_eq(CurrencyCache_fetch(cb), 0, "and again through the same cache");
+    var m2 = alloc_used();
+    print("  retained with a 300-certificate bundle: ", 42);
+    print_num(m1 - m0);
+    print(" then ", 6);
+    print_num(m2 - m1);
+    println(" bytes");
+    assert(m1 - m0 - (m2 - m1) >= n300, "the second read reuses the cache's buffer");
+    assert_eq(_fetch("localhost", 1, "", b301), AI_ERR_TLS, "301 certificates refused before connecting");
+    assert_eq(_fetch("localhost", pg, "", b301), AI_ERR_TLS, "and with a server there");
+    sys_unlinkat(0 - 100, b300, 0);
+    sys_unlinkat(0 - 100, b301, 0);
+
+    # --- HTTP status and framing -------------------------------------------
+    assert_eq(_fetch("localhost", pg, "/404", FX_CA), AI_ERR_HTTP, "404 refused");
+    assert_eq(_fetch("localhost", pg, "/301", FX_CA), AI_ERR_HTTP, "301 refused, Location not followed");
+    assert_eq(_fetch("localhost", pg, "/trunc", FX_CA), AI_ERR_HTTP, "body shorter than Content-Length refused");
+    assert_eq(_fetch("localhost", pg, "/longer", FX_CA), AI_ERR_HTTP, "bytes past Content-Length refused");
+    assert_eq(_fetch("localhost", pg, "/nocl", FX_CA), AI_ERR_HTTP, "no Content-Length refused");
+    assert_eq(_fetch("localhost", pg, "/twocl", FX_CA), AI_ERR_HTTP, "two differing Content-Lengths refused");
+    assert_eq(_fetch("localhost", pg, "/samecl", FX_CA), 0, "two equal Content-Lengths accepted");
+    assert_eq(_fetch("localhost", pg, "/te", FX_CA), AI_ERR_HTTP, "Transfer-Encoding refused");
+    assert_eq(_fetch("localhost", pg, "/badcl", FX_CA), AI_ERR_HTTP, "non-numeric Content-Length refused");
+    assert_eq(_fetch("localhost", pg, "/fold", FX_CA), AI_ERR_HTTP, "obs-fold refused");
+    assert_eq(_fetch("localhost", pg, "/big", FX_CA), AI_ERR_HTTP, "Content-Length over 64 KB refused");
+    assert_eq(_fetch("localhost", pg, "/bighead", FX_CA), AI_ERR_HTTP, "head over 64 KB refused");
+    assert_eq(_fetch("localhost", pg, "/frag", FX_CA), AI_ERR_HTTP, "a response in > 32 records refused");
+    assert_eq(_fetch("localhost", pg, "/split", FX_CA), 0, "a response across four records accepted");
+    assert_eq(_fetch("localhost", pg, "/badjson", FX_CA), AI_ERR_CURRENCY, "a framed non-JSON body: currency error");
+    var rs = _fetch("localhost", pg, "/rst", FX_CA);
+    assert(rs == 0 || rs == AI_ERR_HTTP, "a reset after the response: no crash (0, or AI_ERR_HTTP if it cut the read)");
+    assert_eq(_fetch("localhost", 1, "", FX_CA), AI_ERR_HTTP, "connection refused");
+
+    # --- which code: the network failed (AI_ERR_HTTP), or TLS refused -------
+    assert_eq(_fetch("localhost", pg, "/rstmid", FX_CA), AI_ERR_HTTP, "a reset mid-response is AI_ERR_HTTP");
+    assert_eq(_fetch("localhost", load64(raw + RAW_CLOSE * 16 + 8), "", FX_CA), AI_ERR_HTTP,
+      "end of stream mid-handshake is AI_ERR_HTTP");
+    assert_eq(_fetch("localhost", load64(raw + RAW_ALERT * 16 + 8), "", FX_CA), AI_ERR_TLS,
+      "an alert in place of the ServerHello stays AI_ERR_TLS");
+
+    # --- the libssl backend, selected at runtime ---------------------------
+    tls_set_backend(TLS_BACKEND_LIBSSL);
+    assert_eq(_fetch("localhost", pg, "", FX_CA), AI_ERR_TLS, "libssl backend refused (it skips the name check)");
+    # That fetch fails under libssl whether or not abaco refuses (libssl cannot
+    # use the fixture CA either), so pin the refusal itself: nothing listens on
+    # port 1, so a fetch that got as far as connecting would be AI_ERR_HTTP.
+    assert_eq(_fetch("localhost", 1, "", FX_CA), AI_ERR_TLS, "libssl refused before any socket");
+    var hk[16];
+    store64(&hk, 0);
+    store64(&hk + 8, 0);
+    assert_eq(_ccy_tls_hook(&hk, 12345), 1, "the connect hook refuses the libssl backend");
+    tls_set_backend(TLS_BACKEND_NATIVE);
+    # The hook fails closed on a bundle that has a certificate marker but does
+    # not parse: no fallback to the system store.
+    var nctx = tls_native_new_client("localhost", 9);
+    store64(&hk, "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n");
+    store64(&hk + 8, 59);
+    assert_eq(_ccy_tls_hook(&hk, nctx), 1, "the connect hook refuses an unparseable CA bundle");
+
+    # --- the watchdog itself, on a socketpair ------------------------------
+    # At the deadline it shuts the socket's read side and swaps /dev/null in;
+    # _ccy_wd_stop reports the cut only once the swap is done, so the caller
+    # never closes an fd the watchdog may still dup2 over. Blocking in read
+    # returns at the shutdown, so stop runs while the watchdog may be mid-cut;
+    # that window is a few syscalls wide, hence the repeats.
+    var wd_bad = 0;
+    var wi = 0;
+    while (wi < 20) {
+        var sp[8];
+        if (sys_socketpair(1, 1, 0, &sp) != 0) { wd_bad = wd_bad + 100; }
+        var wfd = load32(&sp);
+        var wd = _ccy_wd_start(wfd, 20);
+        if (wd == 0) { wd_bad = wd_bad + 100; }
+        var wb[8];
+        sys_read(wfd, &wb, 1);
+        if (_ccy_wd_stop(wd) != 1) { wd_bad = wd_bad + 1; }
+        var wsa[128];
+        var wsl[8];
+        store64(&wsl, 128);
+        if (sys_getsockname(wfd, &wsa, &wsl) >= 0) { wd_bad = wd_bad + 1; }   # still the socket
+        sys_close(wfd);
+        sys_close(load32(&sp + 4));
+        wi = wi + 1;
+    }
+    assert_eq(wd_bad, 0, "20 watchdog cuts: each reported, each fd /dev/null once stop returns");
+    # The same guarantee, deterministically: a stop that finds the watchdog
+    # mid-cut (FIRING) waits for FIRED instead of returning at once.
+    var fw = alloc(24);
+    store64(fw, CCY_WD_FIRING);
+    store64(fw + 8, 0 - 1);
+    store64(fw + 16, 0);
+    assert_eq(thread_create_detached(&_wd_fire_later, fw), 1, "stand-in watchdog started");
+    assert_eq(_ccy_wd_stop(fw), 1, "stop on a firing watchdog reports the cut");
+    assert_eq(load64(fw + 16), 1, "stop returned only after the cut was complete");
+    assert_eq(_fetch("localhost", pg, "", FX_CA), 0, "native again: fetch ok");
+
+    # --- no descriptor leaks on the error paths ----------------------------
+    var f0 = _fd_count();
+    var li = 0;
+    while (li < FD_LOOPS) {
+        _fetch("localhost", pg, "", FX_OTHER_CA);
+        _fetch("localhost", pw, "", FX_CA);
+        _fetch("127.0.0.1", pdi, "", FX_CA);
+        _fetch("localhost", pg, "/404", FX_CA);
+        _fetch("localhost", pg, "/trunc", FX_CA);
+        _fetch("localhost", pg, "/frag", FX_CA);
+        _fetch("localhost", pg, "/big", FX_CA);
+        _fetch("localhost", pg, "/rstmid", FX_CA);
+        _fetch("localhost", pg, "", "tests/fixtures/tls/missing.crt");
+        _fetch("localhost", 1, "", FX_CA);
+        _fetch("localhost", load64(raw + RAW_CLOSE * 16 + 8), "", FX_CA);
+        var cc = _cache(_url("localhost", load64(raw + RAW_CCS_SLOW * 16 + 8), ""), FX_CA);
+        _ccy_set_deadline_ms(cc, 300);
+        CurrencyCache_fetch(cc);                 # cut by the deadline: dup2 + close
+        li = li + 1;
+    }
+    assert(f0 > 0, "fd count readable");
+    assert_eq(_fd_count(), f0, "no fd leaked across the error paths");
+
+    # --- every fetch's watchdog thread has gone ----------------------------
+    var tw = 0;
+    while (_task_count() != tasks0 && tw < 60) { sleep_ms(50); tw = tw + 1; }
+    assert_eq(_task_count(), tasks0, "no watchdog thread outlives its fetch");
+
+    var ki = 0;
+    while (ki < 4) {
+        assert_eq(_wait_child(load64(kids + ki * 8), STALL_WAIT_S), 0,
+          "a stalling peer is cut at the deadline: AI_ERR_HTTP, on time");
+        ki = ki + 1;
+    }
+    assert_eq(_wait_child(silent, STALL_WAIT_S), 0, "a silent server: the read timeout, AI_ERR_HTTP");
+
+    sys_kill(load64(&sg), 9);
+    sys_kill(load64(&sw), 9);
+    sys_kill(load64(&sr), 9);
+    sys_kill(load64(&sd), 9);
+    sys_kill(load64(&sx), 9);
+    var wst[8];
+    sys_waitpid(load64(&sg), &wst, 0);
+    sys_waitpid(load64(&sw), &wst, 0);
+    sys_waitpid(load64(&sr), &wst, 0);
+    sys_waitpid(load64(&sd), &wst, 0);
+    sys_waitpid(load64(&sx), &wst, 0);
+    mi = 1;
+    while (mi <= 6) {
+        sys_kill(load64(raw + mi * 16), 9);
+        sys_waitpid(load64(raw + mi * 16), &wst, 0);
+        mi = mi + 1;
+    }
+    if (assert_summary() != 0) { return 1; }
+    return 0;
+}
+
+var rr = main();
+syscall(SYS_EXIT, rr);

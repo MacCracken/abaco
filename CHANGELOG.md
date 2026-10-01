@@ -5,6 +5,148 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.12] — 2026-10-01
+
+The roadmap's currency-TLS item: `CurrencyCache_fetch` over `https://`,
+opt-in behind `-D ABACO_TLS`. A build without the define compiles no TLS code;
+the only change it sees is one error code for `https://` base URLs.
+
+### Added — HTTPS currency fetch (opt-in)
+
+- **Turning it on.** Add `"tls"` to your own `[deps] stdlib`; abaco never
+  lists it, and `dist/abaco.deps` stays the same 15 leaves. Then build with
+  `-D ABACO_TLS` and call **`abaco_tls_init()`** once on the main thread
+  before any thread fetches.
+  - Cyrius 6.6.12's TLS stack builds its crypto tables lazily and without
+    locks. Two overlapping first handshakes break every later one in the
+    process, and a first handshake on a worker crashes the main thread's next
+    one.
+  - `abaco_tls_init()` builds every lazy table the native client reaches.
+    It refuses to run off the main thread.
+  - A fetch refuses with `AI_ERR_TLS` until init has run.
+  - The suite snapshots the stack's lazy-init flags and checks that no fetch
+    after init flips one, over a P-256 ECDSA chain and an RSA-signed chain
+    with a P-384 leaf. 24 threaded fetches pass.
+- **`CurrencyCache_set_ca_file(c, path)`** trusts only that PEM bundle and
+  never falls back to the system store.
+  - The path is copied, and the file is read into a buffer the cache keeps
+    and reuses.
+  - A file that is missing, empty or unreadable, has no certificate block, or
+    has more than 300 certificates is refused before any socket.
+- **What is verified, fail closed:**
+  - **Chain:** it must reach a trusted root.
+  - **DNS names:** matched against the certificate's dNSName entries.
+  - **IPv4 literals:** matched against iPAddress entries only, as RFC 9525
+    §6.3 requires. Cyrius 6.6.12's lib/tls.cyr also accepts a dNSName that
+    spells the address, wildcards included (`DNS:127.0.0.1`, `DNS:*.0.0.1`).
+    So abaco re-reads the verified leaf itself, with a bounded DER walker
+    (`_ccy_cert_ip_san`).
+  - **Backend:** the libssl backend is refused at build time, at runtime
+    before connecting, and again in the connect hook, because it never checks
+    the host name.
+  - **TLS 1.3 only:** the native client does not offer 1.2 unless pinned to
+    it, and abaco does not pin it.
+- **Response framing.**
+  - `Content-Length` is required and must match the body exactly, because
+    lib/tls.cyr reports a fatal alert as end of stream.
+  - Refused: `Transfer-Encoding`, differing or list lengths, obs-fold, and
+    bare CR / LF or control bytes in the head.
+  - Redirects are not followed.
+- **Limits.**
+  - Response ≤ 64 KB, request ≤ 2048 B, ≤ 32 reads per fetch.
+  - 10 s per socket operation and **30 s for the whole fetch**.
+  - Per-operation timeouts cannot bound a peer that sends a byte, or a
+    plaintext ChangeCipherSpec record, just often enough; anyone on the path
+    can do that without a key. So on Linux a watchdog thread per fetch shuts
+    the socket and swaps in `/dev/null` at the deadline. Its state is one heap
+    block per fetch, not a global.
+  - Every exit path closes the TLS context and the socket. The suite checks
+    the fd count across a loop over the error paths, the deadline cut
+    included.
+- **Error codes.** A network failure (refused, reset, timed out, cut at the
+  deadline) is `AI_ERR_HTTP`, which is worth a retry. A TLS refusal (chain,
+  name, backend, protocol, alert) is `AI_ERR_TLS`, which is worth reporting.
+- **Cost** (x86_64, Cyrius 6.6.12):
+  - Listing `tls` grows a DSP-only consumer's DCE binary from 93,656 B to
+    ~557 KB even with no fetch, because of sigil's static tables.
+  - With the define it is ~607 KB, and a consumer that fetches is ~897 KB.
+  - Listing `tls` adds ~0.85 s to every compile.
+  - `abaco_tls_init()` takes ~0.5 s and ~2.6 MB, once.
+  - Each fetch keeps ~0.5 MB of heap (worst case ~1.5 MB) and takes ~30 ms on
+    loopback.
+
+### Changed
+
+- An `https://` base URL in a build **without** `-D ABACO_TLS` is now
+  `AI_ERR_TLS` (new, value 5, appended to `AiError`) instead of
+  `AI_ERR_HTTP`. That build has no TLS client. A malformed `https://` URL is
+  `AI_ERR_HTTP` in every build, under a stricter grammar:
+  - the host is 1–253 bytes of letters, digits, `-` and `.`;
+  - the port is 1–65535;
+  - the path is visible ASCII.
+- The size cost to builds without the define is 136 B, from the string data
+  the always-compiled parsers leave behind DCE: the smoke binary is
+  81,048 → 81,184 B, and a DSP-only consumer is 93,520 → 93,656 B.
+
+### Fixed
+
+- The plaintext fetch dereferenced `http_get`'s response without checking for
+  0 (its out-of-memory return); it now answers `AI_ERR_HTTP`.
+- CI's independent failure-count gate read the first `N failed` in a suite's
+  output. `test_ccy_tls`'s threaded child prints its own count first, so a
+  red suite could have been read as `0 failed`. Both Test jobs, x86_64 and
+  aarch64, now take the last full `N passed, N failed (N total)` summary.
+
+### Tests
+
+- New `tests/test_ccy_tls.tcyr`, 85 asserts. It is hermetic: forked native
+  `tls_accept` servers and raw misbehaving servers on 127.0.0.1, with fixture
+  CAs, and every child has a timeout so a regression fails instead of hanging
+  CI. It covers:
+  - a trusted fetch, a wrong CA, a wrong name, and the IP-literal rules;
+  - the CA-file cases, non-200 and 3xx responses, and framing violations;
+  - five stall cases cut by the deadline, and the network/TLS error split;
+  - fetch-before-init, the runtime libssl switch, and threaded fetches;
+  - fd leaks;
+  - the watchdog protocol, run against real cuts on a socketpair and
+    deterministically.
+- New `tests/test_ccy_tls_libssl.tcyr`, 7 asserts: a `-D CYRIUS_TLS_LIBSSL`
+  build compiles no transport and refuses every `https://` fetch.
+- `test_ai` 289 → 435: the always-compiled URL / request / response parsers,
+  the DER walker over hand-built and truncated certificates, the PEM counter,
+  and `https://` without the define.
+- `fuzz_ai` fuzzes the URL split, the response split, the IP-SAN walker
+  (certificates with a known answer, every truncation, mutated bytes) and the
+  PEM counter.
+- Mutation-checked:
+  - dropping either libssl refusal, ignoring an unparseable CA bundle, or
+    dropping the watchdog's `/dev/null` swap or its wait-before-close fails
+    the suite;
+  - dropping the watchdog, the IP check, the init guard or the length rule
+    was already caught.
+  - One mutant survives: the IP check passing a leaf it cannot read (over
+    16 KB). The shipped code refuses it, but no fixture serves such a leaf.
+- Fixtures are in `tests/fixtures/tls/` (`.crt` / `.der`, valid to 2126),
+  regenerated by `scripts/gen-tls-fixtures.sh`.
+- Suite 2062 → **2300** asserts in 9 files, green on x86_64 and on aarch64
+  (qemu).
+
+### Docs
+
+- README "HTTPS currency fetch", the guide's 2.4.12 upgrade note (codes,
+  steps, what is verified, costs), SECURITY.md's five new HTTPS rows,
+  `docs/sources.md` (RFC 8446, 5246, 9525, 5280, 9110, 1945, 6761), and the error
+  table in `docs/architecture.md`.
+- **Filed upstream** in cyrius's `docs/development/issues/`, each with a
+  repro that exits 2 on 6.6.12:
+  - `2026-10-01-tls-native-no-deadline.md` (Medium): the native client has no
+    deadline and skips plaintext ChangeCipherSpec records without limit;
+  - `2026-10-01-tls-ip-literal-dnsname.md` (Low): an IP literal matches
+    dNSName entries.
+
+
+### Fixed
+
 ## [2.4.11] — 2026-09-30
 
 ### Changed

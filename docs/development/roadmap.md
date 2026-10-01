@@ -548,6 +548,19 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
       `[deps].stdlib`, CI and release on `distlib --check`
 - [x] The 11 test / fuzz lint warnings fixed; CI lints every source file
 
+### 2.4.12 — HTTPS currency fetch, opt-in ✅ (2026-10-01)
+
+- [x] `CurrencyCache_fetch` over `https://` behind `-D ABACO_TLS` (consumers
+      add `tls` themselves; `dist/abaco.deps` unchanged): native backend only,
+      chain + host verified fail closed, IPv4 literals against iPAddress SANs
+      only, TLS 1.3, `Content-Length` framing, 64 KB / 2048 B / 32 reads,
+      10 s per operation and 30 s per fetch (watchdog thread on Linux)
+- [x] `abaco_tls_init()` (main thread, required before an HTTPS fetch),
+      `CurrencyCache_set_ca_file`, `AI_ERR_TLS`; network failures are
+      `AI_ERR_HTTP`, TLS refusals `AI_ERR_TLS`
+- [x] Hermetic TLS suite (forked native servers, fixture CAs), a libssl-only
+      build suite, parsers and DER walker fuzzed; 2062 → 2300 asserts
+
 ### Still open
 
 > The two residuals the 2.3.5 fix audit left open were closed in 2.4.0.
@@ -558,20 +571,19 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
 > [`../guides/consuming-abaco.md`](../guides/consuming-abaco.md).
 
 - [ ] DSP expansion as consumer needs surface (filters, additional windows)
-- [ ] **Currency TLS.** `CurrencyCache_fetch` works against a plaintext
-      loopback server only. A 2.4.11 study found the stdlib's native TLS ready
-      (chain + hostname verification fail closed, x86_64 and aarch64) and
-      prototyped it behind `-D ABACO_TLS`: listing `tls` in `[deps].stdlib`
-      would grow the smoke binary 81,936 → 545,680 B and every compile by
-      ~0.85 s, so it must be opt-in. To ship with it: refuse the libssl backend
-      (it never checks the hostname), a main-thread `abaco_tls_init()` (first use
-      from two threads at once breaks every later handshake), and a
-      self-contained TLS test (fork + native `tls_accept`, fixture CA). hoosh is
-      not an alternative — it has no rates endpoint. Filed 2026-09-30 in
-      cyrius's `docs/development/issues/`, each with a repro:
-      `2026-09-30-tls-libssl-backend-no-hostname-verification.md` (High),
-      `2026-09-30-tls-first-use-thread-race.md` and
-      `2026-09-30-tls-client-memory-and-alert-gaps.md`
+- [ ] **Upstream (cyrius TLS)** — filed in cyrius's `docs/development/issues/`,
+      each with a repro; each fix lets abaco drop a guard it carries since 2.4.12:
+      `2026-09-30-tls-libssl-backend-no-hostname-verification.md` (High; the
+      libssl refusal), `2026-09-30-tls-first-use-thread-race.md` (the
+      main-thread `abaco_tls_init()` requirement),
+      `2026-10-01-tls-native-no-deadline.md` (the watchdog thread),
+      `2026-10-01-tls-ip-literal-dnsname.md` (abaco's own iPAddress check), and
+      `2026-09-30-tls-client-memory-and-alert-gaps.md` (per-fetch heap; a fatal
+      alert reads as EOF, hence the strict `Content-Length` rule)
+- [ ] HTTPS residuals, if a consumer needs them: TLS 1.2-only servers (a 1.3
+      then 1.2 fallback), a deadline off Linux (no futex there), IPv6, and a
+      test for the IP check refusing a leaf it cannot read (> 16 KB; the code
+      refuses it, no fixture serves one)
 - [ ] **Upstream (ganita)** — filed 2026-09-30 in ganita's
       `docs/development/issues/`, each with a self-proving repro and a tested fix:
       `2026-09-30-f64-hyperbolic-and-asin-cancellation-band.md` (`sinh` / `tanh` /

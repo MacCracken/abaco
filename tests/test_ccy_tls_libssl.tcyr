@@ -1,0 +1,55 @@
+# abaco HTTPS currency fetch (2.4.12) in a libssl-only build: refused at build
+# time. lib/tls.cyr's libssl backend checks the chain but never the host name
+# (cyrius issue 2026-09-30-tls-libssl-backend-no-hostname-verification.md), so
+# under -D CYRIUS_TLS_LIBSSL abaco compiles no transport at all and every
+# https:// fetch is AI_ERR_TLS before any socket. Nothing here loads libssl.
+# The runtime switch (tls_set_backend in a native build) is tests/test_ccy_tls.tcyr.
+#define CYRIUS_TLS_LIBSSL
+#define ABACO_TLS
+
+include "lib/syscalls.cyr"
+include "lib/alloc.cyr"
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/tagged.cyr"
+include "lib/hashmap.cyr"
+include "lib/fnptr.cyr"
+include "lib/math.cyr"
+include "lib/io.cyr"
+include "lib/net.cyr"
+include "lib/http.cyr"
+include "lib/bayan.cyr"
+include "lib/tls.cyr"
+include "lib/assert.cyr"
+
+include "src/core.cyr"
+include "src/ntheory.cyr"
+include "src/dsp.cyr"
+include "src/eval.cyr"
+include "src/units.cyr"
+include "src/ai.cyr"
+
+fn main() {
+    alloc_init();
+    assert_eq(tls_get_backend(), TLS_BACKEND_LIBSSL, "a libssl-only build");
+    assert_eq(abaco_tls_init(), AI_ERR_TLS, "abaco_tls_init refuses the libssl build");
+    # Port 1 has no listener: a transport that tried to connect would answer
+    # AI_ERR_HTTP, so AI_ERR_TLS shows the refusal came first.
+    var c = CurrencyCache_new("https://localhost:1");
+    assert_eq(CurrencyCache_fetch(c), AI_ERR_TLS, "https:// refused before any socket");
+    assert_eq(ai_last_err(), AI_ERR_TLS, "last_err = TLS");
+    var ci = CurrencyCache_new("https://127.0.0.1:1/api");
+    CurrencyCache_set_ca_file(ci, "tests/fixtures/tls/ca.crt");
+    assert_eq(CurrencyCache_fetch(ci), AI_ERR_TLS, "with a CA file too");
+    var cb = CurrencyCache_new("https://user@localhost:1");
+    assert_eq(CurrencyCache_fetch(cb), AI_ERR_HTTP, "a malformed https URL is still AI_ERR_HTTP");
+    var cp = CurrencyCache_new("http://evil.example.com");
+    assert_eq(CurrencyCache_fetch(cp), AI_ERR_HTTP, "plaintext to a remote host still refused");
+    if (assert_summary() != 0) { return 1; }
+    return 0;
+}
+
+var rr = main();
+syscall(SYS_EXIT, rr);

@@ -123,7 +123,7 @@ not have.
 |---------|---------------|--------|
 | units   | UnitErr       | UERR_NONE / UERR_UNKNOWN / UERR_INCOMPAT / UERR_CONVERT |
 | eval    | EvalErr       | ABACO_ERR_NONE / DIV_ZERO / UNKNOWN_FN / UNKNOWN_VAR / PARSE / MATH / INVALID / ARITY (2.4.10) |
-| ai      | AiError       | AI_OK / AI_ERR_PARSE / AI_ERR_UNSUPPORTED / AI_ERR_CURRENCY / AI_ERR_HTTP |
+| ai      | AiError       | AI_OK / AI_ERR_PARSE / AI_ERR_UNSUPPORTED / AI_ERR_CURRENCY / AI_ERR_HTTP / AI_ERR_TLS (2.4.12: HTTPS unavailable — including a build without `-D ABACO_TLS` — or the TLS layer refused: certificate, name, protocol; a network failure or timeout during HTTPS stays AI_ERR_HTTP) |
 | ntheory | tagged Result | Ok / Err (from `lib/tagged.cyr`) |
 
 ## Consumer layering

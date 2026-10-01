@@ -38,7 +38,10 @@ Convert a value between units.
 
 ## abaco_currency
 
-Convert between currencies using live rates from hoosh.
+Convert between currencies using live rates that `CurrencyCache_fetch` loads
+from a configured `/rates` endpoint — over HTTPS when the consumer builds with
+`-D ABACO_TLS` (2.4.12), otherwise from a plaintext loopback server only (hoosh
+has no rates endpoint).
 
 **Parameters:**
 - `value` (number, required) — Amount to convert
