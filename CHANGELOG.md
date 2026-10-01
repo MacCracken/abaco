@@ -131,6 +131,22 @@ the only change it sees is one error code for `https://` base URLs.
 - Suite 2062 → **2300** asserts in 9 files, green on x86_64 and on aarch64
   (qemu).
 
+### Benchmarks
+
+- New rows in `bench_eval`: `ccy_http_split` (a typical response's head and
+  body) 2.35 µs, and `ccy_cert_ip_san` (the IP-SAN walk over a 460-byte leaf)
+  235 ns. Neither runs unless a consumer fetches over HTTPS.
+- A/B against 2.4.11, with each tree's own bench files, 7 interleaved runs
+  pinned to one core, medians:
+  - across the 83 shared rows the median change is 0.0%;
+  - every row is within ±3.5%, except `round`, which moved 12 → 11 ns.
+
+  The change touches only the currency code.
+- The trail column reads 4–10% above 2.4.11's on rows 2.4.12 never touches
+  (`is_prime_small` 2.41 → 2.54 µs, `kaiser_fill_1024` 149 → 157 µs). The
+  machine was slower that day, not the code: in the same session 2.4.11 itself
+  measured `is_prime_small` at 2.48 µs.
+
 ### Docs
 
 - README "HTTPS currency fetch", the guide's 2.4.12 upgrade note (codes,
