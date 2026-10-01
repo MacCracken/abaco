@@ -344,6 +344,42 @@ fn test_window_values() {
     return 0;
 }
 
+# 2.4.10: windows and the sinc kernel are bit-exact symmetric (centred
+# phase), so FIR taps built from them are exactly linear-phase. Through 2.4.9
+# w(n) and w(N-1-n) were separate roundings, up to ~3 ulp apart.
+fn test_window_symmetry() {
+    var bad = 0;
+    var sizes = 0;
+    while (sizes < 4) {
+        var size = 7;
+        if (sizes == 1) { size = 64; }
+        if (sizes == 2) { size = 1001; }
+        if (sizes == 3) { size = 4096; }
+        var n = 0;
+        while (n < size) {
+            var m = size - 1 - n;
+            if (window_hann(n, size) != window_hann(m, size)) { bad = bad + 1; }
+            if (window_hamming(n, size) != window_hamming(m, size)) { bad = bad + 1; }
+            if (window_blackman(n, size) != window_blackman(m, size)) { bad = bad + 1; }
+            if (window_kaiser(n, size, f64_from(8)) != window_kaiser(m, size, f64_from(8))) { bad = bad + 1; }
+            n = n + 1;
+        }
+        sizes = sizes + 1;
+    }
+    assert_eq(bad, 0, "every window is bit-exact symmetric");
+    var kb = 0;
+    var i = 1;
+    while (i < 2000) {
+        var x = f64_div(f64_from(i), f64_from(97));
+        var hw = f64_div(f64_from(41), f64_from(3));
+        if (sinc_kernel(x, hw) != sinc_kernel(f64_neg(x), hw)) { kb = kb + 1; }
+        i = i + 1;
+    }
+    assert_eq(kb, 0, "sinc_kernel(x) == sinc_kernel(-x)");
+    assert_eq(window_hann(32, 65), DSP_ONE, "hann centre is exactly 1");
+    return 0;
+}
+
 fn test_window_bounds() {
     # Outside [0, size) is 0 (2.4.8: wrapped-around nonzero values, or NaN).
     assert_eq(window_hann(64, 64), 0, "hann n = size is 0 (was 0.0025)");
@@ -561,6 +597,7 @@ fn main() {
     test_dbfs();
     test_window_values();
     test_window_bounds();
+    test_window_symmetry();
     test_interp_values();
     test_round_edges();
     test_db_constants_exact();

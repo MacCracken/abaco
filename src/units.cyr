@@ -146,6 +146,9 @@ fn UnitRegistry_list(r, category) {
     return result;
 }
 
+# -273.15 C less 1e-9 K: the lowest base value a temperature may have.
+var UNITS_ABS_ZERO_C = 0xC07112666666AB1E;
+
 # 1 if x is finite and > 0. A reciprocal unit (L/100km) has no meaning for a
 # zero, negative or non-finite amount, and a subnormal one overflows to Inf.
 fn _reg_pos_finite(x) {
@@ -165,6 +168,19 @@ fn UnitRegistry_convert(r, value, from_str, to_str) {
     if (Unit_category(from_u) != Unit_category(to_u)) {
         reg_set_err(r, UERR_INCOMPAT);
         return f64_from(0);
+    }
+
+    # A temperature below absolute zero is not a temperature (2.4.10; through
+    # 2.4.9 -300 C converted to -26.85 K). Checked before the same-unit
+    # shortcut so "-300 C to C" is refused too. The base unit is Celsius; the
+    # 1e-9 margin keeps rounding at the boundary (-459.67 F) from refusing
+    # absolute zero itself.
+    if (Unit_category(from_u) == CAT_TEMPERATURE) {
+        var tb = f64_mul(f64_add(value, Unit_offset(from_u)), Unit_factor(from_u));
+        if (f64_lt(tb, UNITS_ABS_ZERO_C) == 1) {
+            reg_set_err(r, UERR_CONVERT);
+            return f64_from(0);
+        }
     }
 
     # Same unit shortcut — after the reciprocal-unit domain check, which the
@@ -246,8 +262,11 @@ fn reg_populate(r) {
     # 1 lb = 0.45359237 kg exactly; oz = lb/16, st = 14 lb.
     reg_add(r, "pound", "lb", CAT_MASS, f64_div(f64_from(45359237), f64_from(100000000)), zero);
     reg_add(r, "ounce", "oz", CAT_MASS, f64_div(f64_from(45359237), f64_from(1600000000)), zero);
-    # "ton" is the metric tonne (1000 kg), not the US short or UK long ton.
+    # "ton" is the metric tonne (1000 kg). The US short ton (2000 lb) and the UK
+    # long ton (2240 lb) are their own units, by name only (2.4.10).
     reg_add(r, "ton", "t", CAT_MASS, f64_from(1000), zero);
+    reg_add(r, "short_ton", "short_ton", CAT_MASS, f64_div(f64_from(90718474), f64_from(100000)), zero);
+    reg_add(r, "long_ton", "long_ton", CAT_MASS, f64_div(f64_from(10160469088), f64_from(10000000)), zero);
     reg_add(r, "stone", "st", CAT_MASS, f64_div(f64_from(635029318), f64_from(100000000)), zero);
 
     # -- Temperature (base: celsius) --
@@ -490,6 +509,10 @@ fn reg_aliases(r) {
     reg_alias(r, "pounds", "lb");
     reg_alias(r, "ounces", "oz");
     reg_alias(r, "tonne", "t");
+    reg_alias(r, "short ton", "short_ton");
+    reg_alias(r, "us ton", "short_ton");
+    reg_alias(r, "long ton", "long_ton");
+    reg_alias(r, "imperial ton", "long_ton");
     # Speed
     reg_alias(r, "kph", "km/h");
     reg_alias(r, "kmh", "km/h");

@@ -40,6 +40,10 @@ fn _bench_eval_complex() { Evaluator_eval(_ev, "2^3 + sqrt(9) * 2"); return 0; }
 fn _bench_eval_nested() { Evaluator_eval(_ev, "((1 + 2) * (3 + 4)) / (5 - 1)"); return 0; }
 fn _bench_eval_trig() { Evaluator_eval(_ev, "sin(pi / 4) * cos(pi / 4)"); return 0; }
 fn _bench_eval_long_add() { Evaluator_eval(_ev, "1+2+3+4+5+6+7+8+9+10"); return 0; }
+# 2.4.10: the fdlibm tan kernel, the compensated mean, the double-double n!.
+fn _bench_eval_tan() { Evaluator_eval(_ev, "tan(1)"); return 0; }
+fn _bench_eval_mean8() { Evaluator_eval(_ev, "mean(1, 2, 3, 4, 5, 6, 7, 8)"); return 0; }
+fn _bench_eval_fact170() { Evaluator_eval(_ev, "170!"); return 0; }
 # The NL front end and a history push at capacity, the case that copied the
 # whole history on every push through 2.4.8 (CHANGELOG 2.4.9).
 fn _bench_nl_parse_convert() { nl_parse("convert 5 MW to kW"); return 0; }
@@ -112,6 +116,18 @@ fn main() {
 
     b = bench_new("choose");
     bench_run(b, &_bench_eval_choose, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("tan");
+    bench_run(b, &_bench_eval_tan, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("mean8");
+    bench_run(b, &_bench_eval_mean8, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("factorial170");
+    bench_run(b, &_bench_eval_fact170, BENCH_ITERS);
     bench_report(b);
 
     println("--- eval_complex ---");

@@ -323,7 +323,7 @@ fn test_lookup_policy(r) {
         i = i + 1;
     }
     assert_eq(bad, 0, "no ambiguous name or alias");
-    assert_eq(vec_len(reg_units(r)), 110, "110 units");
+    assert_eq(vec_len(reg_units(r)), 112, "112 units (2.4.10: + short_ton, long_ton)");
     return 0;
 }
 
@@ -342,6 +342,36 @@ fn test_category_roundtrip(r) {
     assert_eq(category_from_str("DATA_SIZE"), CAT_DATASIZE, "DATA_SIZE");
     assert_eq(category_from_str("Fuel Economy"), CAT_FUELECONOMY, "Fuel Economy");
     assert_eq(category_from_str("nonsense"), 0 - 1, "unknown category");
+    return 0;
+}
+
+# 2.4.10: the US short ton and UK long ton, exact (2000 lb, 2240 lb); bare
+# "ton" stays the metric tonne. And a temperature below absolute zero is
+# refused rather than converted.
+fn test_tons_and_absolute_zero(r) {
+    unit_factor_is(r, "short_ton", "kg", 0x408C597A58F7121B);   # 907.18474
+    unit_factor_is(r, "long_ton", "kg", 0x408FC06011B88F28);    # 1016.0469088
+    near_rel(conv1(r, "short_ton", "lb"), f64_from(2000), "short ton = 2000 lb");
+    near_rel(conv1(r, "long_ton", "lb"), f64_from(2240), "long ton = 2240 lb");
+    finds(r, "short tons", "short_ton", "short tons");
+    finds(r, "US ton", "short_ton", "US ton");
+    finds(r, "Long Ton", "long_ton", "Long Ton");
+    finds(r, "imperial ton", "long_ton", "imperial ton");
+    finds(r, "ton", "t", "bare ton is still the metric tonne");
+    UnitRegistry_convert(r, f64_from(0 - 300), "C", "K");
+    assert_eq(reg_err(r), UERR_CONVERT, "-300 C refused (was -26.85 K)");
+    UnitRegistry_convert(r, f64_from(0 - 300), "C", "C");
+    assert_eq(reg_err(r), UERR_CONVERT, "-300 C to C refused too");
+    UnitRegistry_convert(r, f64_from(0 - 1), "K", "C");
+    assert_eq(reg_err(r), UERR_CONVERT, "-1 K refused");
+    UnitRegistry_convert(r, f64_from(0 - 500), "F", "C");
+    assert_eq(reg_err(r), UERR_CONVERT, "-500 F refused");
+    UnitRegistry_convert(r, f64_from(0), "K", "C");
+    assert_eq(reg_err(r), UERR_NONE, "0 K is allowed");
+    UnitRegistry_convert(r, f64_div(f64_from(0 - 45967), f64_from(100)), "F", "K");
+    assert_eq(reg_err(r), UERR_NONE, "-459.67 F (absolute zero, with rounding) is allowed");
+    UnitRegistry_convert(r, 0xC071126666666666, "C", "F");
+    assert_eq(reg_err(r), UERR_NONE, "-273.15 C is allowed");
     return 0;
 }
 
@@ -394,6 +424,7 @@ fn main() {
     test_temperature_and_inverse(r);
     test_lookup_policy(r);
     test_category_roundtrip(r);
+    test_tons_and_absolute_zero(r);
     # Propagate failure to the process exit code. assert_summary() RETURNS
     # _assert_fail; discarding it and returning 0 made a red suite exit 0, and
     # CI gates on the exit code — so failures shipped green (fixed 2.4.4).

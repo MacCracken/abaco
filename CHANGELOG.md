@@ -5,6 +5,109 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.10] — 2026-09-30
+
+The abaco-side roadmap items left after the 2.4.9 audit. The items that need
+another repo — consumer upgrades, currency TLS, and the fixes filed upstream
+with ganita, bayan and cyrius — stay open on the roadmap.
+
+Suite 1704 → **1801** asserts; fuzz 4/4 at 20,000; fmt / lint / vet clean; all
+seven suites green on aarch64 under qemu, which CI now runs too. Cyrius 6.6.12
+unchanged. `dist/abaco.cyr` is **not** byte-identical to 2.4.9.
+
+### Added — `ABACO_ERR_ARITY`
+
+A known builtin called with the wrong number of arguments — `sin(1, 2)`,
+`max(1)`, `mean()` — is `ABACO_ERR_ARITY` (value 7, appended so every other
+code keeps its number). It was `ABACO_ERR_UNKNOWN_FN`, the same answer as a
+misspelt name. `Evaluator_eval_partial` treats it like an unknown name when it
+comes from closing a call still being typed, so `2+max(7` still previews 2.
+
+### Changed — function dispatch
+
+`call_function` looks the name up once (`_fn_id`, bucketed by first byte) and
+dispatches on an integer id, instead of comparing the name with up to 48
+builtins in turn. In the bench trail `log2(1024)` went 966 → 822 ns, `pow`
+1.30 → 1.16 µs, `trig_chain` 1.99 → 1.91 µs, `sin` 828 → 818 ns: the 2.4.9
+audit's "~1.1 µs of a 1.7 µs call" estimate was high — most of a call is
+tokenising and parsing. No result changes.
+
+### Fixed — accuracy
+
+- **`tan`** is fdlibm's `k_tan` on the stdlib's own `_f64_rem_pio2`, within
+  1 ulp and correctly rounded at 97.6% of 30,008 sampled points (sin/cos
+  division: up to 2 ulp, 69.7%). Its kernel is plain f64 arithmetic, so it gives
+  the same bits on every target.
+- **`factorial` / `n!`** is exact in i64 to 20!, then a double-double product
+  over exact chunks of factors, rounded once: every n! for n ≤ 170 matches the
+  exact value (170! was 4 ulp low).
+- **`mean` / `avg`** is a compensated sum of the arguments scaled into [−2, 2],
+  divided once with a correction: correctly rounded in 3,000 of 3,000 random
+  cases checked against exact rationals (`mean(0.1, 0.2, 0.3)` is 0.2, was
+  0.20000000000000004), and `mean(1e308, 1e308)` is 1e308 (was +Inf).
+- **`stddev` / `stdev`** works on the same scaled arguments, so it neither
+  overflows nor underflows: `stddev(1e200, −1e200)` is 1e200 (was +Inf) and
+  `stddev(1e-200, 2e-200)` 5e-201 (was 0). It is the population form (divides
+  by n); now documented.
+- **Decimal literals** round once. A subnormal result is rounded straight to
+  the subnormal grid from the double-double quotient (it was rounded to 53 bits
+  and again on scaling down), and digits 19–36 are kept in a second mantissa,
+  with a sticky bit beyond. On a 28,000-literal corpus (random 1–25 digit
+  mantissas over the whole exponent range, plus shortest reprs) none is wrong
+  (2.4.9: 320). On 9,000 adversarial literals at or within 1e-30 of a midpoint
+  between doubles, 749 are wrong (2.4.9: 3,788): an exact tie written out past
+  its 36th digit needs arbitrary precision, which abaco does not carry.
+- **Windows are bit-exact symmetric.** Hann, Hamming, Blackman and Kaiser are
+  evaluated on the centred phase π(2n − (N−1))/(N−1), which is exactly negated
+  at N−1−n, and `sinc_kernel`'s envelope on |x|: w(n) == w(N−1−n) and
+  k(x) == k(−x) bit for bit, so FIR taps built from them are exactly
+  linear-phase (2.4.9: up to ~3 ulp apart; 11,998 asymmetric taps in the test).
+  Values move by a few ulp at most.
+
+### Changed — units
+
+- **US short ton and UK long ton**, exact (2000 lb = 907.18474 kg and 2240 lb =
+  1016.0469088 kg), as `short_ton` / `long_ton` with the aliases `short ton`,
+  `us ton`, `long ton`, `imperial ton`. Bare `ton` stays the metric tonne. 112
+  units.
+- **A temperature below absolute zero is `UERR_CONVERT`** (−300 C converted to
+  −26.85 K through 2.4.9). The check runs before the same-unit shortcut, and a
+  1e-9 K margin keeps rounding at the boundary (−459.67 F) from refusing
+  absolute zero itself.
+
+### Changed — CI
+
+A new `aarch64 (qemu)` job cross-builds and runs every suite and a fuzz smoke
+under `qemu-aarch64`. Nothing tested aarch64 before (the 2.4.9 audit found a
+row red there since 2.4.3). It runs in the release gate too, since the release
+calls `ci.yml`. The full suite takes ~32 s under qemu.
+
+### Tests
+
+1704 → 1801 asserts: `test_arity_error`, `test_tan_kernel`, `test_stats_robust`,
+`test_literal_rounding`, `test_window_symmetry`, `test_tons_and_absolute_zero`,
+and `170!` pinned bit-exact. `fuzz_eval`'s call shape asserts
+`ABACO_ERR_ARITY` on every wrong-count call. Against the 2.4.9 code the window
+symmetry test reports 11,998 asymmetric taps and the tan rows fail on four of
+ten inputs; the literal corpus and the 3,000-case mean check are the evidence
+for those two.
+
+### Benchmarks
+
+Against 2.4.9 on the same machine:
+
+- `tan(1)` 896 → 743 ns (one kernel instead of sin and cos).
+- `mean(1..8)` 2.22 → 2.47 µs (+11%: the scaling, compensation and the
+  corrected division).
+- `170!` 662 ns → 1.68 µs. The first cut, a double-double multiply per factor,
+  was 7.2 µs; grouping factors into exact chunks below 2^53 and running the
+  product in i64 up to 20! brought it back. Exact for every n ≤ 170 either way.
+- The function-dispatch rows above. `eval_sqrt` went the other way, 743 →
+  808 ns (768-822 ns over three more runs): the old chain reached `sqrt` on its
+  sixth `streq` and the new lookup on its fifth, so it saves nothing and pays
+  for the arity check. Everything else is within run-to-run noise.
+- New rows: `tan`, `mean8`, `factorial170` (bench_eval).
+
 ## [2.4.9] — 2026-09-30
 
 The two items 2.4.8 filed — the `sqrt` bench-row collision and `binomial`

@@ -517,6 +517,23 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
       diagnostics, `-dirty` commit stamp; `binomial` row renamed
       `abaco_binomial` so the trail does not splice two functions
 
+### 2.4.10 — the abaco-side roadmap items ✅ (2026-09-30)
+
+- [x] `ABACO_ERR_ARITY` for a known builtin with the wrong argument count
+      (was `UNKNOWN_FN`); `eval_partial` backs off it like an unknown name
+- [x] Function dispatch by id (`_fn_id`, first-byte buckets): 2-15% off a call
+      in the trail — the audit's 1.1 µs estimate was high
+- [x] `tan`: fdlibm `k_tan` on the stdlib reduction, ≤ 1 ulp, 97.6% correctly
+      rounded (was ~2 ulp)
+- [x] `factorial` correctly rounded for every n ≤ 170; `mean` correctly rounded
+      (3,000/3,000 vs exact rationals) and overflow-free; `stddev`
+      overflow/underflow-free, documented as the population form
+- [x] Literals round once: 0 of 28,000 random literals wrong (2.4.9: 320);
+      exact ties written past 36 digits still need arbitrary precision
+- [x] Windows and `sinc_kernel` bit-exact symmetric (centred phase)
+- [x] US short / UK long ton; below absolute zero is `UERR_CONVERT`
+- [x] aarch64 CI lane (qemu), in the release gate too
+
 ### Still open
 
 > The two residuals the 2.3.5 fix audit left open were closed in 2.4.0.
@@ -533,8 +550,6 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
 - [ ] **Currency TLS.** `CurrencyCache_fetch` works against a plaintext
       loopback server only; `lib/tls.cyr` (or routing through hoosh, which
       would add TLS) once the stdlib TLS API stabilizes
-- [ ] **aarch64 CI lane.** Nothing builds or tests aarch64; the 2.4.9 audit ran
-      the suites under qemu by hand (all green after 2.4.9's `ev_near` fix)
 - [ ] **Upstream (ganita)** — filed 2026-09-30 in ganita's
       `docs/development/issues/`, each with a self-proving repro and a tested fix:
       `2026-09-30-f64-hyperbolic-and-asin-cancellation-band.md` (`sinh` / `tanh` /
@@ -552,25 +567,12 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
       14 ms under qemu) and `2026-09-30-json-parse-flat-misassociates-values.md`
       (flat parser hands keys the wrong values; abaco's `_ccy_load_body` guards
       stay either way)
-- [ ] `tan` is sin/cos in the evaluator, ~2 ulp; a `k_tan`-style kernel would
-      make it 1
-- [ ] **Literal rounding residual** — subnormal results are rounded twice and
-      digits past the 18th carry no sticky bit, so ~0.3% of literals are 1 ulp
-      off (either direction). Round once at the target precision and keep a
-      sticky flag; no bignum needed
-- [ ] `factorial` accumulates up to ~6 ulp (170! is 4 ulp low); `mean` /
-      `stddev` overflow on large finite inputs (scale or compensate);
-      `stdev` / population-vs-sample semantics to document
-- [ ] A wrong argument count reports `ABACO_ERR_UNKNOWN_FN` for a known name;
-      a dedicated arity error (or `ABACO_ERR_INVALID`) would be clearer
-- [ ] Units: the US short ton and UK long ton (`ton` is the metric tonne);
-      whether a temperature below absolute zero should be an error (abaco is
-      a linear converter today and does not check)
-- [ ] Windows and `sinc_kernel` are symmetric to within ~3 ulp, not bit-exact;
-      a centred-argument evaluation would make FIR taps exactly linear-phase
-- [ ] Function dispatch is a linear chain of `streq` (~45 names, two `strlen`
-      each): ~1.1 µs of a 1.7 µs function call (2.4.9 audit). A hashed or
-      first-byte dispatch would cut most of it
+- [ ] Literals exactly at a midpoint between doubles and written out past
+      their 36th significant digit can round the wrong way (an adversarial
+      9,000-literal set: 749 wrong, 2.4.9: 3,788). Closing it needs an
+      arbitrary-precision comparison (Clinger's AlgorithmR / bignum fallback)
+- [ ] A `tan` / `f64_tan` in the stdlib would let abaco drop its kernel and its
+      use of the private `_f64_rem_pio2`
 - [ ] Decide whether to commit the `dist/abaco.deps` sidecar. Since 2.4.6 its
       name is exactly what a consumer's `cyrius deps` reads, but it lists every
       `[deps].stdlib` module, including the test / bench-only `assert`, `bench`

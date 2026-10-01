@@ -122,7 +122,7 @@ not have.
 | Module  | Error type    | Values |
 |---------|---------------|--------|
 | units   | UnitErr       | UERR_NONE / UERR_UNKNOWN / UERR_INCOMPAT / UERR_CONVERT |
-| eval    | EvalErr       | ERR_NONE / ERR_PARSE / ERR_INVALID / ERR_MATH / ERR_UNKNOWN_FN / ... |
+| eval    | EvalErr       | ABACO_ERR_NONE / DIV_ZERO / UNKNOWN_FN / UNKNOWN_VAR / PARSE / MATH / INVALID / ARITY (2.4.10) |
 | ai      | AiError       | AI_OK / AI_ERR_PARSE / AI_ERR_UNSUPPORTED / AI_ERR_CURRENCY / AI_ERR_HTTP |
 | ntheory | tagged Result | Ok / Err (from `lib/tagged.cyr`) |
 

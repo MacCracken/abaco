@@ -98,7 +98,10 @@ source. No magic numbers.
   - Hann / Hamming (a₀ = 0.54, a₁ = 0.46); Blackman (0.42, 0.5, 0.08);
     Kaiser window via the zeroth-order modified Bessel function I₀(β).
   - abaco's windows are the **symmetric** form (denominator size − 1), the
-    filter-design convention. For spectral analysis with overlap-add, Harris
+    filter-design convention. Since 2.4.10 they are evaluated on the centred
+    phase φ = π(2n − (N−1))/(N−1) (cos θ = −cos φ for θ = 2πn/(N−1)), which is
+    exactly negated at N−1−n, so w(n) and w(N−1−n) are the same double and an
+    FIR built from them is exactly linear-phase. For spectral analysis with overlap-add, Harris
     tabulates the **periodic** (DFT-even) form: evaluate with size + 1 and
     drop the last sample. An index outside [0, size) is 0 and a 1-point
     window is 1 (2.4.9; out-of-range indices used to wrap onto the cosine).
@@ -164,7 +167,11 @@ source. No magic numbers.
   - Time: year is the Julian year, 365.25 d = 31557600 s (IAU).
   - Speed: knot = 1852 m/h; mph = 0.44704 m/s.
   - Mass: `ton` is the **metric tonne** (1000 kg). The US short ton
-    (907.18474 kg) and UK long ton (1016.0469088 kg) are not registered.
+    (2000 lb = 907.18474 kg) and UK long ton (2240 lb = 1016.0469088 kg) are
+    registered by name (`short_ton`, `long_ton`; 2.4.10).
+  - Temperature: nothing is below absolute zero — 0 K = −273.15 °C =
+    −459.67 °F (SI Brochure §2.3.1, the kelvin). A conversion from below it is
+    `UERR_CONVERT` (2.4.10), with a 1e-9 K margin for rounding.
 - **Symbol case.** SI prefix and unit symbols are case-sensitive (m milli vs M
   mega; mHz vs MHz; Mm vs mm), and b is the bit where B is the byte, so a
   symbol matches only as written. Names, aliases and non-SI abbreviations
@@ -186,6 +193,15 @@ source. No magic numbers.
 - **Parser depth bound (`ABACO_MAX_DEPTH`)** — guards against stack-exhaustion DoS
   from deeply nested input, in the spirit of the SandboxJS recursion-limit
   class of fixes. Documented inline in `eval.cyr`.
+- **Single rounding of literals (2.4.10).** A literal with up to 36 significant
+  digits is held as a double-double mantissa (two 18-digit halves), scaled by a
+  double-double 10^k, and rounded once: a normal result at 53 bits, a
+  subnormal one straight to the subnormal grid (hi rounded to the grid in one
+  multiply, then nudged by the sign of its residual plus lo). Digits past the
+  36th set a sticky bit (counted as half a unit of the last kept digit). An
+  exact tie written out past 36 digits needs arbitrary precision to decide.
+  - Clinger 1990 (above) — the AlgorithmR / bignum comparison abaco does not
+    implement.
 - **Literal grammar.** Digits with at most one '.', and an exponent only when
   a digit follows the e/E (and its optional sign): a second '.' ends the
   literal, so `1.2.3` is a parse error rather than 1.23, and `2e` is 2 times
@@ -298,6 +314,24 @@ source. No magic numbers.
   - Reaching 100% correctly-rounded requires a bignum fallback
     (Clinger's slow path, or Eisel–Lemire); not implemented — the residual is
     bounded at 1 ulp and occurs only at the rounding boundary.
+- **tan (`_eval_tan`, 2.4.10)** — fdlibm 5.3 `s_tan.c` + `k_tan.c` (FreeBSD
+  msun): Cody–Waite / Payne–Hanek reduction by the stdlib's own fdlibm port
+  `_f64_rem_pio2` (`lib/math.cyr`), then a 13-term odd minimax polynomial on
+  [−π/4, π/4], folding |x| ≥ 0.6744 onto π/4 − x, and −1/tan for odd quadrants
+  with the division error compensated. Measured: ≤ 1 ulp, correctly rounded at
+  97.6% of 30,008 points against mpmath (sin/cos division: ≤ 2 ulp, 69.7%).
+  - Sun Microsystems fdlibm 5.3 (1993), `k_tan.c` (T[0..12], pio4, pio4lo).
+- **n! (`_eval_factorial`, 2.4.10)** — exact i64 product to 20!, then a
+  double-double product (Dekker 1971) over chunks of consecutive factors whose
+  product stays below 2^53, rounded once; every n ≤ 170 matches the exact value.
+- **mean (`_eval_mean`, 2.4.10)** — arguments scaled by the power of two that
+  brings max |x| into [1, 2) (exact), Neumaier-compensated sum, then one
+  division of the renormalised pair corrected by the remainder (Dekker
+  two-product). Correctly rounded in 3,000 of 3,000 random cases against exact
+  rationals. **stddev / stdev** is the population form √(Σ(x − x̄)²/n) on the
+  same scaled arguments (no overflow or underflow of the deviations or squares).
+  - Higham, N. J. (2002). *Accuracy and Stability of Numerical Algorithms*,
+    2nd ed., SIAM, §1.9 (two-pass variance) and ch. 4 (summation).
 - **log10 of an exact power of ten (`_eval_log10`)** — `ln(x) / ln(10)`
   carries three roundings, so `log(1000)` was 2.9999999999999996 through 2.4.8.
   When x is exactly the double that the literal `1ek` reads as (−323 ≤ k ≤

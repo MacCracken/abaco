@@ -9,7 +9,8 @@
 #     (same DIV_ZERO / MATH / UNKNOWN_* error) — 2.4.8 previewed 1/0 as 1.
 #   - The domain caps answer ABACO_ERR_MATH past their bound and a value under it.
 #   - Any named function with 1-40 adversarial arguments: more than 32 is an
-#     error; an integer function given a fraction, NaN, Inf or |x| >= 2^63 is
+#     error, a wrong count for a fixed-arity builtin is ABACO_ERR_ARITY (2.4.10),
+#     an integer function given a fraction, NaN, Inf or |x| >= 2^63 is
 #     ABACO_ERR_MATH (isprime: 0); gcd / lcm / binomial / choose on small
 #     operands equal an i64 oracle (Euclid, Pascal's triangle); mean / median /
 #     stddev with a NaN argument are NaN (2.4.9 — through 2.4.8 no fuzz
@@ -322,7 +323,10 @@ fn _fz_call_shape(e) {
         if (err == ABACO_ERR_NONE) { _fz_puts(buf); _fz_fail(" call with more than 32 arguments accepted"); }
         return 0;
     }
-    if (arity >= 0 && nargs != arity) { return 0; }
+    if (arity >= 0 && nargs != arity) {
+        if (err != ABACO_ERR_ARITY) { _fz_puts(buf); _fz_fail(" wrong argument count is not ABACO_ERR_ARITY"); }
+        return 0;
+    }
     var intfn = 0;
     if (fi <= 9) { intfn = 1; }
     if (intfn == 1 && bad == 1) {
@@ -420,7 +424,7 @@ fn main() {
         if (ferr == ABACO_ERR_DIV_ZERO || ferr == ABACO_ERR_MATH) {
             if (perr != ferr) { _fz_fail("eval_partial hid a semantic error"); }
         }
-        if (ferr == ABACO_ERR_UNKNOWN_VAR || ferr == ABACO_ERR_UNKNOWN_FN) {
+        if (ferr == ABACO_ERR_UNKNOWN_VAR || ferr == ABACO_ERR_UNKNOWN_FN || ferr == ABACO_ERR_ARITY) {
             if (perr != ferr) { _fz_fail("eval_partial hid an unknown name"); }
         }
 

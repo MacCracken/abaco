@@ -220,6 +220,82 @@ fn nested(open, depth) {
     return buf;
 }
 
+# 2.4.10: literals round once. A subnormal result was rounded to 53 bits and
+# again on scaling down, and digits past the 18th were dropped; 320 of a
+# 23,000-literal corpus came out 1 ulp off (0 now), and 3,788 of 9,000
+# midpoint-adjacent literals (419 now — exact ties written with more than 36
+# digits need arbitrary precision). Expected bits are Python's float().
+fn test_literal_rounding() {
+    assert_eq(ev("4071761636513814724e-324"), 0x0086DFD285B34993, "subnormal, 19 digits");
+    assert_eq(ev("80445091189115471e-326"), 0x000094161BD6A023, "subnormal");
+    assert_eq(ev("2.4703282292062328e-324"), 1, "just above half the smallest subnormal rounds up (was 0)");
+    assert_eq(ev("1e-320"), 0x00000000000007E8, "1e-320");
+    assert_eq(ev("123456789012345678901234567890e-340"), 0x00000245CBAEC7BA, "30 digits into the subnormals");
+    assert_eq(ev("2616832586885965804110775e-17"), 0x4178F4C05DE6D963, "25 digits");
+    assert_eq(ev("12894740917235071998e209"), 0x6F4B37524DBD5188, "20 digits, large");
+    assert_eq(ev("3738497276268304408e-115"), 0x2BE98D9FEC734056, "19 digits, small");
+    return 0;
+}
+
+# 2.4.10: tan is fdlibm's kernel on the stdlib reduction, within 1 ulp and
+# correctly rounded at 97.6% of 30,008 sampled points (was sin/cos: 69.7%, up
+# to 2 ulp). References: mpmath at 400 bits. The kernel is plain f64
+# arithmetic, so these bits hold on every target. The first four rows were 1
+# ulp off with sin/cos.
+fn test_tan_kernel() {
+    assert_eq(ev("tan(1)"), 0x3FF8EB245CBEE3A6, "tan(1) correctly rounded (sin/cos was 1 ulp low)");
+    assert_eq(ev("tan(0.6744)"), 0x3FE995054EA00C37, "tan(0.6744), the fold point");
+    assert_eq(ev("tan(1e300)"), 0x3FF6BE411F37AC77, "tan(1e300), Payne-Hanek reduction");
+    assert_eq(ev("tan(0-0.1)"), 0xBFB9AF8877430B80, "tan(-0.1)");
+    assert_eq(ev("tan(0.5)"), 0x3FE17B4F5BF3474A, "tan(0.5)");
+    assert_eq(ev("tan(0-2)"), 0x40017AF62E0950F8, "tan(-2), odd quadrant");
+    assert_eq(ev("tan(3)"), 0xBFC23EF71254B86F, "tan(3)");
+    assert_eq(ev("tan(1e10)"), 0xBFE1DE000F443F50, "tan(1e10)");
+    assert_eq(ev("tan(1.5707963267948966)"), 0x434D02967C31CDB5, "tan(fl(pi/2)) is large and finite");
+    assert_eq(ev("tan(2^(0-30))"), 0x3E10000000000000, "tan(x) = x below 2^-27");
+    var t22 = ev("tan(1e22)");
+    assert(t22 >= 0xBFFA0F79C1B6B256 && t22 <= 0xBFFA0F79C1B6B258, "tan(1e22) within 1 ulp");
+    var e = Evaluator_new();
+    var nan = Evaluator_eval(e, "tan(1e308*10)");
+    assert(f64_eq(nan, nan) == 0, "tan(Inf) is NaN");
+    return 0;
+}
+
+# 2.4.10: mean is correctly rounded (3,000 random cases matched exact
+# rationals) and neither mean nor stddev overflows or underflows on the way.
+fn test_stats_robust() {
+    assert_eq(ev("mean(0.1, 0.2, 0.3)"), 0x3FC999999999999A, "mean(0.1, 0.2, 0.3) = 0.2 (was 0.20000000000000004)");
+    assert_eq(ev("mean(1e308, 1e308)"), 0x7FE1CCF385EBC8A0, "mean(1e308, 1e308) = 1e308 (was +Inf)");
+    assert_eq(ev("mean(1e308, 0-1e308, 5)"), 0x3FFAAAAAAAAAAAAB, "a small mean of huge arguments stays exact");
+    assert_eq(ev("mean(5e-324, 5e-324)"), 1, "subnormal mean");
+    assert_eq(ev("stddev(1e200, 0-1e200)"), 0x6974E718D7D7625A, "stddev(1e200, -1e200) = 1e200 (was +Inf)");
+    assert_eq(ev("stddev(1e-200, 2e-200)"), 0x16587E92154EF7AC, "stddev(1e-200, 2e-200) = 5e-201 (was 0)");
+    assert_eq(ev("stddev(3)"), 0, "one value: 0");
+    var mi = ev("mean(1e308*10, 1)");
+    assert_eq(mi, 0x7FF0000000000000, "mean(Inf, 1) is +Inf");
+    var e = Evaluator_new();
+    var nn = Evaluator_eval(e, "mean(sqrt(0-1), 1)");
+    assert(f64_eq(nn, nn) == 0, "mean with a NaN is NaN");
+    return 0;
+}
+
+# 2.4.10: a known builtin with the wrong argument count is ABACO_ERR_ARITY
+# (it was ABACO_ERR_UNKNOWN_FN, indistinguishable from a misspelt name).
+fn test_arity_error() {
+    ev_err_is("sin(1, 2)", ABACO_ERR_ARITY, "sin takes one argument");
+    ev_err_is("max(1)", ABACO_ERR_ARITY, "max takes two");
+    ev_err_is("gcd(1, 2, 3)", ABACO_ERR_ARITY, "gcd takes two");
+    ev_err_is("mean()", ABACO_ERR_ARITY, "mean takes at least one");
+    ev_err_is("sqrt()", ABACO_ERR_ARITY, "sqrt() has no argument");
+    ev_err_is("foo(1)", ABACO_ERR_UNKNOWN_FN, "an unknown name is still UNKNOWN_FN");
+    ev_err_is("Sin(1)", ABACO_ERR_UNKNOWN_FN, "names are case-sensitive");
+    ev_err_is("2*(max(1)+1)", ABACO_ERR_ARITY, "the arity error survives parentheses");
+    assert_eq(ev("mean(4)"), f64_from(4), "one argument is enough for mean");
+    assert_eq(ev_partial("2+max(7"), f64_from(2), "eval_partial still backs off an unfinished call");
+    ev_partial_err("max(7)", ABACO_ERR_ARITY, "a complete call with the wrong arity is the answer");
+    return 0;
+}
+
 # Builtins with no value assertion through 2.4.8, or only at points where a
 # wrong implementation agrees (floor/ceil only at 3, exp only at 0), and the
 # constants, which test_constants compared with the very globals the
@@ -244,11 +320,11 @@ fn test_dispatch_values() {
     assert_eq(ev("e"), 0x4005BF0A8B145769, "e by literal bits");
     assert_eq(ev("pi"), 0x400921FB54442D18, "pi by literal bits");
     assert_eq(ev("tau"), 0x401921FB54442D18, "tau by literal bits");
-    # 170! is the largest finite factorial. The product accumulates rounding:
-    # 4 ulp below the correctly rounded 0x7FA4AB7864418639 (roadmap: factorial
-    # ulp). Pinned within 8 ulp, so a cap or loop change still shows.
-    var f170 = ev("170!");
-    assert(f170 >= 0x7FA4AB7864418631 && f170 <= 0x7FA4AB7864418641, "170! within 8 ulp");
+    # 170! is the largest finite factorial, and correctly rounded since 2.4.10
+    # (a double-double product; the plain one was 4 ulp low). Every n! for
+    # n <= 170 matches Python's exact value.
+    assert_eq(ev("170!"), 0x7FA4AB7864418639, "170! correctly rounded");
+    assert_eq(ev("factorial(170)"), 0x7FA4AB7864418639, "factorial(170) correctly rounded");
     ev_err_is("171!", ABACO_ERR_MATH, "171! is past the cap");
     assert_eq(ev("fib(92)"), f64_from(7540113804746346429), "fib(92)");
     ev_err_is("fib(93)", ABACO_ERR_MATH, "fib(93) is past i64");
@@ -1718,6 +1794,10 @@ fn main() {
     test_errors();
     test_depth_boundary();
     test_dispatch_values();
+    test_arity_error();
+    test_tan_kernel();
+    test_stats_robust();
+    test_literal_rounding();
     test_arity_cap();
     test_exponent_clamp();
     test_token_cap();

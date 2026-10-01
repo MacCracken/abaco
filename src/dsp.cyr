@@ -409,31 +409,42 @@ var WIN_HAMM_B = 0x3FDD_70A3_D70A_3D71;   # 0.46
 var WIN_BLK_A  = 0x3FDA_E147_AE14_7AE1;   # 0.42
 var WIN_BLK_C  = 0x3FB4_7AE1_47AE_147B;   # 0.08
 
-# Hann: 0.5 * (1 - cos(2π n / (N-1)))
+# The cosine windows are evaluated on the CENTRED phase
+#   phi = pi * (2n - (N-1)) / (N-1)  in [-pi, pi],
+# not on 2*pi*n/(N-1). 2n - (N-1) is an exact integer and changes sign between
+# n and N-1-n, so phi is exactly negated, and cos is even bit for bit: every
+# window is exactly symmetric, w(n) == w(N-1-n), which is what makes an FIR
+# designed with it exactly linear-phase. Through 2.4.9 the two halves were
+# separate roundings, up to ~3 ulp apart (2.4.9 audit). With theta = phi + pi,
+# cos(theta) = -cos(phi) and cos(2 theta) = cos(2 phi), so the formulas below
+# are the textbook ones rewritten in phi.
+fn _win_phi(n, size) {
+    return f64_div(f64_mul(DSP_PI, f64_from(2 * n - (size - 1))), f64_from(size - 1));
+}
+
+# Hann: 0.5 * (1 - cos(2π n / (N-1))) = 0.5 * (1 + cos(phi))
 fn window_hann(n, size) {
     if (_win_outside(n, size) == 1) { return f64_from(0); }
     if (size == 1) { return DSP_ONE; }
-    var phase = f64_div(f64_mul(DSP_TAU, f64_from(n)), f64_from(size - 1));
-    return f64_mul(DSP_HALF, f64_sub(DSP_ONE, f64_cos(phase)));
+    return f64_mul(DSP_HALF, f64_add(DSP_ONE, f64_cos(_win_phi(n, size))));
 }
 
-# Hamming: 0.54 - 0.46 * cos(2π n / (N-1))
+# Hamming: 0.54 - 0.46 * cos(2π n / (N-1)) = 0.54 + 0.46 * cos(phi)
 fn window_hamming(n, size) {
     if (_win_outside(n, size) == 1) { return f64_from(0); }
     if (size == 1) { return DSP_ONE; }
-    var phase = f64_div(f64_mul(DSP_TAU, f64_from(n)), f64_from(size - 1));
-    return f64_sub(WIN_HAMM_A, f64_mul(WIN_HAMM_B, f64_cos(phase)));
+    return f64_add(WIN_HAMM_A, f64_mul(WIN_HAMM_B, f64_cos(_win_phi(n, size))));
 }
 
 # Blackman: 0.42 - 0.5*cos(2π n/(N-1)) + 0.08*cos(4π n/(N-1))
+#         = 0.42 + 0.5*cos(phi) + 0.08*cos(2 phi)
 fn window_blackman(n, size) {
     if (_win_outside(n, size) == 1) { return f64_from(0); }
     if (size == 1) { return DSP_ONE; }
-    var phase = f64_div(f64_mul(DSP_TAU, f64_from(n)), f64_from(size - 1));
-    var p2 = f64_add(phase, phase);
+    var phase = _win_phi(n, size);
     var t1 = f64_mul(DSP_HALF, f64_cos(phase));
-    var t2 = f64_mul(WIN_BLK_C, f64_cos(p2));
-    return f64_add(f64_sub(WIN_BLK_A, t1), t2);
+    var t2 = f64_mul(WIN_BLK_C, f64_cos(f64_add(phase, phase)));
+    return f64_add(f64_add(WIN_BLK_A, t1), t2);
 }
 
 # Modified Bessel I0 by its power series, sum over k of ((x/2)^k / k!)^2
@@ -469,7 +480,9 @@ fn _bessel_i0(x) {
 fn window_kaiser(n, size, beta) {
     if (_win_outside(n, size) == 1) { return f64_from(0); }
     if (size == 1) { return DSP_ONE; }
-    var x = f64_sub(f64_div(f64_mul(DSP_TWO, f64_from(n)), f64_from(size - 1)), DSP_ONE);
+    # 2n/(N-1) - 1 as one exact-integer ratio, so x is exactly negated at
+    # N-1-n and the window is bit-exact symmetric (see _win_phi).
+    var x = f64_div(f64_from(2 * n - (size - 1)), f64_from(size - 1));
     var arg = f64_mul(beta, f64_sqrt(f64_sub(DSP_ONE, f64_mul(x, x))));
     return f64_div(_bessel_i0(arg), _bessel_i0(beta));
 }
@@ -482,7 +495,7 @@ fn window_kaiser_fill(dst, size, beta) {
     var nm1 = f64_from(size - 1);
     var i = 0;
     while (i < size) {
-        var x = f64_sub(f64_div(f64_mul(DSP_TWO, f64_from(i)), nm1), DSP_ONE);
+        var x = f64_div(f64_from(2 * i - (size - 1)), nm1);
         var arg = f64_mul(beta, f64_sqrt(f64_sub(DSP_ONE, f64_mul(x, x))));
         store64(dst + i * 8, f64_mul(_bessel_i0(arg), inv_denom));
         i = i + 1;
@@ -536,8 +549,10 @@ fn sinc_kernel(x, half_width) {
     var ax = x;
     if (f64_lt(ax, f64_from(0)) == 1) { ax = f64_neg(ax); }
     if (f64_gt(ax, half_width) == 1) { return f64_from(0); }
-    var phase = f64_div(f64_mul(DSP_TAU, f64_add(x, half_width)), f64_mul(DSP_TWO, half_width));
-    var env = f64_mul(DSP_HALF, f64_sub(DSP_ONE, f64_cos(phase)));
+    # Hann envelope 0.5 * (1 - cos(pi (x + hw) / hw)) = 0.5 * (1 + cos(pi |x| / hw)),
+    # on |x| so k(x) == k(-x) bit for bit (through 2.4.9 it was built from the
+    # signed x + hw, a few ulp asymmetric).
+    var env = f64_mul(DSP_HALF, f64_add(DSP_ONE, f64_cos(f64_div(f64_mul(DSP_PI, ax), half_width))));
     return f64_mul(f64_sinc(x), env);
 }
 

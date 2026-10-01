@@ -27,6 +27,10 @@ enum EvalErr {
     ABACO_ERR_PARSE;
     ABACO_ERR_MATH;
     ABACO_ERR_INVALID;
+    # A builtin called with the wrong number of arguments: sin(1, 2), max(1),
+    # mean(). Through 2.4.9 that was ABACO_ERR_UNKNOWN_FN, as if the name were
+    # unknown. Appended, so every earlier code keeps its value.
+    ABACO_ERR_ARITY;
 }
 
 # -- Token storage --
@@ -402,8 +406,14 @@ fn _dd_split_mant(mant): (f64, f64) {
 
 # mant * 10^k for k >= 0, error-compensated on both factors.
 fn _mul_pow10(mant, k) {
-    var hi, lo, bexp = _dd_pow10(k);
     var m_hi, m_lo = _dd_split_mant(mant);
+    return _mul_pow10_dd(m_hi, m_lo, k);
+}
+
+# (m_hi + m_lo) * 10^k for k >= 0: the same, for a mantissa already held as a
+# pair (a literal longer than 18 significant digits).
+fn _mul_pow10_dd(m_hi, m_lo, k) {
+    var hi, lo, bexp = _dd_pow10(k);
     var p, e = _two_product(m_hi, hi);
     e = f64_add(e, f64_mul(m_hi, lo));
     e = f64_add(e, f64_mul(m_lo, hi));
@@ -414,15 +424,65 @@ fn _mul_pow10(mant, k) {
 # mant / 10^k for k >= 0, error-compensated. One Newton refinement against the
 # double-double divisor turns the quotient's ~1 ulp into ~0.5.
 fn _div_pow10(mant, k) {
-    var hi, lo, bexp = _dd_pow10(k);
     var m_hi, m_lo = _dd_split_mant(mant);
+    return _div_pow10_dd(m_hi, m_lo, k);
+}
+
+# (m_hi + m_lo) / 10^k. The corrected quotient is kept as the pair (q, c) and
+# rounded ONCE at the precision of the result: through 2.4.9 q + c was rounded
+# to 53 bits and then scaled into the subnormal range, which rounded it a
+# second time — 281 of a 23,000-literal corpus came out 1 ulp off that way, and
+# a value just above half the smallest subnormal came out 0 (2.4.9 audit).
+fn _div_pow10_dd(m_hi, m_lo, k) {
+    var hi, lo, bexp = _dd_pow10(k);
     var q = f64_div(m_hi, hi);
     var p, e = _two_product(q, hi);
     e = f64_add(e, f64_mul(q, lo));
     var rem = f64_sub(f64_sub(m_hi, p), e);
     rem = f64_add(rem, m_lo);
-    q = f64_add(q, f64_div(rem, hi));
-    return _dd_scale_pow2(q, 0 - bexp);
+    return _pair_scale_down(q, f64_div(rem, hi), bexp);
+}
+
+# (hi + lo) * 2^-n for n >= 0 and hi > 0, rounded once. A normal result is the
+# pair's sum scaled exactly. A subnormal one is hi rounded straight to the
+# subnormal grid (one multiply, see _scale_down_once), then nudged one step if
+# hi's rounding residual plus lo is past half a step.
+fn _pair_scale_down(hi, lo, n) {
+    var s = f64_add(hi, lo);
+    var sm, se = _frexp1(s);
+    if (se - n >= (0 - 1022)) { return _dd_scale_pow2(s, 0 - n); }
+    var t = _scale_down_once(hi, n);
+    var back = _dd_scale_pow2(t, n);
+    # In units of the result's last place, 2^-1074: rh = hi's own rounding
+    # residual (exact, |rh| <= 1/2) and rl = lo. They are compared apart as well
+    # as summed: when hi sits exactly on a midpoint, rh + rl can round to that
+    # midpoint and hide that lo breaks the tie (2.4703282292062328e-324 came
+    # out 0 that way).
+    var rh = _pow_scale(f64_sub(hi, back), 1074 - n);
+    var rl = _pow_scale(lo, 1074 - n);
+    var r = f64_add(rh, rl);
+    var half = F64_HALF;
+    if (f64_gt(r, half) == 1 || (f64_eq(rh, half) == 1 && f64_gt(rl, 0) == 1)) { return t + 1; }
+    if (t > 0) {
+        if (f64_lt(r, f64_neg(half)) == 1 || (f64_eq(rh, f64_neg(half)) == 1 && f64_lt(rl, 0) == 1)) {
+            return t - 1;
+        }
+    }
+    return t;
+}
+
+# x * 2^-n for a positive normal x and n >= 0, with exactly one rounding:
+# exact steps down to the smallest normal binade, then one multiply onto the
+# subnormal grid. _dd_scale_pow2's halving steps each rounded once the value
+# was subnormal.
+fn _scale_down_once(x, n) {
+    var xm, xe = _frexp1(x);
+    var drop = xe + 1022;                       # binades x can lose and stay normal
+    if (n <= drop) { return _dd_scale_pow2(x, 0 - n); }
+    var y = _dd_scale_pow2(x, 0 - drop);        # exact: y in [2^-1022, 2^-1021)
+    var rest = n - drop;
+    if (rest > 60) { return f64_from(0); }      # below half the smallest subnormal
+    return f64_mul(y, _f64_pow2i(0 - rest));
 }
 
 # Parse a number from input bytes. Returns (value, index_after_the_number).
@@ -461,6 +521,13 @@ fn parse_number(input, start, len): (f64, i64) {
     var dec_exp = 0;
     var has_dot = 0;
     var seen_sig = 0;
+    # Digits 19..36 go to a second mantissa, the rest only set `sticky`: the
+    # 18-digit mantissa alone dropped them, so a literal longer than that could
+    # round the wrong way at a midpoint — 42 of the 23,000-literal corpus did
+    # (2.4.9 audit). The two halves meet as a double-double below.
+    var mant2 = 0;
+    var m2digits = 0;
+    var sticky = 0;
 
     # Integer/fractional part
     var pgo = 1;
@@ -484,9 +551,20 @@ fn parse_number(input, start, len): (f64, i64) {
                         if (dec_exp > (0 - ABACO_DEC_EXP_MAX)) { dec_exp = dec_exp - 1; }
                     }
                 }
+                elif (m2digits < ABACO_MANT_DIGITS) {
+                    # First mantissa full: the digit joins the second. As a
+                    # significant digit, a fractional one moves the point and an
+                    # integer one does not.
+                    mant2 = mant2 * 10 + (c - 48);
+                    m2digits = m2digits + 1;
+                    if (has_dot == 1) {
+                        if (dec_exp > (0 - ABACO_DEC_EXP_MAX)) { dec_exp = dec_exp - 1; }
+                    }
+                }
                 else {
-                    # Mantissa full. Integer digits still scale the value;
-                    # fractional digits are below f64 resolution, so drop them.
+                    # Both full (36 digits): integer digits still scale the
+                    # value; any digit's only other effect is the sticky bit.
+                    if (c != 48) { sticky = 1; }
                     if (has_dot == 0) {
                         if (dec_exp < ABACO_DEC_EXP_MAX) { dec_exp = dec_exp + 1; }
                     }
@@ -577,8 +655,29 @@ fn parse_number(input, start, len): (f64, i64) {
     # 1e-322, inside the subnormal range. Clamping at -340 would round genuine
     # subnormals up and turn true underflows into nonzero values.
     if (total > ABACO_POW10_MAX) { total = ABACO_POW10_MAX; }
-    if (total < (0 - (ABACO_POW10_MAX + ABACO_MANT_DIGITS))) {
-        total = 0 - (ABACO_POW10_MAX + ABACO_MANT_DIGITS);
+    if (total < (0 - (ABACO_POW10_MAX + 2 * ABACO_MANT_DIGITS))) {
+        total = 0 - (ABACO_POW10_MAX + 2 * ABACO_MANT_DIGITS);
+    }
+
+    # More than 18 significant digits: the mantissa is mant * 10^m2digits +
+    # mant2 (+ half a unit of the last kept digit when nonzero digits were
+    # dropped past the 36th), held as a double-double — ~106 bits, so the one
+    # final rounding sees what the extra digits say.
+    if (m2digits > 0) {
+        _dd_init();
+        var ah, al = _dd_split_mant(mant);
+        var bh, bl = _dd_mul_d(ah, al, _p10_exact(m2digits));
+        var ch, cl = _dd_split_mant(mant2);
+        var sh = f64_add(bh, ch);
+        var sv = f64_sub(sh, bh);
+        var se = f64_add(f64_sub(bh, f64_sub(sh, sv)), f64_sub(ch, sv));
+        var sl = f64_add(se, f64_add(bl, cl));
+        if (sticky == 1) { sl = f64_add(sl, F64_HALF); }
+        var mh = f64_add(sh, sl);
+        var ml = f64_sub(sl, f64_sub(mh, sh));
+        if (total > 0) { return (_mul_pow10_dd(mh, ml, total), i); }
+        if (total < 0) { return (_div_pow10_dd(mh, ml, 0 - total), i); }
+        return (mh, i);
     }
 
     var result = f64_from(mant);
@@ -998,6 +1097,196 @@ fn _pow_int_dd(x, n) {
     return _pow_scale(f64_add(rh, rl), re) | sign;
 }
 
+# tan(x) — fdlibm 5.3 s_tan.c + k_tan.c (FreeBSD msun), on the stdlib's own
+# fdlibm reduction `_f64_rem_pio2` (lib/math.cyr; the one f64_sin and f64_cos
+# use). Through 2.4.9 tan was f64_sin(x) / f64_cos(x): two results within 1 ulp
+# each and a division, ~2 ulp. The kernel evaluates tan(x + y) on
+# [-pi/4, pi/4] with a 13-term odd polynomial (T0..T12, inline like the
+# stdlib's sin/cos kernels — no shared table, so nothing to initialise and no
+# race between threads), folds |x| >= 0.6744 onto pi/4 - x, and for an odd
+# quadrant (iy = -1) returns -1/tan with the division's error compensated.
+fn _eval_k_tan(x, y, iy) {
+    var neg = (x >> 63) & 1;
+    var ix = (x >> 32) & 0x7FFFFFFF;
+    var big = 0;
+    if (ix >= 0x3FE59428) {                                  # |x| >= 0.6744
+        big = 1;
+        if (neg == 1) {
+            x = x ^ 0x8000_0000_0000_0000;
+            y = y ^ 0x8000_0000_0000_0000;
+        }
+        var zf = f64_sub(0x3FE921FB54442D18, x);             # pio4 - x
+        var wf = f64_sub(0x3C81A62633145C07, y);             # pio4lo - y
+        x = f64_add(zf, wf);
+        y = f64_from(0);
+    }
+    var z = f64_mul(x, x);
+    var w = f64_mul(z, z);
+    # x^5 (T1 + x^4 T3 + ... + x^20 T11) + x^5 (x^2 (T2 + x^4 T4 + ... + x^22 T12))
+    var r = f64_add(0x3F147E88A03792A6, f64_mul(w, 0xBEF375CBDB605373));          # T9 + w T11
+    r = f64_add(0x3F4344D8F2F26501, f64_mul(w, r));                              # T7
+    r = f64_add(0x3F6D6D22C9560328, f64_mul(w, r));                              # T5
+    r = f64_add(0x3F9664F48406D637, f64_mul(w, r));                              # T3
+    r = f64_add(0x3FC111111110FE7A, f64_mul(w, r));                              # T1
+    var v = f64_add(0x3F12B80F32F0A7E9, f64_mul(w, 0x3EFB2A7074BF7AD4));          # T10 + w T12
+    v = f64_add(0x3F3026F71A8D1068, f64_mul(w, v));                              # T8
+    v = f64_add(0x3F57DBC8FEE08315, f64_mul(w, v));                              # T6
+    v = f64_add(0x3F8226E3E96E8493, f64_mul(w, v));                              # T4
+    v = f64_mul(z, f64_add(0x3FABA1BA1BB341FE, f64_mul(w, v)));                  # z (T2 + ...)
+    var s = f64_mul(z, x);
+    r = f64_add(y, f64_mul(z, f64_add(f64_mul(s, f64_add(r, v)), y)));
+    r = f64_add(r, f64_mul(0x3FD5555555555563, s));                              # + T0 s
+    w = f64_add(x, r);
+    if (big == 1) {
+        var vv = f64_from(iy);
+        var q = f64_sub(f64_div(f64_mul(w, w), f64_add(w, vv)), r);
+        var res = f64_sub(vv, f64_mul(f64_from(2), f64_sub(x, q)));
+        if (neg == 1) { return res ^ 0x8000_0000_0000_0000; }
+        return res;
+    }
+    if (iy == 1) { return w; }
+    # -1 / (x + r), accurately: split w and -1/w at their low 32 bits.
+    var zh = w & 0xFFFF_FFFF_0000_0000;
+    var vt = f64_sub(r, f64_sub(zh, x));                     # zh + vt = x + r
+    var a = f64_div(f64_from(0 - 1), w);
+    var t = a & 0xFFFF_FFFF_0000_0000;
+    var s2 = f64_add(f64_from(1), f64_mul(t, zh));
+    return f64_add(t, f64_mul(a, f64_add(s2, f64_mul(t, vt))));
+}
+
+fn _eval_tan(x) {
+    var ix = (x >> 32) & 0x7FFFFFFF;
+    if (ix <= 0x3FE921FB) {                                  # |x| <= ~pi/4
+        if (ix < 0x3E400000) { return x; }                   # |x| < 2^-27: tan x = x
+        return _eval_k_tan(x, f64_from(0), 1);
+    }
+    if (ix >= 0x7FF00000) { return f64_sub(x, x); }          # +-Inf, NaN -> NaN
+    var y[16];
+    var n = _f64_rem_pio2(x, &y);
+    return _eval_k_tan(load64(&y), load64(&y + 8), 1 - ((n & 1) << 1));
+}
+
+# n! for 0 <= n <= 170, correctly rounded. Up to 20! the product is an exact
+# i64 and f64_from rounds it once. Past that the running product is a
+# double-double pair (Dekker) kept in [1, 2) with a separate binary exponent,
+# as _pow_int_dd does, and consecutive factors are grouped into exact chunks
+# below 2^53 so each pair multiply covers several of them: ~106 bits survive
+# and the final rounding is the only one. Through 2.4.9 it was a plain f64
+# product rounding at every step: up to ~6 ulp off, 170! 4 ulp low (2.4.9 audit).
+fn _eval_factorial(n) {
+    var acc = 1;
+    var i = 2;
+    while (i <= n && i <= 20) {
+        acc = acc * i;
+        i = i + 1;
+    }
+    if (n <= 20) { return f64_from(acc); }
+    _dd_init();
+    var ah, al = _dd_split_mant(acc);
+    var rh, re = _frexp1(ah);
+    var rl = _pow_scale(al, 0 - re);
+    var chunk = 1;
+    while (i <= n || chunk > 1) {
+        if (i <= n && chunk <= ABACO_EXACT_INT_MAX / i) {
+            chunk = chunk * i;
+            i = i + 1;
+        } else {
+            var ch, ce = _frexp1(f64_from(chunk));
+            var ph, pl = _dd_mul_dd(rh, rl, ch, f64_from(0));
+            var nh, nl, ne = _dd_norm1(ph, pl, re + ce);
+            rh = nh;
+            rl = nl;
+            re = ne;
+            chunk = 1;
+        }
+    }
+    return _pow_scale(f64_add(rh, rl), re);
+}
+
+# The binary exponent e that brings the largest |x| of args[0..n) into
+# [1, 2) — scaling every argument by 2^-e is exact (bar arguments ~2^1022
+# times smaller than the largest, which can only lose bits that cannot
+# matter to a mean or deviation). 0 when the largest is 0, Inf or NaN: those
+# are left to ordinary arithmetic.
+fn _stat_exp(args, n) {
+    var big = f64_from(0);
+    var i = 0;
+    while (i < n) {
+        var ax = f64_abs(load64(args + i * 8));
+        if (f64_gt(ax, big) == 1) { big = ax; }
+        i = i + 1;
+    }
+    if (big == 0 || f64_eq(f64_sub(big, big), f64_from(0)) == 0) { return 0; }
+    var bm, be = _frexp1(big);
+    return be;
+}
+
+# Mean of args[0..n): a compensated (Neumaier) sum of the arguments scaled
+# into [-2, 2], renormalised, then one corrected division — so the mean is
+# correctly rounded but for the rarest ties, and neither overflows nor
+# underflows on the way. Through 2.4.9 a plain sum: mean(1e308, 1e308) was
+# +Inf and mean(0.1, 0.2, 0.3) 0.20000000000000004 (2.4.9 audit). A NaN or
+# infinite sum is returned as it is (/ n), as before.
+fn _eval_mean(args, n) {
+    _dd_init();
+    var k = _stat_exp(args, n);
+    var sum = f64_from(0);
+    var comp = f64_from(0);
+    var i = 0;
+    while (i < n) {
+        var x = _pow_scale(load64(args + i * 8), 0 - k);
+        var t = f64_add(sum, x);
+        if (f64_lt(f64_abs(sum), f64_abs(x)) == 0) {
+            comp = f64_add(comp, f64_add(f64_sub(sum, t), x));
+        } else {
+            comp = f64_add(comp, f64_add(f64_sub(x, t), sum));
+        }
+        sum = t;
+        i = i + 1;
+    }
+    var nf = f64_from(n);
+    if (f64_eq(f64_sub(sum, sum), f64_from(0)) == 0) { return f64_div(sum, nf); }
+    # (hi, lo) = sum + comp exactly (two-sum).
+    var hi = f64_add(sum, comp);
+    var bv = f64_sub(hi, sum);
+    var lo = f64_add(f64_sub(sum, f64_sub(hi, bv)), f64_sub(comp, bv));
+    if ((hi & 0x7FFF_FFFF_FFFF_FFFF) == 0) { return _pow_scale(f64_div(lo, nf), k); }
+    # Divide with hi in [1, 2), so the quotient is normal whatever the
+    # exponent, then correct it by the remainder (Dekker two-product).
+    var hm, he = _frexp1(f64_abs(hi));
+    hm = hm | (hi & 0x8000_0000_0000_0000);
+    var lm = _pow_scale(lo, 0 - he);
+    var q = f64_div(hm, nf);
+    var p, pe = _two_product(q, nf);
+    var rem = f64_add(f64_sub(f64_sub(hm, p), pe), lm);
+    q = f64_add(q, f64_div(rem, nf));
+    return _pow_scale(q, he + k);
+}
+
+# Population standard deviation sqrt(sum((x - mean)^2) / n) — the divisor
+# is n, not n - 1. Two passes on arguments scaled into [-2, 2], so neither
+# the deviations nor their squares overflow or underflow: through 2.4.9
+# stddev(1e200, -1e200) was +Inf and stddev(1e-200, 2e-200) was 0 (2.4.9
+# audit).
+fn _eval_stddev(args, n) {
+    var k = _stat_exp(args, n);
+    var i = 0;
+    var sum = f64_from(0);
+    while (i < n) {
+        sum = f64_add(sum, _pow_scale(load64(args + i * 8), 0 - k));
+        i = i + 1;
+    }
+    var mean = f64_div(sum, f64_from(n));
+    var vsum = f64_from(0);
+    i = 0;
+    while (i < n) {
+        var d = f64_sub(_pow_scale(load64(args + i * 8), 0 - k), mean);
+        vsum = f64_add(vsum, f64_mul(d, d));
+        i = i + 1;
+    }
+    return _pow_scale(f64_sqrt(f64_div(vsum, f64_from(n))), k);
+}
+
 # Ok(n) when x is an integer inside i64 — the domain of the evaluator's integer
 # functions; Err(0) for a fraction, NaN, +/-Inf or |x| >= 2^63. Through 2.4.8 a
 # fraction was truncated without a word: factorial(2.5) = 2, 3.9! = 6,
@@ -1343,13 +1632,7 @@ fn parse_power(e) {
             eval_set_err(e, ABACO_ERR_MATH);
             return base;
         }
-        var result = f64_from(1);
-        var fi = 1;
-        while (fi <= n) {
-            result = f64_mul(result, f64_from(fi));
-            fi = fi + 1;
-        }
-        base = result;
+        base = _eval_factorial(n);
     }
     # `^` is right-associative, so a^b^c^... recurses once per operator and
     # needs depth accounting for the same reason parse_unary does.
@@ -1493,22 +1776,163 @@ fn gcd_int(a, b) {
     return gcd(a, b);
 }
 
+enum EvalFn {
+    EVF_NONE;
+    EVF_ABS;
+    EVF_ACOS;
+    EVF_ACOSH;
+    EVF_ASIN;
+    EVF_ASINH;
+    EVF_ATAN;
+    EVF_ATAN2;
+    EVF_ATANH;
+    EVF_AVG;
+    EVF_BINOMIAL;
+    EVF_CEIL;
+    EVF_CHOOSE;
+    EVF_COS;
+    EVF_COSH;
+    EVF_DEG;
+    EVF_EXP;
+    EVF_FACTORIAL;
+    EVF_FIB;
+    EVF_FIBONACCI;
+    EVF_FLOOR;
+    EVF_FRACT;
+    EVF_GCD;
+    EVF_ISPRIME;
+    EVF_LCM;
+    EVF_LN;
+    EVF_LOG;
+    EVF_LOG10;
+    EVF_LOG2;
+    EVF_MAX;
+    EVF_MEAN;
+    EVF_MEDIAN;
+    EVF_MIN;
+    EVF_NEXTPRIME;
+    EVF_POW;
+    EVF_PREVPRIME;
+    EVF_RAD;
+    EVF_ROUND;
+    EVF_SGN;
+    EVF_SIGN;
+    EVF_SIN;
+    EVF_SINH;
+    EVF_SQRT;
+    EVF_STDDEV;
+    EVF_STDEV;
+    EVF_TAN;
+    EVF_TANH;
+    EVF_TOTIENT;
+    EVF_TRUNC;
+}
+
+# The builtin a call names, as an EvalFn id (EVF_NONE if none). Bucketed by the
+# first byte, so a call costs a few streq rather than a walk of all 48 names:
+# through 2.4.9 call_function compared the name against each builtin in turn,
+# ~1.1 us of a 1.7 us call (2.4.9 audit).
+fn _fn_id(name) {
+    var c = load8(name);
+    if (c == 97) {
+        if (streq(name, "abs") == 1) { return EVF_ABS; }
+        if (streq(name, "acos") == 1) { return EVF_ACOS; }
+        if (streq(name, "acosh") == 1) { return EVF_ACOSH; }
+        if (streq(name, "asin") == 1) { return EVF_ASIN; }
+        if (streq(name, "asinh") == 1) { return EVF_ASINH; }
+        if (streq(name, "atan") == 1) { return EVF_ATAN; }
+        if (streq(name, "atan2") == 1) { return EVF_ATAN2; }
+        if (streq(name, "atanh") == 1) { return EVF_ATANH; }
+        if (streq(name, "avg") == 1) { return EVF_AVG; }
+    } elif (c == 98) {
+        if (streq(name, "binomial") == 1) { return EVF_BINOMIAL; }
+    } elif (c == 99) {
+        if (streq(name, "ceil") == 1) { return EVF_CEIL; }
+        if (streq(name, "choose") == 1) { return EVF_CHOOSE; }
+        if (streq(name, "cos") == 1) { return EVF_COS; }
+        if (streq(name, "cosh") == 1) { return EVF_COSH; }
+    } elif (c == 100) {
+        if (streq(name, "deg") == 1) { return EVF_DEG; }
+    } elif (c == 101) {
+        if (streq(name, "exp") == 1) { return EVF_EXP; }
+    } elif (c == 102) {
+        if (streq(name, "factorial") == 1) { return EVF_FACTORIAL; }
+        if (streq(name, "fib") == 1) { return EVF_FIB; }
+        if (streq(name, "fibonacci") == 1) { return EVF_FIBONACCI; }
+        if (streq(name, "floor") == 1) { return EVF_FLOOR; }
+        if (streq(name, "fract") == 1) { return EVF_FRACT; }
+    } elif (c == 103) {
+        if (streq(name, "gcd") == 1) { return EVF_GCD; }
+    } elif (c == 105) {
+        if (streq(name, "isprime") == 1) { return EVF_ISPRIME; }
+    } elif (c == 108) {
+        if (streq(name, "lcm") == 1) { return EVF_LCM; }
+        if (streq(name, "ln") == 1) { return EVF_LN; }
+        if (streq(name, "log") == 1) { return EVF_LOG; }
+        if (streq(name, "log10") == 1) { return EVF_LOG10; }
+        if (streq(name, "log2") == 1) { return EVF_LOG2; }
+    } elif (c == 109) {
+        if (streq(name, "max") == 1) { return EVF_MAX; }
+        if (streq(name, "mean") == 1) { return EVF_MEAN; }
+        if (streq(name, "median") == 1) { return EVF_MEDIAN; }
+        if (streq(name, "min") == 1) { return EVF_MIN; }
+    } elif (c == 110) {
+        if (streq(name, "nextprime") == 1) { return EVF_NEXTPRIME; }
+    } elif (c == 112) {
+        if (streq(name, "pow") == 1) { return EVF_POW; }
+        if (streq(name, "prevprime") == 1) { return EVF_PREVPRIME; }
+    } elif (c == 114) {
+        if (streq(name, "rad") == 1) { return EVF_RAD; }
+        if (streq(name, "round") == 1) { return EVF_ROUND; }
+    } elif (c == 115) {
+        if (streq(name, "sgn") == 1) { return EVF_SGN; }
+        if (streq(name, "sign") == 1) { return EVF_SIGN; }
+        if (streq(name, "sin") == 1) { return EVF_SIN; }
+        if (streq(name, "sinh") == 1) { return EVF_SINH; }
+        if (streq(name, "sqrt") == 1) { return EVF_SQRT; }
+        if (streq(name, "stddev") == 1) { return EVF_STDDEV; }
+        if (streq(name, "stdev") == 1) { return EVF_STDEV; }
+    } elif (c == 116) {
+        if (streq(name, "tan") == 1) { return EVF_TAN; }
+        if (streq(name, "tanh") == 1) { return EVF_TANH; }
+        if (streq(name, "totient") == 1) { return EVF_TOTIENT; }
+        if (streq(name, "trunc") == 1) { return EVF_TRUNC; }
+    }
+    return EVF_NONE;
+}
+
+# Arguments a builtin takes: 1 or 2, or -1 for the variadic statistics
+# (one or more).
+fn _fn_arity(fid) {
+    if (fid == EVF_MEAN || fid == EVF_AVG || fid == EVF_MEDIAN || fid == EVF_STDDEV || fid == EVF_STDEV) {
+        return 0 - 1;
+    }
+    if (fid == EVF_ATAN2 || fid == EVF_BINOMIAL || fid == EVF_CHOOSE || fid == EVF_GCD) { return 2; }
+    if (fid == EVF_LCM || fid == EVF_MAX || fid == EVF_MIN || fid == EVF_POW) { return 2; }
+    return 1;
+}
+
 fn call_function(e, name, args, nargs) {
+    var fid = _fn_id(name);
+    if (fid == EVF_NONE) {
+        eval_set_err(e, ABACO_ERR_UNKNOWN_FN);
+        return f64_from(0);
+    }
+    var arity = _fn_arity(fid);
+    if ((arity < 0 && nargs < 1) || (arity > 0 && nargs != arity)) {
+        eval_set_err(e, ABACO_ERR_ARITY);
+        return f64_from(0);
+    }
     var a = load64(args);
     var b = load64(args + 8);
 
     # Variable-arity functions first (they can have any nargs >= 1)
     if (nargs >= 1) {
         var is_mean = 0;
-        if (streq(name, "mean") == 1) { is_mean = 1; }
-        if (streq(name, "avg") == 1) { is_mean = 1; }
-        if (is_mean == 1) {
-            var sum = f64_from(0);
-            var mi = 0;
-            while (mi < nargs) { sum = f64_add(sum, load64(args + mi * 8)); mi = mi + 1; }
-            return f64_div(sum, f64_from(nargs));
-        }
-        if (streq(name, "median") == 1) {
+        if (fid == EVF_MEAN) { is_mean = 1; }
+        if (fid == EVF_AVG) { is_mean = 1; }
+        if (is_mean == 1) { return _eval_mean(args, nargs); }
+        if (fid == EVF_MEDIAN) {
             # A NaN has no place in an order; through 2.4.8 the bubble sort put
             # it wherever the comparisons left it, so the answer depended on the
             # argument order (2.4.9 audit).
@@ -1540,62 +1964,49 @@ fn call_function(e, name, args, nargs) {
             return f64_div(f64_add(mid1, mid2), f64_from(2));
         }
         var is_std = 0;
-        if (streq(name, "stddev") == 1) { is_std = 1; }
-        if (streq(name, "stdev") == 1) { is_std = 1; }
-        if (is_std == 1) {
-            var sum = f64_from(0);
-            var si = 0;
-            while (si < nargs) { sum = f64_add(sum, load64(args + si * 8)); si = si + 1; }
-            var smean = f64_div(sum, f64_from(nargs));
-            var vsum = f64_from(0);
-            si = 0;
-            while (si < nargs) {
-                var diff = f64_sub(load64(args + si * 8), smean);
-                vsum = f64_add(vsum, f64_mul(diff, diff));
-                si = si + 1;
-            }
-            return f64_sqrt(f64_div(vsum, f64_from(nargs)));
-        }
+        if (fid == EVF_STDDEV) { is_std = 1; }
+        if (fid == EVF_STDEV) { is_std = 1; }
+        if (is_std == 1) { return _eval_stddev(args, nargs); }
     }
 
     # 1-arg functions
     if (nargs == 1) {
-        if (streq(name, "sqrt") == 1) { return f64_sqrt(a); }
-        if (streq(name, "sin") == 1) { return f64_sin(a); }
-        if (streq(name, "cos") == 1) { return f64_cos(a); }
-        if (streq(name, "tan") == 1) { return f64_div(f64_sin(a), f64_cos(a)); }
-        if (streq(name, "log") == 1) { return _eval_log10(a); }
-        if (streq(name, "log10") == 1) { return _eval_log10(a); }
-        if (streq(name, "ln") == 1) { return f64_ln(a); }
-        if (streq(name, "log2") == 1) { return f64_log2(a); }
-        if (streq(name, "abs") == 1) { return f64_abs(a); }
-        if (streq(name, "ceil") == 1) { return f64_ceil(a); }
-        if (streq(name, "floor") == 1) { return f64_floor(a); }
-        if (streq(name, "round") == 1) { return f64_round_half_away(a); }
-        if (streq(name, "exp") == 1) { return f64_exp(a); }
+        if (fid == EVF_SQRT) { return f64_sqrt(a); }
+        if (fid == EVF_SIN) { return f64_sin(a); }
+        if (fid == EVF_COS) { return f64_cos(a); }
+        if (fid == EVF_TAN) { return _eval_tan(a); }
+        if (fid == EVF_LOG) { return _eval_log10(a); }
+        if (fid == EVF_LOG10) { return _eval_log10(a); }
+        if (fid == EVF_LN) { return f64_ln(a); }
+        if (fid == EVF_LOG2) { return f64_log2(a); }
+        if (fid == EVF_ABS) { return f64_abs(a); }
+        if (fid == EVF_CEIL) { return f64_ceil(a); }
+        if (fid == EVF_FLOOR) { return f64_floor(a); }
+        if (fid == EVF_ROUND) { return f64_round_half_away(a); }
+        if (fid == EVF_EXP) { return f64_exp(a); }
         # Inverse trig — stdlib math.cyr (Cyrius 4.8.5+).
-        if (streq(name, "asin") == 1) { return f64_asin(a); }
-        if (streq(name, "acos") == 1) { return f64_acos(a); }
-        if (streq(name, "atan") == 1) { return f64_atan(a); }
+        if (fid == EVF_ASIN) { return f64_asin(a); }
+        if (fid == EVF_ACOS) { return f64_acos(a); }
+        if (fid == EVF_ATAN) { return f64_atan(a); }
         # Hyperbolic + inverse hyperbolic — stdlib math.cyr.
-        if (streq(name, "sinh") == 1) { return f64_sinh(a); }
-        if (streq(name, "cosh") == 1) { return f64_cosh(a); }
-        if (streq(name, "tanh") == 1) { return f64_tanh(a); }
-        if (streq(name, "asinh") == 1) { return f64_asinh(a); }
-        if (streq(name, "acosh") == 1) { return f64_acosh(a); }
-        if (streq(name, "atanh") == 1) { return f64_atanh(a); }
-        if (streq(name, "trunc") == 1) { return f64_trunc(a); }
-        if (streq(name, "fract") == 1) { return f64_fract(a); }
+        if (fid == EVF_SINH) { return f64_sinh(a); }
+        if (fid == EVF_COSH) { return f64_cosh(a); }
+        if (fid == EVF_TANH) { return f64_tanh(a); }
+        if (fid == EVF_ASINH) { return f64_asinh(a); }
+        if (fid == EVF_ACOSH) { return f64_acosh(a); }
+        if (fid == EVF_ATANH) { return f64_atanh(a); }
+        if (fid == EVF_TRUNC) { return f64_trunc(a); }
+        if (fid == EVF_FRACT) { return f64_fract(a); }
         # NaN stays NaN; the stdlib's f64_sign answered 0 for it (2.4.9 audit).
-        if (streq(name, "sign") == 1 || streq(name, "sgn") == 1) {
+        if (fid == EVF_SIGN || fid == EVF_SGN) {
             if (f64_eq(a, a) == 0) { return a; }
             return f64_sign(a);
         }
-        if (streq(name, "deg") == 1) {
+        if (fid == EVF_DEG) {
             # radians to degrees: a * 180/pi
             return f64_mul(a, f64_div(f64_from(180), CONST_PI));
         }
-        if (streq(name, "rad") == 1) {
+        if (fid == EVF_RAD) {
             # degrees to radians: a * pi/180
             return f64_mul(a, f64_div(CONST_PI, f64_from(180)));
         }
@@ -1607,21 +2018,18 @@ fn call_function(e, name, args, nargs) {
         # saturation NaN arrived as 0 (factorial(NaN) = 1, nextprime(NaN) = 2)
         # and 1e300 as i64_MAX, which next_prime overflowed into a search that
         # never returned. A refused argument gets exactly what that i64_MIN did.
-        if (streq(name, "factorial") == 1) {
+        if (fid == EVF_FACTORIAL) {
             var nt, n = _int_arg(a);
             if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             if (n > 170) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
-            var result = f64_from(1);
-            var fi = 1;
-            while (fi <= n) { result = f64_mul(result, f64_from(fi)); fi = fi + 1; }
-            return result;
+            return _eval_factorial(n);
         }
-        if (streq(name, "isprime") == 1) {
+        if (fid == EVF_ISPRIME) {
             var nt, n = _int_arg(a);
             if (is_ok(nt) == 0 || n < 0) { return f64_from(0); }
             return f64_from(is_prime(n));
         }
-        if (streq(name, "nextprime") == 1) {
+        if (fid == EVF_NEXTPRIME) {
             var nt, n = _int_arg(a);
             if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             # 0 means i64 has no larger prime (n >= 2^63 - 25).
@@ -1629,7 +2037,7 @@ fn call_function(e, name, args, nargs) {
             if (np == 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             return f64_from(np);
         }
-        if (streq(name, "prevprime") == 1) {
+        if (fid == EVF_PREVPRIME) {
             var nt, n = _int_arg(a);
             if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             var rt, rv = prev_prime(n);
@@ -1637,7 +2045,7 @@ fn call_function(e, name, args, nargs) {
             eval_set_err(e, ABACO_ERR_MATH);
             return f64_from(0);
         }
-        if (streq(name, "totient") == 1) {
+        if (fid == EVF_TOTIENT) {
             var nt, n = _int_arg(a);
             if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             # totient() trial-divides to sqrt(n), so an unbounded n is an
@@ -1649,8 +2057,8 @@ fn call_function(e, name, args, nargs) {
             return f64_from(totient(n));
         }
         var is_fib = 0;
-        if (streq(name, "fibonacci") == 1) { is_fib = 1; }
-        if (streq(name, "fib") == 1) { is_fib = 1; }
+        if (fid == EVF_FIBONACCI) { is_fib = 1; }
+        if (fid == EVF_FIB) { is_fib = 1; }
         if (is_fib == 1) {
             var nt, n = _int_arg(a);
             if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
@@ -1668,15 +2076,15 @@ fn call_function(e, name, args, nargs) {
         # (2.4.9 audit); the signed-zero and (Inf, Inf) rows of C99 atan2 are
         # ganita's (roadmap).
         if (f64_eq(a, a) == 0) {
-            if (streq(name, "min") == 1 || streq(name, "max") == 1 || streq(name, "atan2") == 1) { return a; }
+            if (fid == EVF_MIN || fid == EVF_MAX || fid == EVF_ATAN2) { return a; }
         }
         if (f64_eq(b, b) == 0) {
-            if (streq(name, "min") == 1 || streq(name, "max") == 1 || streq(name, "atan2") == 1) { return b; }
+            if (fid == EVF_MIN || fid == EVF_MAX || fid == EVF_ATAN2) { return b; }
         }
-        if (streq(name, "min") == 1) { return f64_min(a, b); }
-        if (streq(name, "max") == 1) { return f64_max(a, b); }
-        if (streq(name, "pow") == 1) { return eval_pow(a, b); }
-        if (streq(name, "atan2") == 1) {
+        if (fid == EVF_MIN) { return f64_min(a, b); }
+        if (fid == EVF_MAX) { return f64_max(a, b); }
+        if (fid == EVF_POW) { return eval_pow(a, b); }
+        if (fid == EVF_ATAN2) {
             # Quadrant-correct two-arg arctangent (stdlib math.cyr, 4.8.5+).
             # Closes the pre-4.8.5 Q2/Q3 bug where we returned atan(y/x)
             # without quadrant fix.
@@ -1697,7 +2105,7 @@ fn call_function(e, name, args, nargs) {
         # divided i64_MIN by it and trapped. (gcd of that pair answered -1 on
         # x86 through 6.6.7.) Every other lcm result is unchanged — the stdlib
         # returns |lcm| whatever the operand signs.
-        if (streq(name, "gcd") == 1) {
+        if (fid == EVF_GCD) {
             var gat, ga = _int_arg(f64_abs(a));
             var gbt, gb = _int_arg(f64_abs(b));
             if (is_ok(gat) == 0 || is_ok(gbt) == 0) {
@@ -1706,7 +2114,7 @@ fn call_function(e, name, args, nargs) {
             }
             return f64_from(gcd_int(ga, gb));
         }
-        if (streq(name, "lcm") == 1) {
+        if (fid == EVF_LCM) {
             var lat, la = _int_arg(f64_abs(a));
             var lbt, lb = _int_arg(f64_abs(b));
             if (is_ok(lat) == 0 || is_ok(lbt) == 0) {
@@ -1726,8 +2134,8 @@ fn call_function(e, name, args, nargs) {
             return f64_from(lcm(la, lb));
         }
         var is_binom = 0;
-        if (streq(name, "binomial") == 1) { is_binom = 1; }
-        if (streq(name, "choose") == 1) { is_binom = 1; }
+        if (fid == EVF_BINOMIAL) { is_binom = 1; }
+        if (fid == EVF_CHOOSE) { is_binom = 1; }
         if (is_binom == 1) {
             var bnt, bn = _int_arg(a);
             var bkt, bk = _int_arg(b);
@@ -1807,11 +2215,11 @@ fn _tok_can_end(t) {
 # operators, '(' and ',', and the name before a dropped '(') is dropped, any
 # parenthesis still open is closed, and the result is parsed again — "2+3*"
 # previews 5, "2*(3+4" previews 14, "2+sqrt(" 2. If closing a call still being
-# typed produces an unknown-name error ("2+max(7" -> max(7), an arity miss),
-# the prefix before that call is tried instead, at most ABACO_PARTIAL_TRIES
-# times. Any other semantic error (DIV_ZERO, MATH, an unknown name with no call
-# left open) is the answer, not a sign the input is unfinished, and is returned
-# as it is.
+# typed produces an unknown-name or arity error ("2+max(7" -> max(7), one
+# argument short), the prefix before that call is tried instead, at most
+# ABACO_PARTIAL_TRIES times. Any other semantic error (DIV_ZERO, MATH, an
+# unknown name or wrong arity with no call left open) is the answer, not a sign
+# the input is unfinished, and is returned as it is.
 #
 # Through 2.4.8 the fallback re-parsed EVERY shorter prefix: O(tokens^2) work, so
 # a pasted 2.7 KB input with a hundred capped totient() calls took 92 s here
@@ -1877,10 +2285,11 @@ fn _eval_partial_run(e, expr) {
             return result;
         }
         # Closing a call the user is still typing can invent an error they
-        # never typed: "2+max(7" closed is max(7), one argument short. Back off
+        # never typed: "2+max(7" closed is max(7), one argument short (an arity
+        # error since 2.4.10, UNKNOWN_FN before). Back off
         # to before that call and try the shorter prefix ("2"). With no call
         # left open, an unknown name is real and stands.
-        if ((e2 == ABACO_ERR_UNKNOWN_FN || e2 == ABACO_ERR_UNKNOWN_VAR) && call_at >= 0) {
+        if ((e2 == ABACO_ERR_UNKNOWN_FN || e2 == ABACO_ERR_UNKNOWN_VAR || e2 == ABACO_ERR_ARITY) && call_at >= 0) {
             k = _partial_cut(toks, call_at);
             tries = tries + 1;
         } else {

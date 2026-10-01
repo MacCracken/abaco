@@ -12,7 +12,7 @@ In your project's `cyrius.cyml`:
 ```toml
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.4.9"                 # pin to a released tag, never a branch
+tag = "2.4.10"                 # pin to a released tag, never a branch
 modules = ["dist/abaco.cyr"]  # the bundle is the only file you name
 ```
 
@@ -82,6 +82,22 @@ fn main() {
 Bump the `tag` and run `cyrius deps`. abaco follows SemVer (post-1.0): patch and
 minor bumps are source-compatible; a major bump documents breaking changes in
 [`CHANGELOG.md`](../../CHANGELOG.md) with a migration section.
+
+### 2.4.10 — one new error code, and a few more correct last bits
+
+- **`ABACO_ERR_ARITY` (7)** is new: a known builtin with the wrong number of
+  arguments (`sin(1, 2)`, `max(1)`, `mean()`). It used to be
+  `ABACO_ERR_UNKNOWN_FN`. If you map error codes to messages, add one; every
+  other code keeps its value.
+- **Below absolute zero is refused** with `UERR_CONVERT` (−300 C, −1 K, −500 F),
+  including a conversion to the same unit.
+- **Results that move in the last bits**, all toward correct: `tan` (now
+  ≤ 1 ulp), `factorial` / `n!` (now exact for n ≤ 170), `mean` (now correctly
+  rounded, and no overflow), `stddev` (no overflow or underflow), subnormal
+  and > 18-digit literals, and the window functions (now bit-exact symmetric,
+  values within a few ulp of before). dhvani and jalwa call no window function
+  through abaco, so nothing there moves.
+- New units `short_ton` and `long_ton`; bare `ton` is still the metric tonne.
 
 ### 2.4.9 — a full audit: re-vendor, then check the rows that apply to you
 

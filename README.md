@@ -60,7 +60,7 @@ stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged",
 
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.4.9"
+tag = "2.4.10"
 modules = ["dist/abaco.cyr"]   # self-contained library bundle
 ```
 
