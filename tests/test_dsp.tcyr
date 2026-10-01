@@ -18,6 +18,12 @@ include "src/dsp.cyr"
 # Helper: check f64 value is within tolerance of expected (as integers scaled by 1000)
 # Multiply both by scale, convert to int, check abs diff <= tolerance
 fn assert_f64_near(val, expected, tol_thousandths, name) {
+    # f64_to(NaN) is 0 from Cyrius 6.6.8, so without this a NaN passed every
+    # row expecting ~0 (2.4.9 audit); a NaN matches only a NaN expectation.
+    if (f64_eq(val, val) == 0) {
+        assert(f64_eq(expected, expected) == 0, name);
+        return 0;
+    }
     var scale = f64_from(1000);
     var vi = f64_to(f64_mul(val, scale));
     var ei = f64_to(f64_mul(expected, scale));
@@ -48,11 +54,13 @@ fn test_poly_blep() {
 }
 
 fn test_sanitize() {
-    assert_eq(f64_to(sanitize_sample(f64_from(42))), 42, "sanitize normal");
-    assert_eq(f64_to(sanitize_sample(0x7FF0000000000000)), 0, "sanitize inf");
-    assert_eq(f64_to(sanitize_sample(0xFFF0000000000000)), 0, "sanitize neg inf");
-    assert_eq(f64_to(sanitize_sample(0x7FF8000000000000)), 0, "sanitize nan");
-    assert_eq(f64_to(sanitize_sample(f64_from(0))), 0, "sanitize zero");
+    # Bit-exact: through 2.4.8 these compared f64_to(result), and f64_to(NaN)
+    # is 0, so a sanitize that returned its NaN input passed "sanitize nan".
+    assert_eq(sanitize_sample(f64_from(42)), f64_from(42), "sanitize normal");
+    assert_eq(sanitize_sample(0x7FF0000000000000), 0, "sanitize inf");
+    assert_eq(sanitize_sample(0xFFF0000000000000), 0, "sanitize neg inf");
+    assert_eq(sanitize_sample(0x7FF8000000000000), 0, "sanitize nan");
+    assert_eq(sanitize_sample(f64_from(0)), 0, "sanitize zero");
     return 0;
 }
 
@@ -300,6 +308,135 @@ fn test_windows() {
     return 0;
 }
 
+# |actual - expected| <= 1e-12 * |expected|. A NaN never passes (2.4.9 audit:
+# the thousandths helper above cannot tell a window from a near miss).
+fn near_rel(actual, expected, name) {
+    var tol = f64_mul(f64_abs(expected), f64_div(f64_from(1), f64_from(1000000000000)));
+    assert(f64_le(f64_abs(f64_sub(actual, expected)), tol) == 1, name);
+    return 0;
+}
+
+# Reference values from python3 (math, and a 60-digit Decimal I0 series). The
+# 2.4.9 audit injected eight bugs into the window / sinc / cubic / PolyBLEP code
+# and all passed the old tests; every row here fails on such a change.
+fn test_window_values() {
+    near_rel(window_hann(16, 64), 0x3FE0661DB99AE82A, "hann(16,64)");
+    near_rel(window_hamming(16, 64), 0x3FE1A5A0778E83AC, "hamming(16,64)");
+    near_rel(window_blackman(16, 64), 0x3FD6906BEB064127, "blackman(16,64)");
+    near_rel(window_kaiser(16, 64, f64_from(8)), 0x3FD86B7F4EC39A7D, "kaiser(16,64,8)");
+    # Kaiser past beta ~20 needs more than the 29 I0 terms 2.4.8 summed: these
+    # were 10% high at beta 50 and x147 at beta 100.
+    near_rel(window_kaiser(0, 64, f64_from(50)), 0x3BB01A6EFF275407, "kaiser(0,64,50) (was +10%)");
+    near_rel(window_kaiser(16, 64, f64_from(50)), 0x3F5B28C176E0DC15, "kaiser(16,64,50) (was +9%)");
+    near_rel(window_kaiser(16, 64, f64_from(100)), 0x3EC57EAF9C95CF6F, "kaiser(16,64,100) (was x147)");
+    # window_kaiser_fill must agree with the per-sample generator.
+    var w = alloc(9 * 8);
+    store64(w + 8 * 8, 0x7FF4_0000_DEAD_0001);
+    window_kaiser_fill(w, 8, f64_from(14));
+    var i = 0;
+    var bad = 0;
+    while (i < 8) {
+        if (load64(w + i * 8) != window_kaiser(i, 8, f64_from(14))) { bad = bad + 1; }
+        i = i + 1;
+    }
+    assert_eq(bad, 0, "kaiser_fill == window_kaiser per sample");
+    assert_eq(load64(w + 8 * 8), 0x7FF4_0000_DEAD_0001, "kaiser_fill writes exactly size samples");
+    return 0;
+}
+
+fn test_window_bounds() {
+    # Outside [0, size) is 0 (2.4.8: wrapped-around nonzero values, or NaN).
+    assert_eq(window_hann(64, 64), 0, "hann n = size is 0 (was 0.0025)");
+    assert_eq(window_hann(0 - 1, 64), 0, "hann n = -1 is 0 (was 0.0025)");
+    assert_eq(window_hann(3, 3), 0, "hann(3, 3) is 0 (was 1.0)");
+    assert_eq(window_hamming(5, 3), 0, "hamming past the end is 0 (was 1.0)");
+    assert_eq(window_blackman(65, 64), 0, "blackman past the end is 0");
+    assert_eq(window_kaiser(64, 64, f64_from(8)), 0, "kaiser n = size is 0 (was NaN)");
+    assert_eq(window_hann(2, 0 - 5), 0, "negative size is empty (was 1.0)");
+    assert_eq(window_kaiser(0, 0, f64_from(8)), 0, "size 0 is empty");
+    # A one-sample window is [1].
+    assert_eq(window_hann(0, 1), f64_from(1), "hann(0,1) = 1");
+    assert_eq(window_kaiser(0, 1, f64_from(8)), f64_from(1), "kaiser(0,1) = 1");
+    return 0;
+}
+
+fn test_interp_values() {
+    near_rel(f64_cubic(f64_from(0), f64_from(1), f64_from(4), f64_from(9), f64_div(f64_from(1), f64_from(2))),
+      f64_div(f64_from(9), f64_from(4)), "cubic(0,1,4,9,0.5) = 2.25");
+    near_rel(f64_cubic(f64_from(1), f64_from(3), f64_from(2), f64_from(5), f64_div(f64_from(1), f64_from(4))),
+      0x4006F00000000000, "cubic(1,3,2,5,0.25) = 2.8671875");
+    var dt = f64_div(f64_from(1), f64_from(100));
+    near_rel(poly_blep(f64_div(f64_from(1), f64_from(200)), dt), f64_neg(f64_div(f64_from(1), f64_from(4))),
+      "poly_blep just past the edge = -0.25");
+    near_rel(poly_blep(f64_div(f64_from(199), f64_from(200)), dt), 0x3FCFFFFFFFFFFFF0,
+      "poly_blep just before the edge = 0.25");
+    near_rel(sinc_kernel(f64_div(f64_from(3), f64_from(2)), f64_from(4)), 0xBFC2C74DC47E428F,
+      "sinc_kernel(1.5, 4)");
+    # Degenerate kernels and huge arguments (2.4.8: NaN).
+    assert_eq(sinc_kernel(f64_from(0), f64_from(0)), 0, "sinc_kernel half_width 0 is 0 (was NaN)");
+    assert_eq(sinc_kernel(f64_from(0), f64_from(0 - 4)), 0, "sinc_kernel negative half_width is 0");
+    assert_eq(sinc_kernel(f64_from(0), 0x7FF0000000000000), f64_from(1), "sinc_kernel(0, +Inf) = 1 (was NaN)");
+    assert_eq(f64_sinc(0x4340000000000000), 0, "sinc(2^53) = 0 (was NaN)");
+    assert_eq(f64_sinc(0x7FF0000000000000), 0, "sinc(+Inf) = 0 (was NaN)");
+    assert(f64_eq(f64_sinc(0x7FF8000000000000), f64_sinc(0x7FF8000000000000)) == 0, "sinc(NaN) is NaN");
+    return 0;
+}
+
+# f64_round_half_away is the evaluator's round(). Through 2.4.8 it was
+# floor(x + 0.5), and the addition itself rounds.
+fn test_round_edges() {
+    assert_eq(f64_round_half_away(0x3FDFFFFFFFFFFFFF), 0, "round(0.49999999999999994) = 0 (was 1)");
+    assert_eq(f64_round_half_away(0xBFDFFFFFFFFFFFFF), 0x8000000000000000,
+      "round(-0.49999999999999994) = -0 (was -1)");
+    assert_eq(f64_round_half_away(0x4330000000000001), 0x4330000000000001,
+      "round(2^52 + 1) is itself (was 2^52 + 2)");
+    assert_eq(f64_round_half_away(0xC330000000000001), 0xC330000000000001, "round(-(2^52 + 1)) is itself");
+    assert_eq(f64_round_half_away(f64_neg(f64_div(f64_from(3), f64_from(10)))), 0x8000000000000000,
+      "round(-0.3) = -0");
+    assert_eq(f64_round_half_away(0x8000000000000000), 0x8000000000000000, "round(-0) = -0");
+    assert_eq(f64_round_half_away(0x7FF0000000000000), 0x7FF0000000000000, "round(+Inf) = +Inf");
+    var n = f64_round_half_away(0x7FF8000000000000);
+    assert(f64_eq(n, n) == 0, "round(NaN) is NaN");
+    assert_eq(f64_round_half_away(f64_div(f64_from(5), f64_from(2))), f64_from(3), "round(2.5) = 3 still");
+    assert_eq(f64_round_half_away(f64_div(f64_from(0 - 5), f64_from(2))), f64_from(0 - 3), "round(-2.5) = -3 still");
+    return 0;
+}
+
+# The three dB constants were each 1 ulp off their correctly rounded values
+# through 2.4.8 (CHANGELOG 2.4.9); pinned against an 80-digit derivation.
+fn test_db_constants_exact() {
+    assert_eq(DB_SCALE, 0x40215F2CED384F29, "DB_SCALE = 20/ln 10, correctly rounded");
+    assert_eq(DB_EXP, 0x3FBD791C5F888822, "DB_EXP = ln 10/20, correctly rounded");
+    assert_eq(DB_GAIN_EXP, 0x3FAD791C5F888822, "DB_GAIN_EXP = ln 10/40, correctly rounded");
+    return 0;
+}
+
+fn test_nan_and_domain() {
+    var nan = 0x7FF8000000000000;
+    var r = amplitude_to_db(nan);
+    assert(f64_eq(r, r) == 0, "amplitude_to_db(NaN) is NaN (was -Inf, i.e. silence)");
+    r = freq_to_midi(nan);
+    assert(f64_eq(r, r) == 0, "freq_to_midi(NaN) is NaN (was -Inf)");
+    assert_eq(amplitude_to_db(f64_from(0 - 1)), 0xFFF0000000000000, "amplitude_to_db(-1) is still -Inf");
+    # dBFS uses |a|, as documented (2.4.8: -Inf for any negative sample).
+    var half = f64_div(f64_from(1), f64_from(2));
+    assert_eq(amplitude_to_dbfs(f64_neg(half)), amplitude_to_dbfs(half), "dBFS(-0.5) = dBFS(0.5) (was -Inf)");
+    # time_constant takes f64 Hz. An integer rate is a ~1e-319 Hz subnormal, and
+    # through 2.4.8 it — and NaN — silently gave the one-sample exp(-1).
+    near_rel(time_constant(f64_from(10), f64_from(44100)), 0x3FEFED71F0DD5FBD, "time_constant(10 ms, 44.1 kHz)");
+    r = time_constant(f64_from(10), 44100);
+    assert(f64_eq(r, r) == 0, "time_constant with an integer sample rate is NaN (was exp(-1))");
+    r = time_constant(nan, f64_from(44100));
+    assert(f64_eq(r, r) == 0, "time_constant(NaN ms) is NaN (was exp(-1))");
+    r = time_constant(f64_from(0 - 5), f64_from(44100));
+    assert(f64_eq(r, r) == 0, "time_constant(-5 ms) is NaN");
+    near_rel(time_constant(f64_from(0), f64_from(44100)), 0x3FD78B56362CEF38, "time_constant(0 ms) clamps to one sample");
+    # rms2 through hypot (2.4.8 squared first: +Inf and 0 here).
+    near_rel(f64_rms2(0x6974E718D7D7625A, 0x6974E718D7D7625A), 0x6974E718D7D7625A, "rms2(1e200, 1e200) = 1e200");
+    near_rel(f64_rms2(0x16687E92154EF7AC, 0x16687E92154EF7AC), 0x16687E92154EF7AC, "rms2(1e-200, 1e-200) = 1e-200");
+    return 0;
+}
+
 fn test_interpolation() {
     # Cubic should pass through b at t=0 and through c at t=1.
     var a = f64_from(0);
@@ -422,6 +559,12 @@ fn main() {
     test_chromagram();
     test_audio_conv();
     test_dbfs();
+    test_window_values();
+    test_window_bounds();
+    test_interp_values();
+    test_round_edges();
+    test_db_constants_exact();
+    test_nan_and_domain();
     # Propagate failure to the process exit code. assert_summary() RETURNS
     # _assert_fail; discarding it and returning 0 made a red suite exit 0, and
     # CI gates on the exit code — so failures shipped green (fixed 2.4.4).

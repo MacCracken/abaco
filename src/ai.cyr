@@ -1,8 +1,10 @@
 # abaco::ai — natural-language parsing, calculation history, currency conversion.
 #
-# The currency converter is split into a pure rates cache (`set_rates` +
-# `convert`). Live HTTP fetch via hoosh is a follow-up — docs/development/roadmap.md
-# (2.3.x "Still open") — pending hoosh as a sibling dep.
+# The currency converter is a rates cache (`set_rates` + `convert`) plus a
+# live fetch (`CurrencyCache_fetch`) over lib/http.cyr. That client has no
+# TLS, so the fetch works against a plaintext http://localhost or 127.0.0.1
+# server only; an https:// URL passes validation but cannot connect yet.
+# Routing through hoosh, which would add TLS, is on docs/development/roadmap.md.
 
 enum AiError {
     AI_OK;
@@ -84,70 +86,49 @@ fn _nl_starts_with(s, prefix) {
     return 1;
 }
 
-# Strip prefix from s if present; returns fresh copy (of s untouched if no match).
-fn _nl_strip_prefix(s, prefix) {
-    if (_nl_starts_with(s, prefix) == 0) { return s; }
-    var pl = strlen(prefix);
-    var sl = strlen(s);
-    var n = sl - pl;
-    var buf = alloc(n + 1);
-    memcpy(buf, s + pl, n);
-    store8(buf + n, 0);
-    return buf;
-}
-
-# Try parse full cstring as f64. Returns Ok(value) or Err(0).
-# Uses stdlib f64_parse (Cyrius 4.10.2+) for the heavy lifting, but
-# enforces strict "entire string consumed" semantics — trailing junk
-# (e.g. "2+3") is rejected. This strictness is load-bearing for the
-# CWE-917 guard in _nl_try_percent_of.
+# Parse the whole cstring as one decimal literal. Returns Ok(value) or Err(0).
+# Grammar: optional blanks, optional sign, digits with at most one '.' and at
+# least one digit, an optional e/E exponent with optional sign and 1+ digits,
+# then the end of the string. The value comes from the evaluator's
+# parse_number, so a literal means the same here as inside an expression
+# (correctly rounded); one that overflows to Inf is refused. The strictness is
+# load-bearing for the CWE-917 guard in _nl_try_percent_of.
 fn _nl_parse_f64(s) {
+    if (s == 0) { return Err(0); }
     var len = strlen(s);
-    if (len == 0) { return Err(0); }
-    # Quick pre-check: first non-whitespace must be sign, digit, or dot.
     var i = 0;
-    while (i < len) {
-        var c = load8(s + i);
-        if (c != 32) { if (c != 9) { break; } }
+    while (i < len && (load8(s + i) == 32 || load8(s + i) == 9)) { i = i + 1; }
+    var neg = 0;
+    if (i < len && (load8(s + i) == 45 || load8(s + i) == 43)) {
+        if (load8(s + i) == 45) { neg = 1; }
         i = i + 1;
     }
-    if (i == len) { return Err(0); }
-    var c0 = load8(s + i);
-    if (c0 != 45) { if (c0 != 43) { if (c0 != 46) {
-                if (c0 < 48) { return Err(0); }
-                if (c0 > 57) { return Err(0); }
-            } } }
-    # Parse via stdlib, then verify the entire string was consumed by
-    # re-scanning: after optional sign, digits/dot/exponent should reach NUL.
-    var v = f64_parse(s);
-    # Verify: walk past the same characters f64_parse would consume.
-    var j = i;
-    if (load8(s + j) == 45 || load8(s + j) == 43) { j = j + 1; }
-    var saw_digit = 0;
-    while (j < len) {
-        var cc = load8(s + j);
-        if (cc >= 48) { if (cc <= 57) { saw_digit = 1; j = j + 1; continue; } }
-        if (cc == 46) { j = j + 1; continue; }
-        break;
+    var start = i;
+    var digits = 0;
+    var dots = 0;
+    while (i < len) {
+        var c = load8(s + i);
+        if (c >= 48 && c <= 57) { digits = digits + 1; }
+        elif (c == 46) { dots = dots + 1; }
+        else { break; }
+        i = i + 1;
     }
-    if (saw_digit == 0) { return Err(0); }
-    # Optional exponent
-    if (j < len) {
-        var ec = load8(s + j);
-        if (ec == 101 || ec == 69) {
-            j = j + 1;
-            if (j < len) {
-                var sc = load8(s + j);
-                if (sc == 43 || sc == 45) { j = j + 1; }
-            }
-            while (j < len) {
-                var dc = load8(s + j);
-                if (dc < 48 || dc > 57) { break; }
-                j = j + 1;
-            }
+    if (digits == 0 || dots > 1) { return Err(0); }
+    if (i < len && (load8(s + i) == 101 || load8(s + i) == 69)) {
+        i = i + 1;
+        if (i < len && (load8(s + i) == 43 || load8(s + i) == 45)) { i = i + 1; }
+        var edigits = 0;
+        while (i < len && load8(s + i) >= 48 && load8(s + i) <= 57) {
+            edigits = edigits + 1;
+            i = i + 1;
         }
+        if (edigits == 0) { return Err(0); }
     }
-    if (j != len) { return Err(0); }  # trailing junk
+    if (i != len) { return Err(0); }
+    var v, end = parse_number(s, start, len);
+    if (end != len) { return Err(0); }
+    if (_f64_is_finite(v) == 0) { return Err(0); }
+    if (neg == 1) { v = f64_neg(v); }
     return Ok(v);
 }
 
@@ -182,25 +163,27 @@ fn _nl_is_currency(w) {
 
 # ---- NlParser entry points ----------------------------------------------
 
-# Try "<number> <ccy> to/in <ccy>".
-fn _nl_try_currency(lower) {
-    var words = _nl_split_ws(lower);
-    if (vec_len(words) < 4) { return 0; }
+# The word vecs below come in pairs: `words` from the text as typed and
+# `lwords` from its lowercased copy. str_lower keeps every byte position, so
+# the two split identically; keywords are matched on `lwords` and payloads
+# (unit names, which are case-significant) taken from `words`.
+
+# Try "<number> <ccy> to/in <ccy>", exactly four words.
+fn _nl_try_currency(words, lwords) {
+    if (vec_len(words) != 4) { return 0; }
     var valt, v = _nl_parse_f64(vec_get(words, 0));
     if (is_ok(valt) != 1) { return 0; }
-    var from = vec_get(words, 1);
-    var conn = vec_get(words, 2);
-    var to   = vec_get(words, 3);
-    if (streq(conn, "to") == 0) { if (streq(conn, "in") == 0) { return 0; } }
+    var from = vec_get(lwords, 1);
+    var conn = vec_get(lwords, 2);
+    var to = vec_get(lwords, 3);
+    if (streq(conn, "to") == 0 && streq(conn, "in") == 0) { return 0; }
     if (_nl_is_currency(from) == 0) { return 0; }
     if (_nl_is_currency(to) == 0) { return 0; }
     return ParsedQuery_new(PQ_CURRENCY, v, str_upper(from), str_upper(to));
 }
 
-# Try "<number> <unit...> to/in <unit...>" (strip optional leading "convert ").
-fn _nl_try_conversion(lower) {
-    var s = _nl_strip_prefix(lower, "convert ");
-    var words = _nl_split_ws(s);
+# Try "<number> <unit...> to/in <unit...>".
+fn _nl_try_conversion(words, lwords) {
     var wn = vec_len(words);
     if (wn < 4) { return 0; }
     var valt, v = _nl_parse_f64(vec_get(words, 0));
@@ -208,7 +191,7 @@ fn _nl_try_conversion(lower) {
     # Find "to" or "in" separator at position i >= 2.
     var i = 2;
     while (i < wn) {
-        var w = vec_get(words, i);
+        var w = vec_get(lwords, i);
         if (streq(w, "to") == 1) { break; }
         if (streq(w, "in") == 1) { break; }
         i = i + 1;
@@ -258,19 +241,20 @@ fn _nl_join_space(parts) {
     return buf;
 }
 
-# "<pct>% of <base>" -> "<base> * <pct> / 100", else 0.
-fn _nl_try_percent_of(s) {
+# "<pct>% of <base>" -> "<base> * <pct> / 100", else 0. The needle is found
+# in `lower` (so "% OF " counts); the operands are sliced from `s`.
+fn _nl_try_percent_of(s, lower) {
     var needle = "% of ";
     var len = strlen(s);
     var nlen = strlen(needle);
-    # find needle in s
+    # find needle in lower
     var pos = 0 - 1;
     var i = 0;
     while (i + nlen <= len) {
         var j = 0;
         var ok = 1;
         while (j < nlen) {
-            if (load8(s + i + j) != load8(needle + j)) { ok = 0; break; }
+            if (load8(lower + i + j) != load8(needle + j)) { ok = 0; break; }
             j = j + 1;
         }
         if (ok == 1) { pos = i; break; }
@@ -335,30 +319,58 @@ fn _nl_trim_simple(s) {
     return buf;
 }
 
-# Try calculation prefixes: "what is X", "calculate X", "compute X", "eval X", "how much is X", "what's X".
-fn _nl_try_calc(lower) {
-    var p1 = "what is ";
-    var p2 = "what's ";
-    var p3 = "calculate ";
-    var p4 = "compute ";
-    var p5 = "eval ";
-    var p6 = "how much is ";
-    var rest = 0;
-    if (_nl_starts_with(lower, p1) == 1) { rest = _nl_strip_prefix(lower, p1); }
-    elif (_nl_starts_with(lower, p2) == 1) { rest = _nl_strip_prefix(lower, p2); }
-    elif (_nl_starts_with(lower, p3) == 1) { rest = _nl_strip_prefix(lower, p3); }
-    elif (_nl_starts_with(lower, p4) == 1) { rest = _nl_strip_prefix(lower, p4); }
-    elif (_nl_starts_with(lower, p5) == 1) { rest = _nl_strip_prefix(lower, p5); }
-    elif (_nl_starts_with(lower, p6) == 1) { rest = _nl_strip_prefix(lower, p6); }
-    if (rest != 0) {
-        var pct = _nl_try_percent_of(rest);
-        if (pct != 0) { return ParsedQuery_new(PQ_CALCULATION, 0, pct, 0); }
-        return ParsedQuery_new(PQ_CALCULATION, 0, rest, 0);
-    }
-    # Standalone "X% of Y".
-    var pct2 = _nl_try_percent_of(lower);
-    if (pct2 != 0) { return ParsedQuery_new(PQ_CALCULATION, 0, pct2, 0); }
+# Length of the leading verb phrase of lowercased text, or 0. Keywords end in
+# a space so "evaluate" is not "eval" + "uate".
+fn _nl_verb_len(lower) {
+    if (_nl_starts_with(lower, "convert ") == 1) { return 8; }
+    if (_nl_starts_with(lower, "what is ") == 1) { return 8; }
+    if (_nl_starts_with(lower, "what's ") == 1) { return 7; }
+    if (_nl_starts_with(lower, "calculate ") == 1) { return 10; }
+    if (_nl_starts_with(lower, "compute ") == 1) { return 8; }
+    if (_nl_starts_with(lower, "eval ") == 1) { return 5; }
+    if (_nl_starts_with(lower, "how much is ") == 1) { return 12; }
     return 0;
+}
+
+# Copy of s with each U+2212 MINUS SIGN (E2 88 92), the minus of typeset and
+# pasted text, replaced by '-'. The evaluator rejects non-ASCII bytes, so
+# without this a pasted "3 − 2" is a parse error. Returns s if none.
+fn _nl_ascii_minus(s) {
+    var len = strlen(s);
+    var i = 0;
+    while (i + 2 < len) {
+        if (load8(s + i) == 226 && load8(s + i + 1) == 136 && load8(s + i + 2) == 146) { break; }
+        i = i + 1;
+    }
+    if (i + 2 >= len) { return s; }
+    var buf = alloc(len + 1);
+    var o = 0;
+    i = 0;
+    while (i < len) {
+        if (i + 2 < len && load8(s + i) == 226 && load8(s + i + 1) == 136 && load8(s + i + 2) == 146) {
+            store8(buf + o, 45);
+            o = o + 1;
+            i = i + 3;
+        } else {
+            store8(buf + o, load8(s + i));
+            o = o + 1;
+            i = i + 1;
+        }
+    }
+    store8(buf + o, 0);
+    return buf;
+}
+
+# s without one final '?' or '.' ("what is 2 + 3?", "5 km to mi."), trimmed.
+fn _nl_drop_final_punct(s) {
+    var len = strlen(s);
+    if (len == 0) { return s; }
+    var c = load8(s + len - 1);
+    if (c != 63 && c != 46) { return s; }
+    var buf = alloc(len);
+    memcpy(buf, s, len - 1);
+    store8(buf + len - 1, 0);
+    return _nl_trim_simple(buf);
 }
 
 # Does s contain any char that hints at arithmetic?
@@ -383,25 +395,50 @@ fn _nl_looks_numeric(s) {
 }
 
 # Parse natural language input into a ParsedQuery ptr, or 0 on parse failure.
+#
+# Keywords ("convert", "what is", "to", "in", "% of", currency codes) match in
+# any case; everything handed on — unit names, the expression — keeps the
+# case it was typed in, because SI symbols (MW vs mW) and evaluator names are
+# case-sensitive. One leading verb is stripped before every form is tried, so
+# "convert 100 usd to eur" is a currency query and "what is 5 km in mi" a
+# conversion.
 fn nl_parse(input) {
-    var trimmed = _nl_trim_simple(input);
-    var lower = str_lower(trimmed);
-    var q = _nl_try_currency(lower);
+    if (input == 0) { return 0; }
+    var text = _nl_drop_final_punct(_nl_trim_simple(_nl_ascii_minus(input)));
+    var lower = str_lower(text);
+    var vl = _nl_verb_len(lower);
+    var body = text;
+    var lbody = lower;
+    if (vl > 0) {
+        body = _nl_trim_simple(text + vl);
+        lbody = str_lower(body);
+    }
+    var words = _nl_split_ws(body);
+    var lwords = _nl_split_ws(lbody);
+    var q = _nl_try_currency(words, lwords);
     if (q != 0) { return q; }
-    q = _nl_try_conversion(lower);
+    q = _nl_try_conversion(words, lwords);
     if (q != 0) { return q; }
-    q = _nl_try_calc(lower);
-    if (q != 0) { return q; }
-    if (_nl_looks_numeric(lower) == 1) {
-        return ParsedQuery_new(PQ_CALCULATION, 0, lower, 0);
+    var pct = _nl_try_percent_of(body, lbody);
+    if (pct != 0) { return ParsedQuery_new(PQ_CALCULATION, 0, pct, 0); }
+    # A calculation verb hands on whatever follows it; "convert" does not.
+    if (vl > 0 && _nl_starts_with(lower, "convert ") == 0) {
+        return ParsedQuery_new(PQ_CALCULATION, 0, body, 0);
+    }
+    if (_nl_looks_numeric(text) == 1) {
+        return ParsedQuery_new(PQ_CALCULATION, 0, text, 0);
     }
     return 0;
 }
 
 # ================================================================
 # CalculationHistory — bounded ring buffer of (input, result, timestamp) entries.
-# Layout: { head_vec, max_entries }
+# Layout: { slots_vec, max_entries, head }
+#   Until slots_vec holds max_entries entries, a push appends and head stays 0.
+#   From then on a push overwrites the oldest slot (head) and advances head, so
+#   entry i (0 = oldest) is slot (head + i) % len. O(1) per push, no copying.
 # Entry layout: { input_cstr, result_cstr, timestamp_cstr }
+# The history keeps the caller's string pointers; it does not copy them.
 # ================================================================
 
 # Build a single history entry: input expression, formatted result, RFC-3339
@@ -419,14 +456,18 @@ fn he_result(e) { return load64(e + 8); }
 fn he_timestamp(e) { return load64(e + 16); }
 
 # Build a bounded history buffer holding up to `max_entries` entries.
-# Push is FIFO: the oldest entry is dropped when at capacity.
+# Push is FIFO: the oldest entry is dropped when at capacity. A history made
+# with max_entries <= 0 stores nothing.
 fn CalcHistory_new(max_entries) {
-    var h = alloc(16);
-    store64(h, vec_new());        # entries vec
+    var h = alloc(24);
+    store64(h, vec_new());        # slots
     store64(h + 8, max_entries);
+    store64(h + 16, 0);           # head
     return h;
 }
 
+# Raw slot storage, in ring order (not oldest-first once the ring has
+# wrapped). Use CalcHistory_get to read entries in order.
 fn history_entries(h) { return load64(h); }
 fn history_max(h) { return load64(h + 8); }
 
@@ -444,66 +485,61 @@ fn CalcHistory_is_empty(h) {
 # Discard all entries; the buffer remains usable with the same capacity.
 fn CalcHistory_clear(h) {
     store64(h, vec_new());
+    store64(h + 16, 0);
     return 0;
 }
 
-# Push a new entry. If at capacity, drop the oldest (index 0).
+# Store entry `e`, overwriting the oldest one when at capacity.
+fn _history_put(h, e) {
+    var max_n = load64(h + 8);
+    if (max_n <= 0) { return 0; }
+    var slots = load64(h);
+    if (vec_len(slots) < max_n) {
+        vec_push(slots, e);
+        return 0;
+    }
+    var head = load64(h + 16);
+    vec_set(slots, head, e);
+    head = head + 1;
+    if (head >= vec_len(slots)) { head = 0; }
+    store64(h + 16, head);
+    return 0;
+}
+
+# Push a new entry. If at capacity, drop the oldest.
 # The caller supplies the timestamp so we don't couple to a Cyrius time API.
 fn CalcHistory_push(h, input, result, timestamp) {
-    var entries = load64(h);
-    var max_n = load64(h + 8);
-    if (vec_len(entries) >= max_n) {
-        # drop-front: copy entries[1..] into a new vec.
-        var newv = vec_new();
-        var i = 1;
-        while (i < vec_len(entries)) {
-            vec_push(newv, vec_get(entries, i));
-            i = i + 1;
-        }
-        store64(h, newv);
-        entries = newv;
-    }
-    vec_push(entries, HistoryEntry_new(input, result, timestamp));
-    return 0;
+    return _history_put(h, HistoryEntry_new(input, result, timestamp));
 }
 
-# Return the i-th entry (0 is oldest). Out-of-range behaviour inherits
-# from the underlying vec; check CalcHistory_len first.
+# Return the i-th entry (0 is oldest), or 0 when i is out of range.
 fn CalcHistory_get(h, i) {
-    return vec_get(load64(h), i);
+    var slots = load64(h);
+    var n = vec_len(slots);
+    if (i < 0 || i >= n) { return 0; }
+    var k = load64(h + 16) + i;
+    if (k >= n) { k = k - n; }
+    return vec_get(slots, k);
 }
 
-# Append a JSON-escaped copy of cstring `s` to string builder `sb`.
-# Handles \" \\ \n \r \t; other control bytes pass through.
+# Append cstring `s` to string builder `sb` as a JSON string. Escapes every
+# byte RFC 8259 requires (quote, backslash and all of U+0000-U+001F); other
+# bytes pass through, so the output is UTF-8 when the input is.
 fn _he_json_escape(sb, s) {
-    str_builder_add_byte(sb, 34);                 # opening "
-    var len = strlen(s);
-    var i = 0;
-    while (i < len) {
-        var c = load8(s + i);
-        if (c == 34)      { str_builder_add_cstr(sb, "\\\""); }
-        elif (c == 92)    { str_builder_add_cstr(sb, "\\\\"); }
-        elif (c == 10)    { str_builder_add_cstr(sb, "\\n"); }
-        elif (c == 13)    { str_builder_add_cstr(sb, "\\r"); }
-        elif (c == 9)     { str_builder_add_cstr(sb, "\\t"); }
-        else              { str_builder_add_byte(sb, c); }
-        i = i + 1;
-    }
-    str_builder_add_byte(sb, 34);                 # closing "
+    str_builder_add_json_str(sb, str_new(s, strlen(s)));
     return 0;
 }
 
 # Serialise the whole history as a JSON array of `{input, result, timestamp}`
-# objects. Returns a fresh Str.
+# objects, oldest first. Returns a fresh Str.
 fn CalcHistory_to_json(h) {
     var sb = str_builder_new();
     str_builder_add_cstr(sb, "[");
-    var entries = load64(h);
-    var n = vec_len(entries);
+    var n = CalcHistory_len(h);
     var i = 0;
     while (i < n) {
         if (i > 0) { str_builder_add_cstr(sb, ","); }
-        var e = vec_get(entries, i);
+        var e = CalcHistory_get(h, i);
         str_builder_add_cstr(sb, "{\"input\":");
         _he_json_escape(sb, he_input(e));
         str_builder_add_cstr(sb, ",\"result\":");
@@ -517,34 +553,101 @@ fn CalcHistory_to_json(h) {
     return str_builder_build(sb);
 }
 
-# Extract a string-valued field `key` from a flat JSON object-slice at
-# `body[..len]`. Returns a fresh cstring or 0 if not found. Internal
-# helper for CalcHistory_from_json.
+# Value of hex digit byte c, or -1.
+fn _jf_hexval(c) {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    if (c >= 65 && c <= 70) { return c - 55; }
+    return 0 - 1;
+}
+
+# The four hex digits after body[off] (the 'u' of a \u escape) as a UTF-16
+# code unit, or -1 if they are missing or not hex.
+fn _jf_u16(body, len, off) {
+    if (off + 4 >= len) { return 0 - 1; }
+    var v = 0;
+    var k = 1;
+    while (k <= 4) {
+        var d = _jf_hexval(load8(body + off + k));
+        if (d < 0) { return 0 - 1; }
+        v = v * 16 + d;
+        k = k + 1;
+    }
+    return v;
+}
+
+# Append code point cp (1..0x10FFFF, not a surrogate) to sb as UTF-8.
+fn _jf_put_utf8(sb, cp) {
+    if (cp < 128) {
+        str_builder_add_byte(sb, cp);
+    } elif (cp < 2048) {
+        str_builder_add_byte(sb, 192 | (cp >> 6));
+        str_builder_add_byte(sb, 128 | (cp & 63));
+    } elif (cp < 65536) {
+        str_builder_add_byte(sb, 224 | (cp >> 12));
+        str_builder_add_byte(sb, 128 | ((cp >> 6) & 63));
+        str_builder_add_byte(sb, 128 | (cp & 63));
+    } else {
+        str_builder_add_byte(sb, 240 | (cp >> 18));
+        str_builder_add_byte(sb, 128 | ((cp >> 12) & 63));
+        str_builder_add_byte(sb, 128 | ((cp >> 6) & 63));
+        str_builder_add_byte(sb, 128 | (cp & 63));
+    }
+    return 0;
+}
+
+# Extract a string-valued field `key` from a JSON object-slice at
+# `body[..len]` and decode its escapes (RFC 8259 §7: \" \\ \/ \b \f \n \r
+# \t and \u plus four hex digits, surrogate pairs included, to UTF-8). Returns a fresh
+# cstring, or 0 when the key is missing, the value is not a string, the
+# string is unterminated, or an escape is unknown, malformed, a lone
+# surrogate or \u0000 (which a cstring cannot hold). Raw bytes, control
+# bytes included, are kept: files written before 2.4.9 carry them.
 fn _jfa_get_string(body, len, key) {
     var off = _jf_find_value(body, len, key);
     if (off < 0) { return 0; }
     if (load8(body + off) != 34) { return 0; }
     off = off + 1;
-    var start = off;
     var out_sb = str_builder_new();
+    var closed = 0;
     while (off < len) {
         var c = load8(body + off);
-        if (c == 34) { break; }
+        if (c == 34) { closed = 1; break; }
         if (c == 92) {
             off = off + 1;
-            if (off >= len) { break; }
+            if (off >= len) { return 0; }
             var esc = load8(body + off);
             if (esc == 110)      { str_builder_add_byte(out_sb, 10); }
             elif (esc == 114)    { str_builder_add_byte(out_sb, 13); }
             elif (esc == 116)    { str_builder_add_byte(out_sb, 9); }
+            elif (esc == 98)     { str_builder_add_byte(out_sb, 8); }
+            elif (esc == 102)    { str_builder_add_byte(out_sb, 12); }
             elif (esc == 34)     { str_builder_add_byte(out_sb, 34); }
             elif (esc == 92)     { str_builder_add_byte(out_sb, 92); }
-            else                 { str_builder_add_byte(out_sb, esc); }
+            elif (esc == 47)     { str_builder_add_byte(out_sb, 47); }
+            elif (esc == 117) {
+                var cp = _jf_u16(body, len, off);
+                if (cp <= 0) { return 0; }
+                off = off + 4;
+                if (cp >= 56320 && cp <= 57343) { return 0; }      # lone low surrogate
+                if (cp >= 55296 && cp <= 56319) {
+                    # High surrogate: a \uDC00-\uDFFF must follow.
+                    if (off + 2 >= len) { return 0; }
+                    if (load8(body + off + 1) != 92 || load8(body + off + 2) != 117) { return 0; }
+                    var lo = _jf_u16(body, len, off + 2);
+                    if (lo < 56320 || lo > 57343) { return 0; }
+                    cp = 65536 + ((cp - 55296) << 10) + (lo - 56320);
+                    off = off + 6;
+                }
+                _jf_put_utf8(out_sb, cp);
+            }
+            else { return 0; }
         } else {
             str_builder_add_byte(out_sb, c);
         }
         off = off + 1;
     }
+    if (closed == 0) { return 0; }
     var built = str_builder_build(out_sb);
     # Convert Str -> fresh cstring so the rest of the ai module can use it.
     var slen = str_len(built);
@@ -554,108 +657,237 @@ fn _jfa_get_string(body, len, key) {
     return buf;
 }
 
-# Parse a JSON array of `{input, result, timestamp}` objects and push each
-# entry into `h`. Caller supplies the max_entries when constructing `h`.
-# Returns 0 on success, AI_ERR_PARSE on malformed input.
-fn CalcHistory_from_json(h, json_cstr) {
-    var data = json_cstr;
-    var dlen = strlen(json_cstr);
-    var i = 0;
-    # Skip to opening bracket.
-    while (i < dlen) {
-        if (load8(data + i) == 91) { i = i + 1; break; }
+# Index of the first byte at or after i in data[..len] that is not JSON
+# whitespace (space, tab, CR, LF); len if there is none.
+fn _jf_skip_ws(data, len, i) {
+    while (i < len) {
+        var c = load8(data + i);
+        if (c != 32 && c != 9 && c != 10 && c != 13) { return i; }
         i = i + 1;
     }
+    return len;
+}
+
+# Index just past the JSON string whose opening quote is d[i], or -1 when it
+# is unterminated or holds an escape RFC 8259 does not define. Raw bytes are
+# accepted, control bytes included: history files written before 2.4.9 carry
+# them unescaped.
+fn _json_string_end(d, len, i) {
+    i = i + 1;
+    while (i < len) {
+        var c = load8(d + i);
+        if (c == 34) { return i + 1; }
+        if (c == 92) {
+            if (i + 1 >= len) { return 0 - 1; }
+            var esc = load8(d + i + 1);
+            if (esc == 117) {
+                if (_jf_u16(d, len, i + 1) < 0) { return 0 - 1; }
+                i = i + 6;
+            } elif (esc == 34 || esc == 92 || esc == 47 || esc == 98 || esc == 102
+              || esc == 110 || esc == 114 || esc == 116) {
+                i = i + 2;
+            } else {
+                return 0 - 1;
+            }
+        } else {
+            i = i + 1;
+        }
+    }
+    return 0 - 1;
+}
+
+# Index just past the JSON number at d[i] (RFC 8259 §6: -?(0|[1-9]digits)
+# (.digits)?([eE][+-]?digits)?), or -1.
+fn _json_number_end(d, len, i) {
+    if (i < len && load8(d + i) == 45) { i = i + 1; }
+    if (i >= len) { return 0 - 1; }
+    var c = load8(d + i);
+    if (c == 48) { i = i + 1; }
+    elif (c >= 49 && c <= 57) {
+        while (i < len && load8(d + i) >= 48 && load8(d + i) <= 57) { i = i + 1; }
+    } else {
+        return 0 - 1;
+    }
+    if (i < len && load8(d + i) == 46) {
+        i = i + 1;
+        var fd = 0;
+        while (i < len && load8(d + i) >= 48 && load8(d + i) <= 57) { i = i + 1; fd = fd + 1; }
+        if (fd == 0) { return 0 - 1; }
+    }
+    if (i < len && (load8(d + i) == 101 || load8(d + i) == 69)) {
+        i = i + 1;
+        if (i < len && (load8(d + i) == 43 || load8(d + i) == 45)) { i = i + 1; }
+        var ed = 0;
+        while (i < len && load8(d + i) >= 48 && load8(d + i) <= 57) { i = i + 1; ed = ed + 1; }
+        if (ed == 0) { return 0 - 1; }
+    }
+    return i;
+}
+
+# Index just past the JSON value that starts at d[i] (after whitespace), or
+# -1 when it is not one well-formed RFC 8259 value or nests deeper than
+# `depth` objects/arrays. The structural scans in this module find what they
+# need inside a document; this decides whether the document is JSON at all,
+# so they never read a malformed one (2.4.9 final review: a missing ':' or
+# comma inside an object slid through, and the rates loader then read the
+# next key's value as this one's).
+fn _json_value_end(d, len, i, depth) {
+    i = _jf_skip_ws(d, len, i);
+    if (i >= len) { return 0 - 1; }
+    var c = load8(d + i);
+    if (c == 34) { return _json_string_end(d, len, i); }
+    if (c == 116) { if (i + 4 <= len && memeq(d + i, "true", 4) == 1) { return i + 4; } return 0 - 1; }
+    if (c == 102) { if (i + 5 <= len && memeq(d + i, "false", 5) == 1) { return i + 5; } return 0 - 1; }
+    if (c == 110) { if (i + 4 <= len && memeq(d + i, "null", 4) == 1) { return i + 4; } return 0 - 1; }
+    if (c != 123 && c != 91) { return _json_number_end(d, len, i); }
+    if (depth <= 0) { return 0 - 1; }
+    var close = 125;
+    if (c == 91) { close = 93; }
+    i = _jf_skip_ws(d, len, i + 1);
+    if (i < len && load8(d + i) == close) { return i + 1; }
+    while (i < len) {
+        if (c == 123) {
+            if (load8(d + i) != 34) { return 0 - 1; }
+            i = _json_string_end(d, len, i);
+            if (i < 0) { return 0 - 1; }
+            i = _jf_skip_ws(d, len, i);
+            if (i >= len || load8(d + i) != 58) { return 0 - 1; }
+            i = i + 1;
+        }
+        i = _json_value_end(d, len, i, depth - 1);
+        if (i < 0) { return 0 - 1; }
+        i = _jf_skip_ws(d, len, i);
+        if (i >= len) { return 0 - 1; }
+        var sep = load8(d + i);
+        if (sep == close) { return i + 1; }
+        if (sep != 44) { return 0 - 1; }
+        i = _jf_skip_ws(d, len, i + 1);
+    }
+    return 0 - 1;
+}
+
+# 1 when d[0..len) is exactly one JSON value (whitespace around it allowed)
+# nesting at most `depth` deep.
+fn _json_doc_ok(d, len, depth) {
+    var end = _json_value_end(d, len, 0, depth);
+    if (end < 0) { return 0; }
+    if (_jf_skip_ws(d, len, end) != len) { return 0; }
+    return 1;
+}
+
+# Nesting limit for a history document: an array of flat objects needs 2.
+enum HistoryJson { AI_HISTORY_JSON_DEPTH = 64; }
+
+# Parse a JSON array of `{input, result, timestamp}` objects and append each
+# entry to `h` (oldest first; at capacity the oldest are dropped). Returns 0
+# on success and AI_ERR_PARSE on anything else: no leading '[', a missing ','
+# or closing ']', bytes after it, an object without the three string fields
+# or with a bad escape. The whole array is checked before the first entry is
+# stored, so an error leaves `h` as it was.
+fn CalcHistory_from_json(h, json_cstr) {
+    if (json_cstr == 0) { return AI_ERR_PARSE; }
+    var data = json_cstr;
+    var dlen = strlen(json_cstr);
+    if (_json_doc_ok(data, dlen, AI_HISTORY_JSON_DEPTH) == 0) { return AI_ERR_PARSE; }
+    var i = _jf_skip_ws(data, dlen, 0);
+    if (i >= dlen || load8(data + i) != 91) { return AI_ERR_PARSE; }
+    i = _jf_skip_ws(data, dlen, i + 1);
+    var staged = vec_new();
     var c = 0;
     var start = 0;
     var depth = 0;
-    while (i < dlen) {
-        # Find next object open-brace.
-        while (i < dlen) {
-            c = load8(data + i);
-            if (c == 123) { break; }
-            if (c == 34)  { i = _jf_skip_string(data, dlen, i); }
-            elif (c == 93)  { return 0; }   # closing ] — done
-            else { i = i + 1; }
-        }
-        if (i >= dlen) { return 0; }
-        # Find the matching close-brace, skipping over string contents.
-        #
-        # This scan used to count raw braces (2.3.4 fix): a single '{' or '}'
-        # inside any field — legal JSON needing no escape, and something
-        # `to_json` emits verbatim — moved the object boundary and made the
-        # whole remaining array unparseable. A two-entry history where one
-        # input contained '}' round-tripped to ZERO entries, silently, so
-        # save_to_file/load_from_file lost the lot.
-        start = i;
-        depth = 1;
-        i = i + 1;
-        while (i < dlen) {
-            c = load8(data + i);
-            if (c == 34) { i = _jf_skip_string(data, dlen, i); }
-            elif (c == 123) { depth = depth + 1; i = i + 1; }
-            elif (c == 125) {
-                depth = depth - 1;
-                if (depth == 0) { break; }
-                i = i + 1;
+    if (i < dlen && load8(data + i) == 93) {
+        i = i + 1;                                  # []
+    } else {
+        var more = 1;
+        while (more == 1) {
+            if (i >= dlen || load8(data + i) != 123) { return AI_ERR_PARSE; }
+            # Find the matching close-brace, skipping over string contents.
+            #
+            # This scan used to count raw braces (2.3.4 fix): a single '{' or
+            # '}' inside any field — legal JSON needing no escape, and
+            # something `to_json` emits verbatim — moved the object boundary
+            # and made the whole remaining array unparseable.
+            start = i;
+            depth = 1;
+            i = i + 1;
+            while (i < dlen) {
+                c = load8(data + i);
+                if (c == 34) { i = _jf_skip_string(data, dlen, i); }
+                elif (c == 123) { depth = depth + 1; i = i + 1; }
+                elif (c == 125) {
+                    depth = depth - 1;
+                    if (depth == 0) { break; }
+                    i = i + 1;
+                }
+                else { i = i + 1; }
             }
-            else { i = i + 1; }
+            if (depth != 0) { return AI_ERR_PARSE; }
+            var obj = data + start;
+            var olen = i - start + 1;
+            var inp = _jfa_get_string(obj, olen, "input");
+            var res = _jfa_get_string(obj, olen, "result");
+            var ts  = _jfa_get_string(obj, olen, "timestamp");
+            if (inp == 0) { return AI_ERR_PARSE; }
+            if (res == 0) { return AI_ERR_PARSE; }
+            if (ts == 0)  { return AI_ERR_PARSE; }
+            vec_push(staged, HistoryEntry_new(inp, res, ts));
+            i = _jf_skip_ws(data, dlen, i + 1);
+            if (i >= dlen) { return AI_ERR_PARSE; }
+            c = load8(data + i);
+            if (c == 44) { i = _jf_skip_ws(data, dlen, i + 1); }
+            elif (c == 93) { i = i + 1; more = 0; }
+            else { return AI_ERR_PARSE; }
         }
-        if (depth != 0) { return AI_ERR_PARSE; }
-        var obj = data + start;
-        var olen = i - start + 1;
-        var inp = _jfa_get_string(obj, olen, "input");
-        var res = _jfa_get_string(obj, olen, "result");
-        var ts  = _jfa_get_string(obj, olen, "timestamp");
-        if (inp == 0) { return AI_ERR_PARSE; }
-        if (res == 0) { return AI_ERR_PARSE; }
-        if (ts == 0)  { return AI_ERR_PARSE; }
-        CalcHistory_push(h, inp, res, ts);
-        i = i + 1;
+    }
+    if (_jf_skip_ws(data, dlen, i) != dlen) { return AI_ERR_PARSE; }
+    var k = 0;
+    while (k < vec_len(staged)) {
+        _history_put(h, vec_get(staged, k));
+        k = k + 1;
     }
     return 0;
 }
 
+# Largest history file save_to_file writes and load_from_file reads (16 MiB),
+# so whatever one saves the other can load.
+var AI_HISTORY_MAX_BYTES = 16777216;
+
 # Save the history to a JSON file at `path`. Returns 0 on success,
-# AI_ERR_HTTP on write failure (name chosen to reuse the code space).
+# AI_ERR_HTTP when the write fails or the JSON is over AI_HISTORY_MAX_BYTES
+# (the code is reused as "I/O error"). The write is atomic: a temp file is
+# renamed over `path`, so a failed save leaves the previous file intact.
 fn CalcHistory_save_to_file(h, path) {
     var s = CalcHistory_to_json(h);
-    var n = file_write_all(path, str_data(s), str_len(s));
-    if (n < 0) { return AI_ERR_HTTP; }
+    if (str_len(s) > AI_HISTORY_MAX_BYTES) { return AI_ERR_HTTP; }
+    if (file_write_atomic(path, str_data(s), str_len(s)) != 0) { return AI_ERR_HTTP; }
     return 0;
 }
 
 # Load a history from a JSON file, appending entries to an existing `h`.
 # Pass a freshly-constructed history to get a clean load. Returns 0 on
-# success, AI_ERR_PARSE on malformed JSON, AI_ERR_HTTP on read failure.
-# Load history from a JSON file. Returns 0 on success, AI_ERR_* otherwise.
-#
-# The buffer is one byte larger than the read cap so the NUL terminator has a
-# home INSIDE the allocation: `file_read_all` returns exactly `cap` for any
-# file of `cap` bytes or more, and the old `alloc(65536)` +
-# `store8(buf + 65536, 0)` wrote one byte past the end. `alloc` is a
-# header-less bump allocator aligned to 8, so that byte was the address the
-# next allocation would receive — and a hard fault whenever the block happened
-# to end on a chunk boundary. The parser's `strlen` then depended on a
-# terminator stored outside its own buffer.
-#
-# A file at or above the cap is rejected rather than silently truncated: a
-# half-read JSON array would parse as a short history with no error.
+# success (an empty file is an empty history), AI_ERR_PARSE on malformed JSON
+# or a file over AI_HISTORY_MAX_BYTES, AI_ERR_HTTP when the file cannot be
+# read. Through 2.4.8 the read cap was 64 KiB while save had none, so a
+# history of a few hundred entries saved fine and then failed to load.
 fn CalcHistory_load_from_file(h, path) {
-    var cap = 65536;
-    var buf = alloc(cap + 1);
-    var n = file_read_all(path, buf, cap);
-    if (n <= 0) { return AI_ERR_HTTP; }
-    if (n >= cap) { return AI_ERR_PARSE; }
-    store8(buf + n, 0);
+    var nb[8];
+    var buf = file_read_whole_max(path, AI_HISTORY_MAX_BYTES, &nb);
+    var n = load64(&nb);
+    if (buf == 0) {
+        if (n == 0 - 27) { return AI_ERR_PARSE; }   # -EFBIG
+        return AI_ERR_HTTP;
+    }
+    if (n == 0) { return 0; }
+    # JSON text holds no NUL; one here would hide the rest of the file from
+    # from_json, which reads a cstring.
+    if (strlen(buf) != n) { return AI_ERR_PARSE; }
     return CalcHistory_from_json(h, buf);
 }
 
 # ================================================================
-# CurrencyConverter — rates cache + conversion.
-# Live HTTP fetch via hoosh is a follow-up tracked in docs/development/roadmap.md
-# (2.3.x "Still open") — needs [deps.hoosh] and a JSON parser for nested
-# rate maps.
+# CurrencyConverter — rates cache + conversion, and the loopback live fetch
+# described at the top of this file.
 # Layout: { base_cstr, rates_map, base_url_cstr }
 # rates_map is a hashmap<cstr, f64_bits>
 # ================================================================
@@ -667,7 +899,14 @@ fn CurrencyCache_new(base_url) {
     var c = alloc(24);
     store64(c, 0);                 # base (unset)
     store64(c + 8, map_new());     # rates map
-    store64(c + 16, base_url);
+    # Copied, so a caller reusing its buffer cannot change the URL later.
+    var url = 0;
+    if (base_url != 0) {
+        var n = strlen(base_url);
+        url = alloc(n + 1);
+        memcpy(url, base_url, n + 1);
+    }
+    store64(c + 16, url);
     return c;
 }
 
@@ -731,8 +970,12 @@ fn _jf_skip_string(body, len, i) {
     return len;
 }
 
-# Find the offset of the value for `key` in the flat JSON object at
-# `body[..len]`, or -1. Returns the index of the value's first byte.
+# Find the offset of the value for `key` among the keys of the outermost
+# object in `body[..len]`, or -1. Returns the index of the value's first byte.
+#
+# Depth-aware (2.4.9): only a key at nesting depth 1 matches. A "base" key
+# inside "rates", or an "input" key inside a nested value, used to win over
+# the real one, so every rate could be read against the wrong base.
 #
 # String-aware (2.3.4): the previous version matched `"key"` anywhere in the
 # slice, so a *value* that happened to contain the text of a key name could be
@@ -747,9 +990,12 @@ fn _jf_find_value(body, len, key) {
     var j = 0;
     var ok = 0;
     var c = 0;
+    var depth = 0;
     while (i < len) {
         c = load8(body + i);
-        if (c == 34) {
+        if (c == 123 || c == 91) { depth = depth + 1; i = i + 1; }
+        elif (c == 125 || c == 93) { depth = depth - 1; i = i + 1; }
+        elif (c == 34) {
             send = _jf_skip_string(body, len, i);
             # A string is a KEY only if the next non-space byte is ':'.
             k = send;
@@ -761,7 +1007,7 @@ fn _jf_find_value(body, len, key) {
             if (k < len && load8(body + k) == 58) {
                 ok = 0;
                 # send - i - 2 is the raw byte length between the quotes.
-                if (send - i - 2 == klen) {
+                if (depth == 1 && send - i - 2 == klen) {
                     ok = 1;
                     j = 0;
                     while (j < klen) {
@@ -842,7 +1088,14 @@ fn _f64_is_finite(bits) {
     return 1;
 }
 
-# Sanity-check a rate: finite, strictly positive, and < 10^6.
+# 1 if a rate can be divided by and multiplied with: finite and > 0.
+fn _ccy_rate_usable(bits) {
+    if (_f64_is_finite(bits) == 0) { return 0; }
+    if (f64_gt(bits, 0) == 0) { return 0; }
+    return 1;
+}
+
+# Sanity-check a rate: finite, strictly positive, and <= 10^6.
 # Closes the audit MED-7 rate-poisoning detection.
 # Magnitudes > 10^6 are implausible for fiat currency exchange rates;
 # rejecting them turns silent poisoning into an explicit AI_ERR_CURRENCY.
@@ -904,9 +1157,32 @@ fn _ccy_json_depth_ok(s) {
     return 1;
 }
 
+# 1 when the object Str `s` has no object or array inside it (outside
+# strings): its own '{' is the only one.
+fn _ccy_rates_flat(s) {
+    var data = str_data(s);
+    var n = str_len(s);
+    var opens = 0;
+    var i = 0;
+    while (i < n) {
+        var ch = load8(data + i);
+        if (ch == 34) { i = _jf_skip_string(data, n, i); }
+        else {
+            if (ch == 123 || ch == 91) { opens = opens + 1; }
+            i = i + 1;
+        }
+    }
+    if (opens == 1) { return 1; }
+    return 0;
+}
+
 # Parse body into the cache: expected shape {"base":"USD","rates":{"EUR":0.92,...}}.
 # Returns 0 on success, AI_ERR_* on failure.
 fn _ccy_load_body(c, body, len) {
+    # The body must be one well-formed JSON document before any key is read:
+    # bayan_json_parse skips to the next ':' after a key, so "GBP" 0.79 (no
+    # colon) took the NEXT pair's value as GBP's rate.
+    if (_json_doc_ok(body, len, CCY_MAX_JSON_DEPTH) == 0) { return AI_ERR_CURRENCY; }
     var base = _jf_get_string(body, len, "base");
     if (base == 0) { return AI_ERR_CURRENCY; }
     var rates_obj = _jf_get_object(body, len, "rates");
@@ -914,6 +1190,9 @@ fn _ccy_load_body(c, body, len) {
     # MED-4: reject a payload too deeply nested to be a rates map, before the
     # scan below walks it. (Not a recursion guard — see the note on the cap.)
     if (_ccy_json_depth_ok(rates_obj) == 0) { return AI_ERR_CURRENCY; }
+    # A rates map is flat. bayan_json_parse stops at the first '}' it meets,
+    # so a nested value would silently drop every pair after it.
+    if (_ccy_rates_flat(rates_obj) == 0) { return AI_ERR_CURRENCY; }
     var pairs = bayan_json_parse(rates_obj);
     var rates = map_new();
     var i = 0;
@@ -926,9 +1205,19 @@ fn _ccy_load_body(c, body, len) {
         var kbuf = alloc(str_len(kstr) + 1);
         memcpy(kbuf, str_data(kstr), str_len(kstr));
         store8(kbuf + str_len(kstr), 0);
-        var vbuf = alloc(str_len(vstr) + 1);
-        memcpy(vbuf, str_data(vstr), str_len(vstr));
-        store8(vbuf + str_len(vstr), 0);
+        # Trim JSON whitespace: bayan_json_parse ends a bare value only at
+        # ',', '}', ' ' or LF, so a CRLF body hands over "0.79\r".
+        var vd = str_data(vstr);
+        var vn = str_len(vstr);
+        var vs = _jf_skip_ws(vd, vn, 0);
+        while (vn > vs) {
+            var tc = load8(vd + vn - 1);
+            if (tc != 32 && tc != 9 && tc != 10 && tc != 13) { break; }
+            vn = vn - 1;
+        }
+        var vbuf = alloc(vn - vs + 1);
+        memcpy(vbuf, vd + vs, vn - vs);
+        store8(vbuf + vn - vs, 0);
         var vt, rate_bits = _nl_parse_f64(vbuf);
         if (is_ok(vt) == 1) {
             if (_ccy_rate_plausible(rate_bits) == 1) {
@@ -1054,7 +1343,18 @@ fn CurrencyCache_convert(c, value, from_raw, to_raw) {
         if (map_has(rates, to) == 0) { AI_LAST_ERR = AI_ERR_CURRENCY; return 0; }
         to_rate = map_get(rates, to);
     }
+    # Rates installed with set_rates are not vetted, and a tiny accepted rate
+    # makes a huge cross-rate: refuse any rate or result that is not finite,
+    # and any rate that is not > 0, rather than return Inf as a success.
+    if (_ccy_rate_usable(from_rate) == 0 || _ccy_rate_usable(to_rate) == 0) {
+        AI_LAST_ERR = AI_ERR_CURRENCY;
+        return 0;
+    }
     var rate = f64_div(to_rate, from_rate);
     var result = f64_mul(value, rate);
+    if (_ccy_rate_usable(rate) == 0 || _f64_is_finite(result) == 0) {
+        AI_LAST_ERR = AI_ERR_CURRENCY;
+        return 0;
+    }
     return CurrencyResult_new(value, from, result, to, rate);
 }

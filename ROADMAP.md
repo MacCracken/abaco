@@ -32,15 +32,15 @@
 - [x] Parity audit — to_latex, eval_partial, list_units, missing units/aliases, hyperbolic trig
 - [x] ai module (2026-04-14) — NL parsing, calculation history, currency cache + convert + `CurrencyCache_fetch` via `lib/http.cyr` + nested JSON extractor.
 
-## Cyrius Port — Known Gaps (intentional or blocked)
+## Cyrius Port — Known Gaps (as recorded at the port; status at 2.4.9)
 
 - **f32 variants** — Cyrius is f64-only, no f32 type. All DSP uses f64. Not a gap.
-- **Token enum not public** — Tokenizer is internal to eval. Consumers use Evaluator_eval.
-- **Tuple returns** — pan/crossfade use output pointers instead. Cyrius has no multi-return.
-- **asin/acos/atan** — Implemented via sin/cos division (stopgap). Cyrius builtins requested.
-- **sinh/cosh/tanh** — Now use `lib/math.cyr` (`f64_sinh/cosh/tanh`) as of 2026-04-14.
-- **u128 / is_prime perf** — mod_mul still uses the binary double-and-add method. Cyrius 4.8.0 shipped `u128` scalar + `lib/u128.cyr`, but `u128_mod` is a software long-division loop and benched ~40x *slower* than the binary method. Revisit when the backend emits hardware 128-bit div-mod.
-- **256 function limit** — Tests must exclude eval to fit units tests. Cyrius raised to 1024 in v1.9+.
+- **Token enum not public** — Tokenizer is internal to eval. Consumers use Evaluator_eval. Still by design.
+- ~~**Tuple returns**~~ — Cyrius 6.5.21 added tuples; eval uses them (`_two_product`, `parse_number`, `_pow_int_dd`). pan/crossfade keep their output pointers for API stability.
+- ~~**asin/acos/atan**~~ — the evaluator calls the stdlib `f64_asin` / `f64_acos` / `f64_atan`.
+- ~~**sinh/cosh/tanh**~~ — stdlib `lib/math.cyr` since 2026-04-14.
+- ~~**u128 / is_prime perf**~~ — `mod_pow` delegates to the stdlib powmod (hardware 128-bit multiply on x86_64): `u64_powmod` since the Cyrius 4.8.5 collapse, `bayan_u64_powmod` since 2.3.0. aarch64 is still bit-serial in bayan; tracked in `docs/development/roadmap.md`.
+- ~~**256 function limit**~~ — Cyrius raised it to 1024 in v1.9; no longer a constraint.
 
 ## Ecosystem Rollout
 
@@ -99,12 +99,12 @@ Full report: [`docs/audit/2026-04-14.md`](docs/audit/2026-04-14.md).
 
 ### Still open from audit
 
-- [ ] **MED-4** Depth-cap `json_parse` at ~64 — needs audit of
-      `lib/json.cyr` recursion shape first (it's flat today, but verify).
+- [x] **MED-4** — `bayan_json_parse` is a flat scanner (verified 2.4.4); the
+      rates object is depth-capped at 8 since 2.3.x and must be flat since 2.4.9.
 - [ ] **LOW-8** Audit `lib/hashmap.cyr` for per-process seed / SipHash-class
       hash. Upstream concern — file against cyrius stdlib when picked up.
-- [ ] **LOW-9b** Additional regression tests — truncated HTTP response with
-      lying `Content-Length`, unit hashmap under synthetic collisions.
+- [x] **LOW-9b** — `test_ccy_truncated_body` (lying length) and
+      `test_hashmap_collisions` (200 keys through grow) landed.
 
 ### Upstream stdlib fixes to recommend
 

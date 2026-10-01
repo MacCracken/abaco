@@ -4,10 +4,12 @@ on:
   push:
     # Plain semver tags only (no `v` prefix) — `git tag $(cat VERSION)`.
     # Version-verify enforces the match against the VERSION file.
-    tags: ["[0-9]+.[0-9]+.[0-9]+*"]
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
 
+# Read-only by default; only the job that publishes gets a write token, so the
+# CI gate (which runs the installer and repo binaries) never holds one.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   ci:
@@ -18,8 +20,12 @@ jobs:
     name: Build & Release
     needs: [ci]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Verify version
         run: |
@@ -42,12 +48,25 @@ jobs:
           set -e
           CYRIUS_VERSION="$(grep '^cyrius = ' cyrius.cyml | head -1 | sed 's/cyrius = "\(.*\)"/\1/')"
           echo "Installing Cyrius $CYRIUS_VERSION"
-          curl -sSf https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | \
-            CYRIUS_VERSION="$CYRIUS_VERSION" sh
+          # The installer from the pinned tag, not main: it carries the release
+          # signing key for the version it installs. Saved to a file first so a
+          # failed download fails the step (a `curl | sh` pipe reports sh's status).
+          curl -sSfo install.sh "https://raw.githubusercontent.com/MacCracken/cyrius/${CYRIUS_VERSION}/scripts/install.sh"
+          CYRIUS_VERSION="$CYRIUS_VERSION" sh install.sh
+          rm -f install.sh
           echo "$HOME/.cyrius/bin" >> "$GITHUB_PATH"
 
       - name: Resolve deps
-        run: cyrius deps
+        # Vendors the version-pinned stdlib into ./lib from [deps].stdlib.
+        # lib/ is gitignored — it's a build artifact, not source. cyrius.lock is
+        # committed: a missing lock, a re-lock (new leaf, moved pin) or a hash
+        # mismatch fails here instead of being written silently.
+        run: |
+          test -f cyrius.lock || { echo "::error::cyrius.lock is missing — run 'cyrius deps' and commit it"; exit 1; }
+          cyrius deps
+          cyrius deps --verify
+          git diff --exit-code cyrius.lock || {
+            echo "::error::cyrius.lock changed on resolve — run 'cyrius deps' and commit it"; exit 1; }
 
       - name: Build smoke (DCE)
         run: |
@@ -92,7 +111,7 @@ jobs:
             exit 1
           fi
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65   # v2.6.2
         with:
           name: "abaco ${{ github.ref_name }}"
           body_path: /tmp/body.md

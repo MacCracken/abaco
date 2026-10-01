@@ -15,6 +15,134 @@ include "src/core.cyr"
 include "src/ntheory.cyr"
 include "src/dsp.cyr"
 
+# ---- batch_* wrappers (2.4.9) --------------------------------------------
+# The f64v_* builtins have no scalar tail: for an odd n they read past every
+# input and wrote one element past dst. Through 2.4.8 the wrappers passed n
+# straight in and nothing tested them (the rows above use the raw builtins at
+# n = 2). Each op is checked bit-exact against scalar code for n = 0, 1, 3, 64,
+# 65 and 441, with a sentinel after dst that must survive.
+var BW_SENT = 0x7FF4_0000_DEAD_0001;   # a NaN payload no op can produce
+var BW_SCALAR = 0x4009_0000_0000_0000; # 3.125
+
+fn bw_ref(op, x, y, z) {
+    if (op == 0) { return f64_add(x, y); }
+    if (op == 1) { return f64_sub(x, y); }
+    if (op == 2) { return f64_mul(x, y); }
+    if (op == 3) { return f64_div(x, y); }
+    if (op == 4) { return f64_sqrt(x); }
+    if (op == 5) { return f64_abs(f64_sub(x, f64_from(40))); }
+    if (op == 6) { return f64_mul(x, BW_SCALAR); }
+    if (op == 7) { return f64_add(f64_mul(x, y), z); }
+    return f64_add(z, f64_mul(x, y));   # 8: mac, dst = dst + a*b
+}
+
+fn bw_run(op, dst, a, b, c, n) {
+    if (op == 0) { return batch_add(dst, a, b, n); }
+    if (op == 1) { return batch_sub(dst, a, b, n); }
+    if (op == 2) { return batch_mul(dst, a, b, n); }
+    if (op == 3) { return batch_div(dst, a, b, n); }
+    if (op == 4) { return batch_sqrt(dst, a, n); }
+    if (op == 5) { return batch_abs(dst, c, n); }
+    if (op == 6) { return batch_scale(dst, a, BW_SCALAR, n); }
+    if (op == 7) { return batch_fmadd(dst, a, b, c, n); }
+    return batch_mac(dst, a, b, n);
+}
+
+# Returns the number of wrong elements, sentinel included, for one (op, n).
+fn bw_check(op, n) {
+    var a = alloc((n + 2) * 8);
+    var b = alloc((n + 2) * 8);
+    var c = alloc((n + 2) * 8);
+    var dst = alloc((n + 2) * 8);
+    var i = 0;
+    while (i < n + 2) {
+        store64(a + i * 8, f64_div(f64_from(i + 1), f64_from(7)));
+        store64(b + i * 8, f64_div(f64_from(2 * i + 3), f64_from(13)));
+        store64(c + i * 8, f64_sub(f64_from(i), f64_div(f64_from(100), f64_from(3))));
+        store64(dst + i * 8, BW_SENT);
+        i = i + 1;
+    }
+    # op 5 (abs) reads c; give it mixed signs. op 8 (mac) accumulates into dst.
+    if (op == 5) { i = 0; while (i < n) { store64(c + i * 8, f64_from(i)); i = i + 1; } }
+    if (op == 8) { i = 0; while (i < n) { store64(dst + i * 8, load64(c + i * 8)); i = i + 1; } }
+    bw_run(op, dst, a, b, c, n);
+    var bad = 0;
+    i = 0;
+    while (i < n) {
+        var want = bw_ref(op, load64(a + i * 8), load64(b + i * 8), load64(c + i * 8));
+        if (op == 5) { want = f64_abs(load64(c + i * 8)); }
+        if (load64(dst + i * 8) != want) { bad = bad + 1; }
+        i = i + 1;
+    }
+    if (load64(dst + n * 8) != BW_SENT) { bad = bad + 1; }
+    if (load64(dst + (n + 1) * 8) != BW_SENT) { bad = bad + 1; }
+    return bad;
+}
+
+fn test_batch_wrappers() {
+    var op = 0;
+    while (op <= 8) {
+        var bad = bw_check(op, 0) + bw_check(op, 1) + bw_check(op, 3);
+        bad = bad + bw_check(op, 64) + bw_check(op, 65) + bw_check(op, 441);
+        assert_eq(bad, 0, "batch op matches scalar code, no write past dst (n = 0,1,3,64,65,441)");
+        op = op + 1;
+    }
+    # No per-call allocation: batch_scale and batch_mac took n * 8 bytes of the
+    # never-freeing heap on every call through 2.4.8.
+    var n = 441;
+    var a = alloc(n * 8);
+    var d = alloc(n * 8);
+    var before = alloc_used();
+    var k = 0;
+    while (k < 50) {
+        batch_scale(d, a, BW_SCALAR, n);
+        batch_mac(d, a, a, n);
+        batch_fmadd(d, a, a, d, n);
+        k = k + 1;
+    }
+    assert_eq(alloc_used() - before, 0, "batch_scale / batch_mac / batch_fmadd allocate nothing");
+    return 0;
+}
+
+# batch_fmadd rounds twice on every target. a*b with a = 1+2^-30, b = 1-2^-30
+# is 1-2^-60, which rounds to 1.0, so a*b + -1 is +0 unfused; a fused FMLA
+# (aarch64, through 2.4.8) gives the exact -2^-60.
+fn test_batch_fmadd_unfused() {
+    var a = alloc(3 * 8);
+    var b = alloc(3 * 8);
+    var c = alloc(3 * 8);
+    var d = alloc(3 * 8);
+    var i = 0;
+    while (i < 3) {
+        store64(a + i * 8, 0x3FF0000000400000);
+        store64(b + i * 8, 0x3FEFFFFFFF800000);
+        store64(c + i * 8, 0xBFF0000000000000);
+        i = i + 1;
+    }
+    batch_fmadd(d, a, b, c, 3);
+    assert_eq(load64(d), 0, "fmadd lane 0 unfused");
+    assert_eq(load64(d + 8), 0, "fmadd lane 1 unfused");
+    assert_eq(load64(d + 16), 0, "fmadd odd tail unfused, same as the lanes");
+    return 0;
+}
+
+# batch_sum is compensated (Neumaier) from 2.4.9.
+fn test_batch_sum() {
+    var v = alloc(3 * 8);
+    store64(v, 0x4341C37937E08000);        # 1e16
+    store64(v + 8, f64_from(1));
+    store64(v + 16, 0xC341C37937E08000);   # -1e16
+    assert_eq(batch_sum(v, 3), f64_from(1), "sum [1e16, 1, -1e16] = 1 (was 0)");
+    var t = alloc(10000 * 8);
+    var i = 0;
+    while (i < 10000) { store64(t + i * 8, f64_div(f64_from(1), f64_from(10))); i = i + 1; }
+    assert_eq(batch_sum(t, 10000), f64_from(1000), "10000 x 0.1 = 1000 (was 1000.0000000001588)");
+    store64(v + 8, 0x7FF0000000000000);
+    assert_eq(batch_sum(v, 3), 0x7FF0000000000000, "an infinity stays +Inf, not NaN");
+    assert_eq(batch_sum(v, 0), 0, "empty sum is 0");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco SIMD tests ===");
@@ -56,6 +184,10 @@ fn main() {
     f64v_mul(dst, a, b, 2);
     assert_eq(f64_to(load64(dst)), 30, "v_mul[0]");
     assert_eq(f64_to(load64(dst + 8)), 140, "v_mul[1]");
+
+    test_batch_wrappers();
+    test_batch_fmadd_unfused();
+    test_batch_sum();
 
     # Propagate failure to the process exit code. assert_summary() RETURNS
     # _assert_fail; discarding it and returning 0 made a red suite exit 0, and

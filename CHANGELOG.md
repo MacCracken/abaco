@@ -5,6 +5,265 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.9] — 2026-09-30
+
+The two items 2.4.8 filed — the `sqrt` bench-row collision and `binomial`
+refusing results ganita cannot hold — and a project-wide audit: 15 areas plus
+three gap probes (aarch64, the bundle inside dhvani and jalwa, error-code
+precedence), every finding adversarially verified. 170 findings, 166 confirmed;
+131 fixed in code, 22 in the docs, 11 deferred to the roadmap with a reason.
+A final four-agent review of the finished diff found 14 more — two of them
+defects the fixes had introduced — and all 14 are fixed here.
+Report: [`docs/audit/2026-09-30-audit.md`](docs/audit/2026-09-30-audit.md).
+
+**Re-vendor, and read the upgrade note** in
+[`docs/guides/consuming-abaco.md`](docs/guides/consuming-abaco.md): several
+answers change (all toward correct), unit lookup is stricter, and dhvani must
+fix two `time_constant` call sites first.
+
+Suite 938 → **1704** asserts, green on x86_64 and on aarch64 (qemu); fuzz 4/4
+at 20,000 iterations; fmt / lint / vet clean; Cyrius 6.6.12 unchanged.
+`dist/abaco.cyr` is **not** byte-identical to 2.4.8.
+
+### Fixed — ⛔ every `batch_*` op corrupted the heap when `n` was odd
+
+The ops passed `n` straight to the two-lane `f64v_*` intrinsics, which work in
+pairs, so an odd `n` read one f64 past `src` and **wrote one past `dst`**, with
+no error. Each op now runs the intrinsic on `n & ~1` and does the last element
+in scalar code, and returns at once for `n <= 0`. `batch_scale` and `batch_mac`
+also called `alloc(n * 8)` on every call (never freed, never checked): they now
+use `f64v_scale` and `batch_fmadd`, which multiplies through a 64-element stack
+chunk and then adds, so it is unfused on every target (aarch64 fused it, x86 did
+not, so the two disagreed). `batch_sum` is compensated (Neumaier); plain
+summation was ~92,000 ulp off on 10⁶ × 0.1. Neither live consumer calls a
+`batch_` function.
+
+### Fixed — ⛔ units resolved the wrong unit, silently
+
+- Every symbol was also stored lowercased in the case-insensitive map, so keys
+  collided: `mw` held milliwatt (registered after megawatt) and `kn`
+  kilonewton. `nl_parse` lowercased its whole input, so every natural-language
+  conversion took that path — "convert 5 MW to kW" answered 0.000005, and
+  "10 kN to N" was incompatible units. Unregistered symbols landed on
+  registered neighbours (`mHz` → MHz, `Mm` → mm, `Mb` and `b` → bytes, `Cal` →
+  cal), and the plural strip made `ms` a metre, `ns` a newton, `Ws` a watt.
+  **Symbols now match only as written; names and aliases match in any case**;
+  non-SI abbreviations (`mi`, `lb`, `gal`, `MPH`) are aliases; a fixed list of
+  lowercase SI spellings (`hz`, `ml`, `kw`, `c`, …) matches exactly as written
+  (`reg_spelling`); a key two units claim is stored as ambiguous and refused;
+  the plural strip applies to names only and needs a 3-byte singular. The
+  `st` → semitone alias is gone (`st` is the stone). `metre`, `kilometre`,
+  `centimetre`, `millimetre` and `tonne` resolve. A `NULL` query is
+  `UERR_UNKNOWN` (was a SIGSEGV). Policy and rationale:
+  [`docs/architecture/003`](docs/architecture/003-unit-registry-hashing.md).
+- **Factors are exact.** The US/imperial factors were 6-digit truncations
+  (lb = 0.453592, so 1 cup = 15.999946 tbsp, 1 gal = 3.999998 qt, and torr equal
+  to mmHg). Every factor is now one ratio of two f64-exact integers, i.e. the
+  correctly rounded value of its definition (1959 yard and pound, the 231 in³
+  gallon, g₀, IT BTU, mechanical hp — cited in `docs/sources.md`), and a test
+  checks all 88 non-base units bit-for-bit.
+- Reciprocal units (`L/100km`) refuse a zero, negative, NaN, infinite or
+  overflowing amount or result with `UERR_CONVERT` (a subnormal amount was +Inf
+  with no error). `category_from_str` takes `category_name`'s own spellings
+  ("Data Size") in any case; it took none of the 19.
+
+### Fixed — ⛔ `factor`, `totient` and `next_prime` never returned near 2⁶³
+
+`d * d <= n` wraps once d passes 3037000499, so for a prime in the top ~5.9e9
+i64 values the loop ran ~2⁶² steps; `next_prime` past 2⁶³ − 25, the last i64
+prime, walked into negative candidates forever. The trial-division bound is now
+an exact `_isqrt(n)`, recomputed only when n shrinks (as fast as before on
+`factor_large` and `totient`; +20 ns on `factor(360)`), and `next_prime`
+returns 0 when no i64 prime lies above n. Also: `is_prime` allocated its
+96-byte witness table on every call (now none); `mod_pow` returned 1 for a
+negative exponent (now the u64 bit pattern, as bayan reads it); `totient(n)`
+of a negative n answered n (now 0). The documented Miller–Rabin bound was ψ₁₃
+(3.317e24) where the twelve witnesses give ψ₁₂ = 3.187e23 — still far above
+i64, now stated right everywhere.
+
+### Fixed — `binomial` past ganita's limit (filed at 2.4.8)
+
+`binomial` / `choose` use the new `abaco_binomial`, which divides before it
+multiplies — with g = gcd(C(n, i), i + 1) both quotients are exact — so every
+C(n, k) that fits in i64 is exact (C(62, 31) and C(66, 33) are values; 2.4.8
+refused them) and only a result past i64 is `ABACO_ERR_MATH`.
+
+### Fixed — the evaluator
+
+- **Bytes outside the grammar are a parse error.** They were skipped, so a
+  pasted U+2212 minus made `−5+3` read as 8, `[2+3]*2` was 8 and `3²` was 3.
+  `?` too — `nl_parse` drops a trailing one.
+- **Malformed literals are refused**: a second `.` ends the literal (`1.2.3`
+  was 1.23), an exponent needs a digit (`1e` was 1; `2e` is now 2 times e,
+  like `2pi`), and a literal with no digit is an error, not 0.
+- **Integer functions refuse fractions**, NaN and ±Inf: `3.9!` was 6,
+  `factorial(2.5)` 2, `gcd(7.5, 5)` 1, `isprime(2.9)` 1. Now `ABACO_ERR_MATH`
+  (`isprime` answers 0).
+- **`%` with a subnormal divisor** terminates and is exact: the first 2.4.9
+  cut scaled |b|·2^k in two steps that overflowed the exponent field, so
+  `1e300 % 5e-324` looped forever and `1.4e293 % 5e-324` was -Inf.
+- **Integer powers are double-double.** Plain f64 square-and-multiply lost up
+  to 2.7e9 ulp (`1.0000000001^(2^40)`), `10^k` disagreed with the literal `1ek`,
+  and a negative power that is a representable subnormal came back 0. Over
+  2990 cases every normal result is now correctly rounded (one subnormal is
+  1 ulp off). ADR-0002 updated.
+- **`log(1000)` is 3** (was 2.9999999999999996, typed FLOAT): an exact power of
+  ten answers its exponent. **`%` is exact** for every finite pair (`2^60 % 10`
+  was 0) and `a % ±Inf` is the floored limit (was NaN).
+- NaN propagates through `sign` / `sgn` (was 0), `min` / `max` / `atan2` (kept
+  or dropped by argument order) and `median` (sorted wherever it landed).
+  `round` is right at 0.49999999999999994 and for odd integers ≥ 2⁵² (it
+  computed `floor(x + 0.5)`).
+- **Error codes survive parentheses and arguments**: `2*(1/0+1)` is
+  `DIV_ZERO`, `(171!+1)` `MATH`, `(x+1)*2` `UNKNOWN_VAR` — all were `PARSE`,
+  and the argument loop no longer runs on after the first error.
+- **`Evaluator_eval_partial`** re-evaluated the whole prefix once per stripped
+  token — O(T²), 88 s on a 1000-token input — and reported success with a value
+  for complete expressions that failed. It now re-parses at most a fixed few
+  times — a back-off out of a call still being typed (`2+max(7` previews 2) —
+  and returns a semantic error as is.
+- **Memory.** Every evaluation took 16-33 KB from the never-freeing allocator
+  (827 MB after 30,000 keystroke previews); each evaluator now owns a growable
+  arena rewound per evaluation and passed down explicitly, so evaluation stops
+  growing the heap — and simple expressions run 25-55% faster — and one
+  Evaluator per thread stays safe (a first cut kept the arena in a global, and
+  two Evaluators on two threads crashed). An identifier longer than 4096 bytes
+  is a parse error, so no request outgrows an arena chunk.
+  `Evaluator_set_variable` copies the name on first binding and updates in
+  place after that. The exact-power-of-ten table is static (it was a heap pointer that
+  dangled after `alloc_reset`).
+
+### Fixed — natural language, history, currency
+
+- `nl_parse` matches keywords on a lowercased copy but hands on unit words and
+  expressions as typed; strips one leading verb before every form (so
+  "convert 100 usd to eur" is a currency query and "what is 5 km in mi" a
+  conversion); drops one trailing `?` or `.`; maps U+2212 to `-`. A currency
+  query is exactly four words (`100 usd to eur * 2` converted 100).
+  `_nl_parse_f64` is strict (one `.`, exponent digits, finite) and takes its
+  value from the evaluator's correctly rounded `parse_number` (the stdlib
+  `f64_parse` it used misread ~23% of two-decimal literals).
+- `CalcHistory` is a real ring buffer (each push at capacity copied the whole
+  history: 18.3 µs → 32 ns at 1000 entries); `get` out of range is 0; capacity
+  ≤ 0 stores nothing. `from_json` requires a whole, well-formed JSON array
+  (checked against RFC 8259 throughout, object interiors included) and stores
+  nothing on error (it answered success for `hello world` and kept a
+  prefix on failure); every JSON escape decodes, `\uXXXX` pairs included, and
+  `to_json` escapes every control byte. `save_to_file` is atomic, and save and
+  load share a 16 MiB bound (a history over 64 KiB saved and then never loaded).
+- `CurrencyCache_convert` refuses a non-finite rate or result, or a rate that
+  is not > 0 (a 0 rate from `set_rates`, or a tiny source rate, came back as
+  +Inf with `AI_OK`). The loader requires the body to be one well-formed JSON
+  document (a missing `:` made the next pair's value this key's rate), trims
+  JSON whitespace from values (CRLF bodies lost their last rate), requires a
+  flat `rates` object, and reads `base` / `rates` from the top level only (a
+  `"base"` inside `"rates"` won). `CurrencyCache_new` copies the URL.
+
+### Fixed — DSP and core
+
+- `_bessel_i0` summed a fixed 29 terms, so I₀ and every Kaiser window were
+  wrong for β above ~20; it now runs to convergence. Windows answer 0 outside
+  `[0, size)` (they wrapped onto the cosine) and 1 for `size == 1`.
+- The dB constants were each an ulp off despite their comment saying
+  correctly rounded: `amplitude_to_db(1000)` is 60, not 59.999999999999986.
+  `amplitude_to_db(NaN)` / `freq_to_midi(NaN)` are NaN (were -Inf, which in
+  dhvani reported a NaN-poisoned buffer as silence). `amplitude_to_dbfs` takes
+  `|x|`. `f64_rms2` uses `hypot` (overflowed above 1.3e154).
+- **`time_constant` answers NaN for a sample rate that is not a finite value
+  ≥ 1**, or a negative / non-finite time. dhvani passes the integer 48000,
+  which reads as a subnormal f64, so every attack and release was `exp(-1)`;
+  this makes that visible instead of plausible.
+- `sinc_kernel` validates `half_width`; `f64_sinc` is 0 for |x| ≥ 2⁵² and ±Inf.
+- `Value_to_latex` escapes LaTeX specials in TEXT (and truncates without
+  splitting a UTF-8 sequence), renders FLOAT -0.0 as `-0.0`, and prints the
+  right digits for subnormals.
+
+### Changed — CI, release and scripts
+
+- Lint gates on `cyrius lint --exit-with-count`'s status (an unreadable file
+  passed); bench files are built fatally before the non-fatal timing run
+  (2.4.7's `_bench_round` breakage passed CI), and duplicate bench names fail.
+- `cyrius.lock` must exist, verify and not change on resolve; the installer
+  comes from the pinned tag into a file (it was `main` through a pipe).
+- Workflows default to `contents: read`; only the release job gets `write`;
+  checkouts drop persisted credentials; the release action is pinned by SHA;
+  the tag filter is plain semver (it accepted suffixes).
+- The security scan names the real process wrappers and raw syscall numbers
+  (its `sys_system` pattern named nothing).
+- `bench-history.sh` runs every `benches/*.bcyr`, names a bench that fails to
+  build or run (it exited 1 in silence), refuses duplicate row names — the
+  `sqrt` collision filed at 2.4.8: the evaluator's row is now `eval_sqrt` — and
+  stamps rows from an uncommitted tree `<hash>-dirty`. The `binomial` row is
+  now `abaco_binomial`, so the trail does not splice ganita's series onto it.
+- `fuzz/run.sh` and every harness reject a malformed iteration count (a typo
+  ran 0 iterations and passed); run.sh caps each harness with `timeout`.
+
+### Added
+
+- `abaco_binomial`, `reg_spelling`, `ABACO_I64_MAX`, `ABACO_LAST_I64_PRIME`,
+  `AI_HISTORY_MAX_BYTES`. Bench rows `abaco_binomial`, `eval_sqrt`,
+  `nl_parse_convert`, `history_push_full`.
+
+### Tests
+
+938 → **1704** asserts. The audit's sharpest finding was gates that could not
+fail: DSP helpers that accepted NaN as "near 0", a units fuzz identity check
+that never read a factor, a rate oracle that called the function under test,
+a percent-of injection test that never reached the needle, a depth test passed
+by the token cap. Each was rewritten, and each new gate was run against the
+2.4.8 code it guards: `test_dsp` 31 rows fail, `test_simd` 12, `test_eval` 58
+(plus an 88 s run), `test_units` 70, `test_ai` 67 plus two crashes, and
+`test_ntheory` hangs; `fuzz_eval`, `fuzz_ntheory`, `fuzz_units` and `fuzz_ai`
+each catch the 2.4.8 code or a targeted mutant. New fuzz shapes: every named
+function with 1-40 adversarial arguments against i64 oracles; the top of i64;
+percent-of and literal strictness against a grammar written in the harness.
+
+All seven suites also pass on aarch64 under qemu — after two `exp(1)` rows were
+made ulp-tolerant and a truncating `2^0.5*2^0.5` row became `ev_near` (the
+aarch64 stdlib polyfills are within 1 ulp, not bit-identical to x86; that row
+had kept the aarch64 suite red since 2.4.3).
+
+### Docs
+
+`SECURITY.md`'s attack-surface table listed mitigations the code never had
+(NaN/Inf "detected and returned as error", division by zero as `MATH`,
+constant-time `mod_pow`) — rewritten. `docs/sources.md` cites every new
+algorithm and unit definition. Corrected claims: the Miller–Rabin bound
+(above); "subnormal literals are bit-exact" (2.4.0 — a few are double-rounded,
+within 1 ulp); "`lcm` took SIGFPE on aarch64" (2.4.7 — aarch64 does not trap; it
+returned a wrong value); "`tan` within 1 ulp" (~2 ulp); "dhvani should
+re-vendor for `DSP_C0_FREQ`" (2.4.8 — dhvani does not call it); "no live
+consumer" (dhvani and jalwa ship the 2.4.6 bundle). README, development guide,
+architecture docs and ROADMAP.md swept for stale numbers and commands.
+
+### Benchmarks
+
+Interleaved A/B against 2.4.8 (DCE builds), three rounds of every file (nine
+of `bench_units`): geomean **×0.94** over 78 common rows. Only what the
+`bench-history.sh` trail (non-DCE builds) confirms is listed as a change.
+
+- **Evaluator ×0.69** (geomean of `bench_eval`): no 16-33 KB allocation per
+  evaluation any more — `addition` 826 → 379 ns, `division` ×0.44, `sin`
+  ×0.66, `choose` ×0.76.
+- `simd_mac_4096` ×0.82 (no scratch allocation); `category_from_str` ×0.68.
+  (`is_prime` / `next_prime` read ×0.8 in the DCE A/B but are flat in the
+  trail — a code-layout effect, not a win; the witness table no longer
+  allocates, which shows in memory, not time.)
+- Costs of correctness, all small: `round` 8 → 11 ns (it was `floor(x + 0.5)`,
+  wrong at the edges); `amplitude_to_db` 37 → 46 ns and `time_constant`
+  41 → 46 ns (NaN and domain checks); `factor_small` 109 → 131 ns (the exact
+  `isqrt` bound — `factor_large` and `totient` unchanged); the tokenizer +4-5%
+  (`tok_simple`, `tok_complex`: the stricter literal grammar). The first cut of the
+  overflow fix, `d <= n / d`, doubled `factor_large`; and the stdlib
+  `f64_le` / `f64_ge` / `f64_trunc` are calls, not builtins, which doubled
+  `round` until the hot paths moved to the builtin comparisons.
+- `bench_units`: lookup rows sit inside the per-process hash-seeding spread
+  (minimums within ±15% both ways); `registry_creation` +16% (138 → 159 µs,
+  once per registry) for the larger alias table and the collision check.
+- New rows: `history_push_full` 32 ns (18.3 µs on 2.4.8's code);
+  `nl_parse_convert` 1.76 µs (1.14 µs on 2.4.8 — it now splits the text twice
+  to keep case); `abaco_binomial` 128 ns where ganita's `binomial` was 120 ns.
+
 ## [2.4.8] — 2026-09-30
 
 The two correctness bugs 2.4.7 found in passing and filed, now fixed. Neither

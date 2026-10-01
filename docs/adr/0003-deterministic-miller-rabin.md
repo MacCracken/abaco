@@ -20,9 +20,11 @@ library:
 
 Use a **fixed** witness set {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37}. This
 set is proven to give a deterministic, exact answer for all
-*n* < 3.317 × 10²⁴ (Jaeschke 1993; extended by Sorenson & Webster 2015). That
-bound covers the entire `i64` range (*n* < 9.22 × 10¹⁸), so abaco's `is_prime`
-is **exact, not probabilistic**, and immune to the adversarial class above.
+*n* < ψ₁₂ = 318665857834031151167461 ≈ 3.187 × 10²³ (Jaeschke 1993 for the
+smaller ψ; Sorenson & Webster 2017 for ψ₁₂). That bound covers the entire `i64`
+range (*n* < 9.22 × 10¹⁸), so abaco's `is_prime` is **exact, not
+probabilistic**, and immune to the adversarial class above. (Corrected 2.4.9:
+this ADR gave 3.317 × 10²⁴, which is ψ₁₃, the bound with witness 41 added.)
 
 ## Consequences
 

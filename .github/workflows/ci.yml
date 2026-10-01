@@ -11,12 +11,17 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build & Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Cyrius toolchain
         run: |
@@ -24,14 +29,25 @@ jobs:
           # Single source of truth: the [package].cyrius pin in cyrius.cyml.
           CYRIUS_VERSION="$(grep '^cyrius = ' cyrius.cyml | head -1 | sed 's/cyrius = "\(.*\)"/\1/')"
           echo "Installing Cyrius $CYRIUS_VERSION"
-          curl -sSf https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | \
-            CYRIUS_VERSION="$CYRIUS_VERSION" sh
+          # The installer from the pinned tag, not main: it carries the release
+          # signing key for the version it installs. Saved to a file first so a
+          # failed download fails the step (a `curl | sh` pipe reports sh's status).
+          curl -sSfo install.sh "https://raw.githubusercontent.com/MacCracken/cyrius/${CYRIUS_VERSION}/scripts/install.sh"
+          CYRIUS_VERSION="$CYRIUS_VERSION" sh install.sh
+          rm -f install.sh
           echo "$HOME/.cyrius/bin" >> "$GITHUB_PATH"
 
       - name: Resolve deps
         # Vendors the version-pinned stdlib into ./lib from [deps].stdlib.
-        # lib/ is gitignored — it's a build artifact, not source.
-        run: cyrius deps
+        # lib/ is gitignored — it's a build artifact, not source. cyrius.lock is
+        # committed: a missing lock, a re-lock (new leaf, moved pin) or a hash
+        # mismatch fails here instead of being written silently.
+        run: |
+          test -f cyrius.lock || { echo "::error::cyrius.lock is missing — run 'cyrius deps' and commit it"; exit 1; }
+          cyrius deps
+          cyrius deps --verify
+          git diff --exit-code cyrius.lock || {
+            echo "::error::cyrius.lock changed on resolve — run 'cyrius deps' and commit it"; exit 1; }
 
       - name: Format check
         # Every source kind, not just src/ — through 2.4.3 this loop covered
@@ -50,10 +66,16 @@ jobs:
         # Cyrius 6.5.x added an untracked-deferral advisory that prints as
         # "deferral line N: ..." rather than "warn ...", so it needs its own
         # match or it slips through the gate silently (see CHANGELOG 2.3.4).
+        # The exit status is a gate too (2.4.9): through 2.4.8 it was discarded
+        # with `|| true`, so a lint run that could not read the file passed.
         run: |
           fail=0
           for f in src/*.cyr; do
-            out=$(cyrius lint "$f" 2>&1 || true)
+            rc=0
+            out=$(cyrius lint --exit-with-count "$f" 2>&1) || rc=$?
+            if [ $rc -ne 0 ]; then
+              echo "$out"; echo "::error::lint failed on $f (exit $rc)"; fail=1
+            fi
             if echo "$out" | grep -qE '^\s*warn '; then
               echo "$out"; echo "::error::lint warnings in $f"; fail=1
             fi
@@ -140,7 +162,17 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Bench (non-fatal)
+      - name: Bench build
+        # Fatal: a bench that no longer compiles is a broken gate, not noise.
+        # Through 2.4.8 the only bench step ran `cyrius bench ... || true`, so
+        # the 2.4.7 _bench_round breakage passed CI.
+        run: |
+          for b in benches/*.bcyr; do
+            [ -f "$b" ] || continue
+            CYRIUS_DCE=1 cyrius build "$b" "build/$(basename "$b" .bcyr)"
+          done
+
+      - name: Bench (timing non-fatal)
         run: |
           for b in benches/*.bcyr; do
             [ -f "$b" ] || continue
@@ -148,6 +180,10 @@ jobs:
             CYRIUS_DCE=1 cyrius bench "$b" || true
             echo "::endgroup::"
           done | tee bench-results.txt
+          # Row names key the CSV trail and bench-latest.md, so a duplicate
+          # shadows a row (2.4.8: `sqrt` in two files). That is a code defect.
+          dupes=$(grep -E 'avg.*min=.*max=' bench-results.txt | sed -E 's/^[[:space:]]*//; s/:.*//' | sort | uniq -d)
+          if [ -n "$dupes" ]; then echo "::error::duplicate bench names: $dupes"; exit 1; fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -164,6 +200,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Scan for dangerous patterns
         run: |
           FAIL=0
@@ -205,16 +243,33 @@ jobs:
               FAIL=1
             fi
           }
-          scan "raw execve"   'syscall\(\s*59'
-          scan "raw fork"     'syscall\(\s*57'
-          scan "sys_system"   '\bsys_system\s*\('
+          # Process creation and signals: the stdlib wrappers by name and the
+          # raw x86_64 numbers (56 clone, 57 fork, 58 vfork, 59 execve, 62 kill,
+          # 322 execveat) or their SYS_ names. Through 2.4.8 the third pattern
+          # was `sys_system`, which names no function, and sys_execve /
+          # sys_fork / sys_kill went unscanned.
+          scan "process wrappers" '\bsys_(execve|execveat|fork|vfork|clone|kill|spawn)\s*\('
+          scan "raw process syscalls" 'syscall\(\s*(SYS_(EXECVE|EXECVEAT|FORK|VFORK|CLONE|KILL)\b|5[6-9]\b|62\b|322\b)'
           scan "writes to /etc"  '"/etc/'
           scan "writes to /bin"  '"/bin/'
           scan "writes to /sbin" '"/sbin/'
-          awk -F: '
-            /var [A-Za-z_][A-Za-z0-9_]*\[[0-9]+\]/ {
-              match($0, /\[[0-9]+\]/); s=substr($0,RSTART+1,RLENGTH-2); n=s+0;
-              if (n >= 65536) print FILENAME":"NR": large stack buffer ("n" bytes): "$0
+          # Sizes may be written in hex or with '_' separators (0x100000,
+          # 1_048_576) — through 2.4.8 only plain decimal was matched, so a
+          # 1 MiB buffer written either way passed. Hex is converted by hand:
+          # ubuntu's default awk is mawk, which has no strtonum.
+          awk '
+            function num(s,   i, v) {
+              gsub(/_/, "", s)
+              if (s !~ /^0[xX]/) return s + 0
+              v = 0
+              for (i = 3; i <= length(s); i++)
+                v = v * 16 + index("0123456789abcdef", tolower(substr(s, i, 1))) - 1
+              return v
+            }
+            /var [A-Za-z_][A-Za-z0-9_]*\[(0[xX][0-9A-Fa-f_]+|[0-9_]+)\]/ {
+              match($0, /\[(0[xX][0-9A-Fa-f_]+|[0-9_]+)\]/)
+              n = num(substr($0, RSTART + 1, RLENGTH - 2))
+              if (n >= 65536) print FILENAME":"FNR": large stack buffer ("n" bytes): "$0
             }' src/*.cyr | tee /tmp/bigbuf.txt
           [ -s /tmp/bigbuf.txt ] && FAIL=1
           echo "security scan complete (fail: $FAIL)"
@@ -225,6 +280,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Check required files
         run: |
           MISSING=0
@@ -244,6 +301,8 @@ jobs:
           # template is intact and the version appears in the changelog.
           grep -qF 'version = "${file:VERSION}"' cyrius.cyml \
             || { echo "FAIL: cyrius.cyml version is not \${file:VERSION}"; exit 1; }
-          grep -q "$FILE_VERSION" CHANGELOG.md \
-            || { echo "FAIL: version $FILE_VERSION not in CHANGELOG.md"; exit 1; }
+          # A section heading for exactly this version, not the digits anywhere
+          # (2.4.1 would have matched "2.4.10" or a date).
+          grep -qE "^## \[${FILE_VERSION//./\\.}\]" CHANGELOG.md \
+            || { echo "FAIL: no '## [$FILE_VERSION]' section in CHANGELOG.md"; exit 1; }
           echo "Version consistent: $FILE_VERSION"

@@ -17,15 +17,15 @@ math engine you can wrap any way you like, this is it.
 | Module | What it does |
 |--------|--------------|
 | [`core`](src/core.cyr)     | `Value` (Integer / Float / Fraction / Complex / Text), `Unit`, `UnitCategory` (19 categories), `Currency`, `ConversionResult` |
-| [`ntheory`](src/ntheory.cyr) | `is_prime` (Miller–Rabin), `next_prime` / `prev_prime`, `factor`, `totient`, `fibonacci`, `binomial` |
+| [`ntheory`](src/ntheory.cyr) | `is_prime` (deterministic Miller–Rabin), `next_prime` / `prev_prime`, `factor`, `totient`, `mod_pow`, `abaco_binomial` (exact whenever the result fits in i64) |
 | [`dsp`](src/dsp.cyr)       | dB ↔ amplitude, MIDI ↔ frequency, envelope time constants, PolyBLEP, panning, crossfade, Hann / Hamming / Blackman / Kaiser windows, cubic / sinc interpolation, chromagram helpers, SIMD batch ops, samples ↔ ms, BPM ↔ Hz |
 | [`eval`](src/eval.cyr)     | Tokenizer + recursive-descent parser, 43+ functions, variables, implicit multiplication, `%` operator, scientific notation, `eval_partial` for live-as-you-type feedback |
-| [`units`](src/units.cyr)   | 112 built-in units in 19 categories, 80+ aliases, O(1) hashmap lookup, reciprocal units (L/100km), pitch (semitones / cents / octaves), BPM via frequency |
-| [`ai`](src/ai.cyr)         | Natural-language parsing (`"convert 5 km to miles"`, `"what is 15% of 230"`), bounded calculation history, currency cache + `http_get`-driven fetch for live rates via hoosh |
+| [`units`](src/units.cyr)   | Built-in units in 19 categories with factors exact to the definition (NIST SP 811), O(1) hashmap lookup, reciprocal units (L/100km), pitch (semitones / cents / octaves), BPM via frequency |
+| [`ai`](src/ai.cyr)         | Natural-language parsing (`"convert 5 km to miles"`, `"what is 15% of 230"`), bounded calculation history with JSON save/load, currency cache + a plaintext fetch from a loopback rates server (no TLS yet) |
 
 ## Quick start
 
-Requires the Cyrius toolchain pinned in `cyrius.cyml` (currently `6.6.12`).
+Requires the Cyrius toolchain pinned in `cyrius.cyml` (`[package].cyrius`).
 
 ```bash
 # Vendor the pinned stdlib into lib/ (a gitignored build artifact)
@@ -60,17 +60,14 @@ stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged",
 
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.4.8"
+tag = "2.4.9"
 modules = ["dist/abaco.cyr"]   # self-contained library bundle
 ```
 
-Then use the public API directly:
+`cyrius deps` vendors the bundle; there is nothing to `include` from abaco's
+`src/`. Then call the public API directly:
 
 ```cyr
-include "src/core.cyr"
-include "src/eval.cyr"
-include "src/units.cyr"
-
 fn main() {
     alloc_init();
     var e = Evaluator_new();
@@ -110,10 +107,15 @@ Length, Mass, Temperature, Time, Data Size (SI + IEC), Speed, Area,
 Volume, Energy, Pressure, Angle, Frequency, Force, Power, Fuel Economy,
 Density, Luminosity, Viscosity, Pitch.
 
-Case-insensitive lookup. Plural forms (`meters`, `kilograms`). Multi-
-word aliases (`"square kilometers"`, `"miles per gallon"`). Symbol
-case preserved (`mW` vs `MW`). Reciprocal units (L/100km). Tempo
-(BPM) routes through frequency so `120 bpm -> 2 Hz` works.
+Names and aliases match in any case (`Kilometers`, `FEET`), with plurals
+(`meters`, `tonnes`) and multi-word aliases (`"square kilometers"`,
+`"miles per gallon"`). Symbols match **exactly as written**, because SI and
+IEC symbols are case-sensitive: `MW` is megawatt and `mW` milliwatt, and an
+unregistered symbol such as `mHz` or `Mb` is unknown rather than a near miss.
+Non-SI abbreviations (`mi`, `lb`, `gal`, `MPH`) match in any case, and common
+lowercase spellings (`hz`, `ml`, `kw`, `c`, `f`) are accepted. Reciprocal
+units (L/100km). Tempo (BPM) routes through frequency so `120 bpm -> 2 Hz`
+works.
 
 ## Ecosystem
 
@@ -133,12 +135,11 @@ headless, stable, and reusable.
 ## Status
 
 - **v2.0.0** — Rust → Cyrius port complete (breaking: not a Rust crate anymore)
-- **657 asserts** passing across 7 suites (`cyrius test`)
-- **4 fuzz harnesses** (eval, ntheory, units, ai) — run clean at 20k+ iters
-- **77 benchmarks** — CSV history tracked in `bench-history.csv`
-- **100% of the public API** is documented (`cyrius doc --check`)
+- 7 test suites, 4 fuzz harnesses (eval, ntheory, units, ai) and a benchmark
+  CSV trail (`bench-history.csv`). Current counts, version, binary size and
+  consumers are in [`docs/development/state.md`](docs/development/state.md).
 
-Known gaps live in [ROADMAP.md](ROADMAP.md).
+Planned work lives in [`docs/development/roadmap.md`](docs/development/roadmap.md).
 
 ## License
 

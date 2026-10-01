@@ -318,13 +318,346 @@ fn test_security_percent_of_rejects_operators() {
     return 0;
 }
 
+# The percent-of rewrite must fire only when both operands are strict
+# literals; otherwise the text goes on unchanged (or is refused). Through
+# 2.4.8 the paren row here was "15%) of 100", which never contains the
+# "% of " needle, so it passed with both guards deleted.
+fn pct_kept_or_refused(input, what) {
+    var q = nl_parse(input);
+    if (q == 0) { return 0; }
+    assert_eq(pq_kind(q), PQ_CALCULATION, what);
+    assert(streq(pq_s1(q), input) == 1, what);
+    return 0;
+}
+
 fn test_security_percent_of_paren_injection() {
-    # "15%) of 100" — stray paren in "pct" slot. Must reject.
-    var q = nl_parse("15%) of 100");
+    pct_kept_or_refused("15)% of 100", "pct slot with ')' not rewritten");
+    pct_kept_or_refused("15% of (100", "base slot with '(' not rewritten");
+    pct_kept_or_refused("15% of 2+3", "base slot with an operator not rewritten");
+    pct_kept_or_refused("1.5.3% of 200", "multi-dot pct not rewritten");
+    pct_kept_or_refused("15% of 1e", "bare exponent base not rewritten");
+    # The base-slot case end to end: an error, not (2 + 3*15/100).
+    var e = Evaluator_new();
+    var q = nl_parse("15% of 2+3");
     if (q != 0) {
-        var s = pq_s1(q);
-        assert(streq(s, "100 * 15) / 100") == 0, "must not synth with stray paren");
+        Evaluator_eval(e, pq_s1(q));
+        assert(eval_err(e) != ABACO_ERR_NONE, "15% of 2+3 is an error, not 2.45");
     }
+    # Strict literals still rewrite, in any case.
+    q = nl_parse("1.5% OF 200");
+    assert(q != 0, "1.5% OF 200 parses");
+    assert(streq(pq_s1(q), "200 * 1.5 / 100") == 1, "keyword case-insensitive, rewrite fires");
+    return 0;
+}
+
+# 2.4.9: nl_parse lowered the whole input, so unit symbols lost their case
+# and the registry could not tell MW from mW or kN from kn.
+fn nl_convert(r, input) {
+    var q = nl_parse(input);
+    if (q == 0) { return 0x7FF8000000000000; }
+    if (pq_kind(q) != PQ_CONVERSION) { return 0x7FF8000000000000; }
+    var v = UnitRegistry_convert(r, pq_value(q), pq_s1(q), pq_s2(q));
+    if (reg_err(r) != UERR_NONE) { return 0x7FF8000000000000; }
+    return v;
+}
+
+fn test_nl_case_preserved() {
+    var r = UnitRegistry_new();
+    var q = nl_parse("convert 5 MW to kW");
+    assert(q != 0, "MW query parses");
+    assert(streq(pq_s1(q), "MW") == 1, "from unit keeps case");
+    assert(streq(pq_s2(q), "kW") == 1, "to unit keeps case");
+    assert_eq(nl_convert(r, "convert 5 MW to kW"), f64_from(5000), "5 MW = 5000 kW (was 0.000005)");
+    assert_eq(nl_convert(r, "5 mW to W"), f64_div(f64_from(5), f64_from(1000)), "5 mW = 0.005 W");
+    assert_eq(nl_convert(r, "10 kN to N"), f64_from(10000), "10 kN = 10000 N (was incompatible)");
+    assert_eq(nl_convert(r, "1 kn to km/h"), f64_div(f64_from(1852), f64_from(1000)), "1 kn = 1.852 km/h");
+    assert_eq(nl_convert(r, "CONVERT 5 km TO mi"), UnitRegistry_convert(r, f64_from(5), "km", "mi"),
+      "keywords match in any case");
+    assert_eq(nl_convert(r, "100 c to f"), f64_from(212), "lowercase c / f still work");
+    assert_eq(nl_convert(r, "1 mHz to Hz"), 0x7FF8000000000000, "mHz is unknown, not MHz");
+    # Expressions keep their case too: evaluator names are case-sensitive.
+    q = nl_parse("what is X + 1");
+    assert(streq(pq_s1(q), "X + 1") == 1, "expression keeps case");
+    return 0;
+}
+
+fn test_nl_forms() {
+    var q = nl_parse("convert 100 usd to eur");
+    assert(q != 0, "convert + currency parses");
+    assert_eq(pq_kind(q), PQ_CURRENCY, "convert + currency is a currency query (was a unit query)");
+    q = nl_parse("what is 5 km in mi");
+    assert_eq(pq_kind(q), PQ_CONVERSION, "what is + units is a conversion (was an expression)");
+    q = nl_parse("what is 2 + 3?");
+    assert(streq(pq_s1(q), "2 + 3") == 1, "trailing ? dropped");
+    q = nl_parse("convert 5 m to in.");
+    assert(streq(pq_s2(q), "in") == 1, "trailing . dropped");
+    q = nl_parse("15% of 200?");
+    assert(streq(pq_s1(q), "200 * 15 / 100") == 1, "percent-of with trailing ?");
+    q = nl_parse("3 \xE2\x88\x92 2");
+    assert(streq(pq_s1(q), "3 - 2") == 1, "U+2212 minus becomes '-'");
+    # Currency is exactly four words; extra words are not dropped silently.
+    q = nl_parse("100 usd to eur and more");
+    assert(q == 0 || pq_kind(q) != PQ_CURRENCY, "currency with trailing words is not a currency query");
+    q = nl_parse("convert 2+3");
+    assert(q == 0 || streq(pq_s1(q), "2+3") == 0, "convert is not a calculation verb");
+    assert_eq(nl_parse(0), 0, "null input");
+    assert_eq(nl_parse("?"), 0, "lone ?");
+    return 0;
+}
+
+# _nl_parse_f64 must accept exactly one literal and give it the value the
+# evaluator gives the same text (correctly rounded).
+fn nl_f64_is(text, what) {
+    var t, v = _nl_parse_f64(text);
+    assert(is_ok(t) == 1, what);
+    var e = Evaluator_new();
+    var want = Evaluator_eval(e, text);
+    assert_eq(v, want, what);
+    return 0;
+}
+
+fn nl_f64_refused(text, what) {
+    var t, v = _nl_parse_f64(text);
+    assert(is_ok(t) == 0, what);
+    return 0;
+}
+
+fn test_nl_parse_f64_strict() {
+    nl_f64_is("0.3", "0.3 correctly rounded");
+    nl_f64_is("9.95", "9.95 correctly rounded");
+    nl_f64_is("0.0001e310", "0.0001e310 = 1e306, not Inf");
+    nl_f64_is("123e-310", "123e-310 subnormal, not 0");
+    nl_f64_is("1.7976931348623157e308", "DBL_MAX");
+    nl_f64_is("5.", "trailing dot");
+    nl_f64_is(".5", "leading dot");
+    var t, v = _nl_parse_f64("-2.5");
+    assert_eq(v, f64_neg(f64_div(f64_from(5), f64_from(2))), "sign applied");
+    nl_f64_refused("1.5.3", "two dots");
+    nl_f64_refused("1..2", "double dot");
+    nl_f64_refused("1e", "bare exponent");
+    nl_f64_refused("1e+", "signed bare exponent");
+    nl_f64_refused(".", "dot alone");
+    nl_f64_refused("-", "sign alone");
+    nl_f64_refused("1e400", "overflow to Inf");
+    nl_f64_refused("2+3", "expression");
+    nl_f64_refused("1 ", "trailing blank");
+    nl_f64_refused("", "empty");
+    return 0;
+}
+
+# 2.4.9: at capacity every push copied the whole vec (O(max) time and leaked
+# memory per push), and a history of capacity 0 still held one entry.
+fn test_history_ring() {
+    var h = CalcHistory_new(3);
+    var i = 1;
+    while (i <= 7) {
+        var b = alloc(4);
+        store8(b, 48 + i);
+        store8(b + 1, 0);
+        CalcHistory_push(h, b, b, "t");
+        i = i + 1;
+    }
+    assert_eq(CalcHistory_len(h), 3, "ring holds 3");
+    assert(streq(he_input(CalcHistory_get(h, 0)), "5") == 1, "oldest is 5");
+    assert(streq(he_input(CalcHistory_get(h, 1)), "6") == 1, "then 6");
+    assert(streq(he_input(CalcHistory_get(h, 2)), "7") == 1, "newest is 7");
+    assert_eq(CalcHistory_get(h, 3), 0, "past the end is 0");
+    assert_eq(CalcHistory_get(h, 0 - 1), 0, "negative index is 0");
+    var js = CalcHistory_to_json(h);
+    var want = "[{\"input\":\"5\",\"result\":\"5\",\"timestamp\":\"t\"},{\"input\":\"6\",\"result\":\"6\",\"timestamp\":\"t\"},{\"input\":\"7\",\"result\":\"7\",\"timestamp\":\"t\"}]";
+    assert(str_len(js) == strlen(want) && memeq(str_data(js), want, strlen(want)) == 1, "to_json oldest first after wrap");
+    var big = CalcHistory_new(100);
+    i = 0;
+    while (i < 100) { CalcHistory_push(big, "x", "1", "t"); i = i + 1; }
+    var before = alloc_used();
+    i = 0;
+    while (i < 1000) { CalcHistory_push(big, "x", "1", "t"); i = i + 1; }
+    assert(alloc_used() - before <= 1000 * 32, "push at capacity allocates only the entry (was ~1 KB each)");
+    var z = CalcHistory_new(0);
+    CalcHistory_push(z, "x", "1", "t");
+    assert_eq(CalcHistory_len(z), 0, "capacity 0 stores nothing (held 1)");
+    CalcHistory_clear(h);
+    CalcHistory_push(h, "after", "1", "t");
+    assert(streq(he_input(CalcHistory_get(h, 0)), "after") == 1, "clear resets the ring");
+    return 0;
+}
+
+fn json_rejected(json, what) {
+    var h = CalcHistory_new(10);
+    CalcHistory_push(h, "kept", "1", "t");
+    assert_eq(CalcHistory_from_json(h, json), AI_ERR_PARSE, what);
+    assert_eq(CalcHistory_len(h), 1, what);
+    return 0;
+}
+
+# 2.4.9: from_json answered 0 for text with no array at all, for a missing
+# ']' and for a trailing ',', and a bad later object left the earlier ones
+# pushed while still returning AI_ERR_PARSE.
+fn test_history_from_json_strict() {
+    var ok = "{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\"}";
+    json_rejected("hello world", "no array");
+    json_rejected("", "empty text");
+    json_rejected(ok, "bare object");
+    json_rejected("[", "unclosed array");
+    json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\"}", "missing ]");
+    json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\"},]", "trailing comma");
+    json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\"}] x", "bytes after ]");
+    json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\"}{\"input\":\"b\",\"result\":\"2\",\"timestamp\":\"t\"}]",
+      "missing comma");
+    json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\"},{\"input\":\"b\"}]",
+      "bad second object leaves h unchanged");
+    json_rejected("[{\"input\":\"a\\x\",\"result\":\"1\",\"timestamp\":\"t\"}]", "unknown escape");
+    json_rejected("[{\"input\":\"\\ud83d\",\"result\":\"1\",\"timestamp\":\"t\"}]", "lone surrogate");
+    json_rejected("[{\"input\":\"\\u0000\",\"result\":\"1\",\"timestamp\":\"t\"}]", "NUL escape");
+    json_rejected("[{\"input\":\"\\u12\",\"result\":\"1\",\"timestamp\":\"t\"}]", "short \\u");
+    # Object interiors are checked too (2.4.9 final review: these loaded).
+    json_rejected("[{\"input\":\"a\" \"result\":\"1\" \"timestamp\":\"t\"}]", "members without commas");
+    json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\" garbage}]", "garbage in an object");
+    json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\",\"x\":}]", "a member with no value");
+    json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\",}]", "a trailing comma in an object");
+    json_rejected("[{\"q\":\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\"}]", "a value read as a key");
+    json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\",\"x\":\"\\q\"}]", "a bad escape in another member");
+    json_rejected("[{\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\",\"n\":01}]", "a number with a leading zero");
+    var h = CalcHistory_new(10);
+    assert_eq(CalcHistory_from_json(h, " [ ] "), 0, "empty array with blanks");
+    assert_eq(CalcHistory_from_json(h, "\n[ {\"input\":\"a\",\"result\":\"1\",\"timestamp\":\"t\"} ,\r\n {\"input\":\"b\",\"result\":\"2\",\"timestamp\":\"t\"} ]\n"), 0,
+      "whitespace between tokens");
+    assert_eq(CalcHistory_len(h), 2, "two entries");
+    return 0;
+}
+
+# 2.4.9: escapes beyond \" \\ \n \r \t were read as the bare letter
+# ("\u00e9" became "u00e9"), and to_json wrote other control bytes raw.
+fn test_history_json_unicode_and_controls() {
+    var h = CalcHistory_new(10);
+    var json = "[{\"input\":\"caf\\u00e9 \\ud83d\\ude00\",\"result\":\"\\b\\f\\/\",\"timestamp\":\"\\u00E9\"}]";
+    assert_eq(CalcHistory_from_json(h, json), 0, "unicode escapes load");
+    var e = CalcHistory_get(h, 0);
+    assert(streq(he_input(e), "caf\xC3\xA9 \xF0\x9F\x98\x80") == 1, "\\u00e9 and a surrogate pair decode to UTF-8");
+    assert(streq(he_result(e), "\x08\x0C/") == 1, "\\b \\f \\/ decode");
+    assert(streq(he_timestamp(e), "\xC3\xA9") == 1, "uppercase hex");
+    var c = CalcHistory_new(10);
+    CalcHistory_push(c, "\x01\x1F\x08\x0C", "\x7F", "t");
+    var s = CalcHistory_to_json(c);
+    var want = "[{\"input\":\"\\u0001\\u001f\\b\\f\",\"result\":\"\x7F\",\"timestamp\":\"t\"}]";
+    assert(str_len(s) == strlen(want) && memeq(str_data(s), want, strlen(want)) == 1, "control bytes escaped per RFC 8259");
+    var n = str_len(s);
+    var cbuf = alloc(n + 1);
+    memcpy(cbuf, str_data(s), n);
+    store8(cbuf + n, 0);
+    var back = CalcHistory_new(10);
+    assert_eq(CalcHistory_from_json(back, cbuf), 0, "escaped controls load");
+    assert(streq(he_input(CalcHistory_get(back, 0)), "\x01\x1F\x08\x0C") == 1, "control bytes round-trip");
+    return 0;
+}
+
+# 2.4.9: load read at most 64 KiB while save wrote any size, so a history
+# of a few hundred entries saved and then failed to load.
+fn test_history_file_roundtrip() {
+    var path = "/tmp/abaco-test-ai-history.json";
+    var h = CalcHistory_new(5000);
+    var i = 0;
+    while (i < 2000) {
+        CalcHistory_push(h, "sqrt(2) * 1234567.891011 + 0.000001", "1745920.453217", "2026-09-30T12:34:56.789+02:00");
+        i = i + 1;
+    }
+    assert(str_len(CalcHistory_to_json(h)) > 65536, "history is over the old 64 KiB cap");
+    assert_eq(CalcHistory_save_to_file(h, path), 0, "save");
+    var h2 = CalcHistory_new(5000);
+    assert_eq(CalcHistory_load_from_file(h2, path), 0, "load (was AI_ERR_PARSE)");
+    assert_eq(CalcHistory_len(h2), 2000, "all 2000 entries back");
+    # A NUL inside the file would hide what follows it from from_json.
+    var nul = "[]\x00 [[[ not json";
+    file_write_all(path, nul, 16);
+    var hn = CalcHistory_new(10);
+    assert_eq(CalcHistory_load_from_file(hn, path), AI_ERR_PARSE, "a file with a NUL in it is refused");
+    file_write_all(path, "", 0);
+    var h3 = CalcHistory_new(10);
+    assert_eq(CalcHistory_load_from_file(h3, path), 0, "empty file is an empty history");
+    assert_eq(CalcHistory_len(h3), 0, "nothing loaded");
+    assert_eq(CalcHistory_load_from_file(h3, "/nonexistent-dir/abaco.json"), AI_ERR_HTTP, "missing file");
+    return 0;
+}
+
+# 2.4.9: convert divided by whatever rate was cached, so a 0 rate from
+# set_rates, or a tiny one as the source, came back as Inf with AI_OK.
+fn test_currency_bad_rates() {
+    var c = CurrencyCache_new("http://localhost:8088");
+    var rates = map_new();
+    map_set(rates, "ZER", f64_from(0));
+    map_set(rates, "TNY", 0x0010000000000000);              # 2^-1022
+    map_set(rates, "NAN", 0x7FF8000000000000);
+    map_set(rates, "BIG", f64_from(1000000));
+    map_set(rates, "EUR", f64_div(f64_from(92), f64_from(100)));
+    CurrencyCache_set_rates(c, "USD", rates);
+    assert_eq(CurrencyCache_convert(c, f64_from(1), "ZER", "EUR"), 0, "0 source rate refused");
+    assert_eq(ai_last_err(), AI_ERR_CURRENCY, "as AI_ERR_CURRENCY");
+    assert_eq(CurrencyCache_convert(c, f64_from(1), "USD", "ZER"), 0, "0 target rate refused");
+    assert_eq(CurrencyCache_convert(c, f64_from(1), "TNY", "BIG"), 0, "Inf cross-rate refused");
+    assert_eq(CurrencyCache_convert(c, f64_from(1000), "TNY", "EUR"), 0, "Inf result refused");
+    assert_eq(CurrencyCache_convert(c, f64_from(1), "USD", "NAN"), 0, "NaN rate refused");
+    assert_eq(CurrencyCache_convert(c, 0x7FF0000000000000, "USD", "EUR"), 0, "Inf amount refused");
+    assert(CurrencyCache_convert(c, f64_from(1), "USD", "EUR") != 0, "good pair still converts");
+    # The plausibility cap is <= 10^6, decided independently of the code.
+    var body = "{\"base\":\"USD\",\"rates\":{\"EUR\":999999999,\"GBP\":1000000}}";
+    var c2 = CurrencyCache_new("http://localhost:8088");
+    assert_eq(_ccy_load_body(c2, body, strlen(body)), 0, "body loads");
+    assert_eq(CurrencyCache_convert(c2, f64_from(1), "USD", "EUR"), 0, "999999999 dropped");
+    assert(CurrencyCache_convert(c2, f64_from(1), "USD", "GBP") != 0, "exactly 10^6 kept");
+    # The base URL is copied.
+    var ub = alloc(32);
+    memcpy(ub, "http://localhost:1", 19);
+    var c3 = CurrencyCache_new(ub);
+    store8(ub + 7, 88);
+    assert(streq(ccy_base_url(c3), "http://localhost:1") == 1, "base_url copied at construction");
+    return 0;
+}
+
+# 2.4.9: a CRLF body lost its last rate ("0.79\r" failed to parse), a nested
+# value dropped every pair after it, and a "base" inside "rates" won over
+# the top-level one.
+fn test_ccy_body_shapes() {
+    var c = CurrencyCache_new("http://localhost:8088");
+    var crlf = "{\"base\":\"USD\",\"rates\":{\"EUR\":0.92,\r\n\"GBP\":0.79\r\n}}";
+    assert_eq(_ccy_load_body(c, crlf, strlen(crlf)), 0, "CRLF body loads");
+    assert(CurrencyCache_convert(c, f64_from(100), "USD", "GBP") != 0, "last rate before CRLF kept");
+    var tab = "{\"base\":\"USD\",\"rates\":{\"EUR\":0.92\t,\"GBP\":0.79}}";
+    var ct = CurrencyCache_new("http://localhost:8088");
+    assert_eq(_ccy_load_body(ct, tab, strlen(tab)), 0, "TAB body loads");
+    assert(CurrencyCache_convert(ct, f64_from(100), "USD", "EUR") != 0, "rate before TAB kept");
+    var nested = "{\"base\":\"USD\",\"rates\":{\"EUR\":0.92,\"X\":{\"a\":1},\"GBP\":0.79}}";
+    var cn = CurrencyCache_new("http://localhost:8088");
+    assert_eq(_ccy_load_body(cn, nested, strlen(nested)), AI_ERR_CURRENCY, "nested rates value refused");
+    # A missing ':' made bayan_json_parse take the NEXT pair's value (2.4.9
+    # final review: GBP loaded as 149.5).
+    var nocolon = "{\"base\":\"USD\",\"rates\":{\"EUR\":0.92,\"GBP\" 0.79,\"JPY\":149.5}}";
+    var cc = CurrencyCache_new("http://localhost:8088");
+    assert_eq(_ccy_load_body(cc, nocolon, strlen(nocolon)), AI_ERR_CURRENCY, "a pair without ':' refuses the body");
+    var nokey = "{\"base\":\"USD\",\"rates\":{\"EUR\",\"GBP\":0.79}}";
+    assert_eq(_ccy_load_body(cc, nokey, strlen(nokey)), AI_ERR_CURRENCY, "a key without a value refuses the body");
+    var pretty = "{\n  \"base\": \"USD\",\n  \"rates\": {\n    \"EUR\": 0.92,\n    \"GBP\": 0.79\n  }\n}\n";
+    var cp = CurrencyCache_new("http://localhost:8088");
+    assert_eq(_ccy_load_body(cp, pretty, strlen(pretty)), 0, "a pretty-printed body loads");
+    assert(CurrencyCache_convert(cp, f64_from(100), "USD", "GBP") != 0, "and converts");
+    var arr = "{\"base\":\"USD\",\"rates\":{\"EUR\":[0.92]}}";
+    assert_eq(_ccy_load_body(cn, arr, strlen(arr)), AI_ERR_CURRENCY, "array rates value refused");
+    var inner = "{\"rates\":{\"base\":\"EUR\",\"GBP\":0.79},\"base\":\"USD\"}";
+    var cb = CurrencyCache_new("http://localhost:8088");
+    assert_eq(_ccy_load_body(cb, inner, strlen(inner)), 0, "body with inner base loads");
+    assert(streq(ccy_base(cb), "USD") == 1, "top-level base wins (was EUR)");
+    return 0;
+}
+
+# 2.4.9: the CRLF fetch test used an https:// URL, which http_get cannot
+# reach anyway, so it passed with the control-byte check removed.
+fn test_security_url_control_bytes() {
+    assert_eq(_ccy_validate_url("https://api.example.com/x\r\nX-Injected: 1"), AI_ERR_HTTP, "CRLF in https URL");
+    assert_eq(_ccy_validate_url("http://localhost:8088/\r\nX: 1"), AI_ERR_HTTP, "CRLF in localhost URL");
+    assert_eq(_ccy_validate_url("http://localhost:8088/\tx"), AI_ERR_HTTP, "TAB");
+    assert_eq(_ccy_validate_url("http://localhost:8088/\x01"), AI_ERR_HTTP, "0x01");
+    assert_eq(_ccy_validate_url("http://localhost:8088/\x7F"), AI_ERR_HTTP, "DEL");
+    assert_eq(_ccy_validate_url("https://api.example.com/x"), 0, "clean https URL");
+    assert_eq(_ccy_validate_url("http://localhost:8088/x"), 0, "clean localhost URL");
     return 0;
 }
 
@@ -488,15 +821,19 @@ fn test_history_json_key_confusion() {
     assert_eq(CalcHistory_len(h), 1, "escaped-lookalike entry parsed");
     assert(streq(he_input(CalcHistory_get(h, 0)), "REAL") == 1, "escaped lookalike ignored");
 
-    # Residual the fix does NOT close: the matcher checks key position but not
-    # nesting depth, so a key inside a nested object would win. It stays benign
-    # today only because _jfa_get_string rejects the non-string value. Pinned
-    # here so the residual is recorded rather than latent.
+    # Since 2.4.9 the matcher is depth-aware: a key inside a nested object
+    # never wins. This payload is still refused, but because "result" is an
+    # object rather than a string — so it cannot show depth-awareness.
     h = CalcHistory_new(10);
     json = "[{\"result\":{\"input\":\"HIJACK\"},\"input\":\"REAL\",\"timestamp\":\"t\"}]";
     var err = CalcHistory_from_json(h, json);
-    assert_eq(err, AI_ERR_PARSE, "nested-object value rejected (residual pinned)");
+    assert_eq(err, AI_ERR_PARSE, "a non-string result is refused");
     assert_eq(CalcHistory_len(h), 0, "no entry from the nested payload");
+    # This one does: the nested "input" comes first and must lose.
+    h = CalcHistory_new(10);
+    json = "[{\"x\":{\"input\":\"HIJACK\"},\"input\":\"REAL\",\"result\":\"r\",\"timestamp\":\"t\"}]";
+    assert_eq(CalcHistory_from_json(h, json), 0, "an extra nested member is fine");
+    assert(streq(he_input(CalcHistory_get(h, 0)), "REAL") == 1, "the top-level input wins over a nested one");
     return 0;
 }
 
@@ -601,6 +938,16 @@ fn main() {
     test_security_percent_of_paren_injection();
     test_security_fetch_rejects_plaintext();
     test_security_fetch_rejects_crlf();
+    test_security_url_control_bytes();
+    test_nl_case_preserved();
+    test_nl_forms();
+    test_nl_parse_f64_strict();
+    test_history_ring();
+    test_history_from_json_strict();
+    test_history_json_unicode_and_controls();
+    test_history_file_roundtrip();
+    test_currency_bad_rates();
+    test_ccy_body_shapes();
     test_security_fetch_accepts_localhost();
     test_security_loopback_must_be_whole_host();
     test_security_rate_sanity_rejects_nan();

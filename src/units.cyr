@@ -1,5 +1,7 @@
 # abaco::units — unit conversion engine.
-# 120+ built-in units, 19 categories, O(1) hashmap lookup by symbol or lowercased name.
+# 110 built-in units in 19 categories, O(1) hashmap lookup. Symbols match
+# exactly as written (SI prefixes and b/B are case-significant); names and
+# aliases match case-insensitively. Lookup policy: docs/architecture/003.
 
 # -- Error codes --
 enum UnitErr {
@@ -10,11 +12,12 @@ enum UnitErr {
 }
 
 # -- Unit Registry --
-# { units_vec, by_symbol (map: string -> unit_ptr), by_lower (map: string -> unit_ptr), error }
+# { units_vec, by_sym (exact-case symbol or spelling -> unit_ptr),
+#   by_low (lowercased name or alias -> unit_ptr, 0 = ambiguous), error }
 struct UnitRegistry { units; by_sym; by_low; err; }
 
-# Build a fresh registry populated with the 110+ built-in units and
-# 80+ aliases. Return value is the UnitRegistry pointer used by
+# Build a fresh registry populated with the built-in units, aliases and
+# spellings. Return value is the UnitRegistry pointer used by
 # UnitRegistry_find / UnitRegistry_convert / UnitRegistry_list.
 fn UnitRegistry_new() {
     var r = alloc(32);
@@ -33,16 +36,26 @@ fn reg_low(r) { return load64(r + 16); }
 fn reg_err(r) { return load64(r + 24); }
 fn reg_set_err(r, e) { store64(r + 24, e); return 0; }
 
-# Shared registry index helper: add unit to vec + by-symbol + by-lower maps.
+# Store a case-insensitive key. A key two different units claim is left
+# ambiguous (value 0), so UnitRegistry_find refuses it rather than answering
+# with whichever unit happened to register last.
+fn _reg_low_set(r, key, u) {
+    var low = load64(r + 16);
+    if (map_has(low, key) == 1) {
+        if (map_get(low, key) != u) { map_set(low, key, 0); }
+        return 0;
+    }
+    map_set(low, key, u);
+    return 0;
+}
+
+# Shared registry index helper: add unit to vec, its symbol to the exact map
+# and its lowercased name to the case-insensitive map. The symbol is NOT
+# folded: "MW" folded is "mw", which is milliwatt.
 fn _reg_index(r, u, name, symbol) {
     vec_push(load64(r), u);
     map_set(load64(r + 8), symbol, u);
-    var lname = str_lower(name);
-    map_set(load64(r + 16), lname, u);
-    var lsym = str_lower(symbol);
-    if (streq(lsym, lname) != 1) {
-        map_set(load64(r + 16), lsym, u);
-    }
+    _reg_low_set(r, str_lower(name), u);
     return 0;
 }
 
@@ -58,12 +71,24 @@ fn reg_add_inv(r, name, symbol, category, factor) {
     return 0;
 }
 
-# Add a lowercase alias (e.g. "kph" -> "km/h") that resolves via the
-# case-insensitive lookup path. No-op if target_sym is unknown.
+# Add an alias (e.g. "kph" -> "km/h") that matches in any case. Only for
+# spellings no case variant of which is another unit. No-op if target_sym
+# is unknown.
 fn reg_alias(r, alias, target_sym) {
     if (map_has(load64(r + 8), target_sym) == 1) {
-        var u = map_get(load64(r + 8), target_sym);
-        map_set(load64(r + 16), str_lower(alias), u);
+        _reg_low_set(r, str_lower(alias), map_get(load64(r + 8), target_sym));
+    }
+    return 0;
+}
+
+# Add an alternate spelling that matches only exactly as written (e.g.
+# "hz" -> "Hz"). For the lowercase form of an SI symbol whose other case
+# variants mean something else ("ml" is millilitre, "ML" is megalitre).
+# Never replaces a registered symbol. No-op if target_sym is unknown.
+fn reg_spelling(r, spelling, target_sym) {
+    var sym = load64(r + 8);
+    if (map_has(sym, target_sym) == 1 && map_has(sym, spelling) == 0) {
+        map_set(sym, spelling, map_get(sym, target_sym));
     }
     return 0;
 }
@@ -81,7 +106,10 @@ fn _has_upper(s) {
 }
 
 # -- Find unit by name or symbol --
+# 1. exact symbol or spelling; 2. name or alias, any case; 3. plural of a
+# name or alias ("meters"). Returns 0 for an unknown or ambiguous query.
 fn UnitRegistry_find(r, query) {
+    if (query == 0) { return 0; }
     var sym = reg_sym(r);
     var low = reg_low(r);
     if (map_has(sym, query) == 1) { return map_get(sym, query); }
@@ -89,14 +117,14 @@ fn UnitRegistry_find(r, query) {
     var lq = query;
     if (_has_upper(query) == 1) { lq = str_lower(query); }
     if (map_has(low, lq) == 1) { return map_get(low, lq); }
+    # Strip one trailing 's' only when 3+ bytes remain, so "ms", "ns" and
+    # "Ws" stay unknown instead of becoming a one- or two-letter unit.
     var lqlen = strlen(lq);
-    if (lqlen > 1) {
-        if (load8(lq + lqlen - 1) == 115) {
-            var singular = alloc(lqlen);
-            memcpy(singular, lq, lqlen - 1);
-            store8(singular + lqlen - 1, 0);
-            if (map_has(low, singular) == 1) { return map_get(low, singular); }
-        }
+    if (lqlen > 3 && load8(lq + lqlen - 1) == 115) {
+        var singular = alloc(lqlen);
+        memcpy(singular, lq, lqlen - 1);
+        store8(singular + lqlen - 1, 0);
+        return map_get(low, singular);
     }
     return 0;
 }
@@ -118,6 +146,13 @@ fn UnitRegistry_list(r, category) {
     return result;
 }
 
+# 1 if x is finite and > 0. A reciprocal unit (L/100km) has no meaning for a
+# zero, negative or non-finite amount, and a subnormal one overflows to Inf.
+fn _reg_pos_finite(x) {
+    if (f64_gt(x, 0) == 1 && f64_lt(x, 0x7FF0000000000000) == 1) { return 1; }
+    return 0;
+}
+
 # -- Convert value between units --
 fn UnitRegistry_convert(r, value, from_str, to_str) {
     reg_set_err(r, UERR_NONE);
@@ -132,40 +167,63 @@ fn UnitRegistry_convert(r, value, from_str, to_str) {
         return f64_from(0);
     }
 
-    # Same unit shortcut
+    # Same unit shortcut — after the reciprocal-unit domain check, which the
+    # first 2.4.9 cut skipped here ("-5 L/100km" to "l/100km" came back -5).
     if (streq(Unit_symbol(from_u), Unit_symbol(to_u)) == 1) {
+        if (Unit_inverse(from_u) == 1 && _reg_pos_finite(value) == 0) {
+            reg_set_err(r, UERR_CONVERT);
+            return f64_from(0);
+        }
         return value;
     }
 
     # Convert to base
     var base_val = f64_from(0);
     if (Unit_inverse(from_u) == 1) {
-        if (f64_eq(value, f64_from(0)) == 1) {
+        if (_reg_pos_finite(value) == 0) {
             reg_set_err(r, UERR_CONVERT);
             return f64_from(0);
         }
         base_val = f64_div(Unit_factor(from_u), value);
+        if (_reg_pos_finite(base_val) == 0) {
+            reg_set_err(r, UERR_CONVERT);
+            return f64_from(0);
+        }
     } else {
         base_val = f64_mul(f64_add(value, Unit_offset(from_u)), Unit_factor(from_u));
     }
 
     # Convert from base to target
     if (Unit_inverse(to_u) == 1) {
-        if (f64_eq(base_val, f64_from(0)) == 1) {
+        if (_reg_pos_finite(base_val) == 0) {
             reg_set_err(r, UERR_CONVERT);
             return f64_from(0);
         }
-        return f64_div(Unit_factor(to_u), base_val);
+        var inv = f64_div(Unit_factor(to_u), base_val);
+        if (_reg_pos_finite(inv) == 0) {
+            reg_set_err(r, UERR_CONVERT);
+            return f64_from(0);
+        }
+        return inv;
     }
-    return f64_sub(f64_div(base_val, Unit_factor(to_u)), Unit_offset(to_u));
+    var out = f64_sub(f64_div(base_val, Unit_factor(to_u)), Unit_offset(to_u));
+    # From a reciprocal unit the base value can be near DBL_MAX, and the last
+    # division can still overflow (1e-306 L/100km to mpg was +Inf).
+    if (Unit_inverse(from_u) == 1 && _reg_pos_finite(out) == 0) {
+        reg_set_err(r, UERR_CONVERT);
+        return f64_from(0);
+    }
+    return out;
 }
 
 # ================================================================
 # Unit data population
 # ================================================================
 
-# Helper: convert f64 literal to bits for factors
-# We use f64_div/f64_mul/f64_from to build exact factors
+# Factors are built from the exact definitions (NIST SP 811 App. B and the
+# 1959 yard-and-pound agreement) as one integer ratio each. Both integers are
+# exact in f64, so every factor is the correctly rounded value of its exact
+# definition; tests/test_units.tcyr checks each one bit-for-bit.
 
 # Populate the registry with all built-in units (called by UnitRegistry_new).
 fn reg_populate(r) {
@@ -185,10 +243,12 @@ fn reg_populate(r) {
     reg_add(r, "kilogram", "kg", CAT_MASS, f64_from(1), zero);
     reg_add(r, "gram", "g", CAT_MASS, f64_div(f64_from(1), f64_from(1000)), zero);
     reg_add(r, "milligram", "mg", CAT_MASS, f64_div(f64_from(1), f64_from(1000000)), zero);
-    reg_add(r, "pound", "lb", CAT_MASS, f64_div(f64_from(453592), f64_from(1000000)), zero);
-    reg_add(r, "ounce", "oz", CAT_MASS, f64_div(f64_from(283495), f64_from(10000000)), zero);
+    # 1 lb = 0.45359237 kg exactly; oz = lb/16, st = 14 lb.
+    reg_add(r, "pound", "lb", CAT_MASS, f64_div(f64_from(45359237), f64_from(100000000)), zero);
+    reg_add(r, "ounce", "oz", CAT_MASS, f64_div(f64_from(45359237), f64_from(1600000000)), zero);
+    # "ton" is the metric tonne (1000 kg), not the US short or UK long ton.
     reg_add(r, "ton", "t", CAT_MASS, f64_from(1000), zero);
-    reg_add(r, "stone", "st", CAT_MASS, f64_div(f64_from(635029), f64_from(100000)), zero);
+    reg_add(r, "stone", "st", CAT_MASS, f64_div(f64_from(635029318), f64_from(100000000)), zero);
 
     # -- Temperature (base: celsius) --
     reg_add(r, "celsius", "C", CAT_TEMPERATURE, f64_from(1), zero);
@@ -224,7 +284,7 @@ fn reg_populate(r) {
     var kmh = f64_div(f64_from(1), f64_div(f64_from(36), f64_from(10)));
     reg_add(r, "kilometers_per_hour", "km/h", CAT_SPEED, kmh, zero);
     reg_add(r, "miles_per_hour", "mph", CAT_SPEED, f64_div(f64_from(44704), f64_from(100000)), zero);
-    reg_add(r, "knot", "kn", CAT_SPEED, f64_div(f64_from(514444), f64_from(1000000)), zero);
+    reg_add(r, "knot", "kn", CAT_SPEED, f64_div(f64_from(1852), f64_from(3600)), zero);
     reg_add(r, "feet_per_second", "ft/s", CAT_SPEED, f64_div(f64_from(3048), f64_from(10000)), zero);
     reg_add(r, "yards_per_second", "yd/s", CAT_SPEED, f64_div(f64_from(9144), f64_from(10000)), zero);
 
@@ -232,19 +292,22 @@ fn reg_populate(r) {
     reg_add(r, "square_meter", "m2", CAT_AREA, f64_from(1), zero);
     reg_add(r, "square_kilometer", "km2", CAT_AREA, f64_from(1000000), zero);
     reg_add(r, "hectare", "ha", CAT_AREA, f64_from(10000), zero);
-    reg_add(r, "square_foot", "ft2", CAT_AREA, f64_div(f64_from(92903), f64_from(1000000)), zero);
+    reg_add(r, "square_foot", "ft2", CAT_AREA, f64_div(f64_from(9290304), f64_from(100000000)), zero);
     reg_add(r, "square_inch", "in2", CAT_AREA, f64_div(f64_from(64516), f64_from(100000000)), zero);
-    reg_add(r, "acre", "ac", CAT_AREA, f64_div(f64_from(40468564), f64_from(10000)), zero);
+    # International acre = 43560 ft2.
+    reg_add(r, "acre", "ac", CAT_AREA, f64_div(f64_from(40468564224), f64_from(10000000)), zero);
 
     # -- Volume (base: liter) --
     reg_add(r, "liter", "L", CAT_VOLUME, f64_from(1), zero);
     reg_add(r, "milliliter", "mL", CAT_VOLUME, f64_div(f64_from(1), f64_from(1000)), zero);
-    reg_add(r, "gallon", "gal", CAT_VOLUME, f64_div(f64_from(378541), f64_from(100000)), zero);
-    reg_add(r, "quart", "qt", CAT_VOLUME, f64_div(f64_from(946353), f64_from(1000000)), zero);
-    reg_add(r, "pint", "pt", CAT_VOLUME, f64_div(f64_from(473176), f64_from(1000000)), zero);
-    reg_add(r, "cup", "cup", CAT_VOLUME, f64_div(f64_from(236588), f64_from(1000000)), zero);
-    reg_add(r, "tablespoon", "tbsp", CAT_VOLUME, f64_div(f64_from(147868), f64_from(10000000)), zero);
-    reg_add(r, "teaspoon", "tsp", CAT_VOLUME, f64_div(f64_from(492892), f64_from(100000000)), zero);
+    # US liquid gallon = 231 in3 = 3.785411784 L; qt, pt, cup, tbsp and tsp
+    # are gal/4, /8, /16, /256 and /768.
+    reg_add(r, "gallon", "gal", CAT_VOLUME, f64_div(f64_from(3785411784), f64_from(1000000000)), zero);
+    reg_add(r, "quart", "qt", CAT_VOLUME, f64_div(f64_from(946352946), f64_from(1000000000)), zero);
+    reg_add(r, "pint", "pt", CAT_VOLUME, f64_div(f64_from(473176473), f64_from(1000000000)), zero);
+    reg_add(r, "cup", "cup", CAT_VOLUME, f64_div(f64_from(473176473), f64_from(2000000000)), zero);
+    reg_add(r, "tablespoon", "tbsp", CAT_VOLUME, f64_div(f64_from(1478676478125), f64_from(100000000000000)), zero);
+    reg_add(r, "teaspoon", "tsp", CAT_VOLUME, f64_div(f64_from(492892159375), f64_from(100000000000000)), zero);
 
     # -- Energy (base: joule) --
     reg_add(r, "joule", "J", CAT_ENERGY, f64_from(1), zero);
@@ -253,7 +316,8 @@ fn reg_populate(r) {
     reg_add(r, "kilocalorie", "kcal", CAT_ENERGY, f64_from(4184), zero);
     reg_add(r, "watt_hour", "Wh", CAT_ENERGY, f64_from(3600), zero);
     reg_add(r, "kilowatt_hour", "kWh", CAT_ENERGY, f64_from(3600000), zero);
-    reg_add(r, "btu", "BTU", CAT_ENERGY, f64_div(f64_from(105506), f64_from(100)), zero);
+    # International Table BTU.
+    reg_add(r, "btu", "BTU", CAT_ENERGY, f64_div(f64_from(105505585262), f64_from(100000000)), zero);
     reg_add(r, "megajoule", "MJ", CAT_ENERGY, f64_from(1000000), zero);
 
     # -- Pressure (base: pascal) --
@@ -261,9 +325,11 @@ fn reg_populate(r) {
     reg_add(r, "kilopascal", "kPa", CAT_PRESSURE, f64_from(1000), zero);
     reg_add(r, "bar", "bar", CAT_PRESSURE, f64_from(100000), zero);
     reg_add(r, "atmosphere", "atm", CAT_PRESSURE, f64_from(101325), zero);
-    reg_add(r, "psi", "psi", CAT_PRESSURE, f64_div(f64_from(689476), f64_from(100)), zero);
-    reg_add(r, "mmhg", "mmHg", CAT_PRESSURE, f64_div(f64_from(133322), f64_from(1000)), zero);
-    reg_add(r, "torr", "torr", CAT_PRESSURE, f64_div(f64_from(133322), f64_from(1000)), zero);
+    # psi = lbf / in2. mmHg is the conventional 13.5951 g/cm3 x 9.80665 m/s2
+    # x 1 mm; torr is atm/760. They differ in the 7th digit.
+    reg_add(r, "psi", "psi", CAT_PRESSURE, f64_div(f64_from(44482216152605), f64_from(6451600000)), zero);
+    reg_add(r, "mmhg", "mmHg", CAT_PRESSURE, f64_div(f64_from(133322387415), f64_from(1000000000)), zero);
+    reg_add(r, "torr", "torr", CAT_PRESSURE, f64_div(f64_from(101325), f64_from(760)), zero);
 
     # -- Angle (base: radian) --
     reg_add(r, "radian", "rad", CAT_ANGLE, f64_from(1), zero);
@@ -283,7 +349,8 @@ fn reg_populate(r) {
     # -- Force (base: newton) --
     reg_add(r, "newton", "N", CAT_FORCE, f64_from(1), zero);
     reg_add(r, "kilonewton", "kN", CAT_FORCE, f64_from(1000), zero);
-    reg_add(r, "pound_force", "lbf", CAT_FORCE, f64_div(f64_from(444822), f64_from(100000)), zero);
+    # lbf = lb x standard gravity (9.80665 m/s2).
+    reg_add(r, "pound_force", "lbf", CAT_FORCE, f64_div(f64_from(44482216152605), f64_from(10000000000000)), zero);
     reg_add(r, "dyne", "dyn", CAT_FORCE, f64_div(f64_from(1), f64_from(100000)), zero);
     reg_add(r, "kilogram_force", "kgf", CAT_FORCE, f64_div(f64_from(980665), f64_from(100000)), zero);
 
@@ -291,12 +358,15 @@ fn reg_populate(r) {
     reg_add(r, "watt", "W", CAT_POWER, f64_from(1), zero);
     reg_add(r, "kilowatt", "kW", CAT_POWER, f64_from(1000), zero);
     reg_add(r, "megawatt", "MW", CAT_POWER, f64_from(1000000), zero);
-    reg_add(r, "horsepower", "hp", CAT_POWER, f64_div(f64_from(7457), f64_from(10)), zero);
+    # Mechanical horsepower, 550 ft lbf/s = 745.69987158227022 W. The 16-digit
+    # ratio rounds to the same double as the exact value.
+    reg_add(r, "horsepower", "hp", CAT_POWER, f64_div(f64_from(7456998715822702), f64_from(10000000000000)), zero);
     reg_add(r, "milliwatt", "mW", CAT_POWER, f64_div(f64_from(1), f64_from(1000)), zero);
 
     # -- Fuel economy (base: km/L) --
     reg_add(r, "kilometers_per_liter", "km/L", CAT_FUELECONOMY, f64_from(1), zero);
-    reg_add(r, "miles_per_gallon", "mpg", CAT_FUELECONOMY, f64_div(f64_from(425144), f64_from(1000000)), zero);
+    # mpg = 1.609344 km / 3.785411784 L.
+    reg_add(r, "miles_per_gallon", "mpg", CAT_FUELECONOMY, f64_div(f64_from(1609344000), f64_from(3785411784)), zero);
     reg_add_inv(r, "liters_per_100km", "L/100km", CAT_FUELECONOMY, f64_from(100));
 
     # -- Density (base: kg/m3) --
@@ -304,11 +374,12 @@ fn reg_populate(r) {
     reg_add(r, "gram_per_cubic_centimeter", "g/cm3", CAT_DENSITY, f64_from(1000), zero);
     reg_add(r, "gram_per_milliliter", "g/mL", CAT_DENSITY, f64_from(1000), zero);
     reg_add(r, "kilogram_per_liter", "kg/L", CAT_DENSITY, f64_from(1000), zero);
-    reg_add(r, "pound_per_cubic_foot", "lb/ft3", CAT_DENSITY, f64_div(f64_from(160185), f64_from(10000)), zero);
+    var lbft3 = f64_div(f64_from(453592370000), f64_from(28316846592));
+    reg_add(r, "pound_per_cubic_foot", "lb/ft3", CAT_DENSITY, lbft3, zero);
 
     # -- Luminosity (base: lux) --
     reg_add(r, "lux", "lx", CAT_LUMINOSITY, f64_from(1), zero);
-    reg_add(r, "foot_candle", "fc", CAT_LUMINOSITY, f64_div(f64_from(107639), f64_from(10000)), zero);
+    reg_add(r, "foot_candle", "fc", CAT_LUMINOSITY, f64_div(f64_from(100000000), f64_from(9290304)), zero);
     reg_add(r, "lumen_per_square_meter", "lm/m2", CAT_LUMINOSITY, f64_from(1), zero);
     reg_add(r, "phot", "ph", CAT_LUMINOSITY, f64_from(10000), zero);
 
@@ -328,33 +399,97 @@ fn reg_populate(r) {
 
 # Populate the registry's alias table (called by UnitRegistry_new).
 fn reg_aliases(r) {
+    # Non-SI abbreviations carry no case meaning, so they match in any case
+    # ("LB", "Gal", "MPH"). SI symbols are not listed: they match exactly.
+    reg_alias(r, "mi", "mi");
+    reg_alias(r, "yd", "yd");
+    reg_alias(r, "ft", "ft");
+    reg_alias(r, "in", "in");
+    reg_alias(r, "nmi", "nmi");
+    reg_alias(r, "lb", "lb");
+    reg_alias(r, "oz", "oz");
+    reg_alias(r, "st", "st");
+    reg_alias(r, "min", "min");
+    reg_alias(r, "hr", "hr");
+    reg_alias(r, "wk", "wk");
+    reg_alias(r, "yr", "yr");
+    reg_alias(r, "mph", "mph");
+    reg_alias(r, "ft/s", "ft/s");
+    reg_alias(r, "yd/s", "yd/s");
+    reg_alias(r, "ac", "ac");
+    reg_alias(r, "gal", "gal");
+    reg_alias(r, "qt", "qt");
+    reg_alias(r, "pt", "pt");
+    reg_alias(r, "tbsp", "tbsp");
+    reg_alias(r, "tsp", "tsp");
+    reg_alias(r, "kcal", "kcal");
+    reg_alias(r, "atm", "atm");
+    reg_alias(r, "deg", "deg");
+    reg_alias(r, "grad", "grad");
+    reg_alias(r, "arcmin", "arcmin");
+    reg_alias(r, "arcsec", "arcsec");
+    reg_alias(r, "lbf", "lbf");
+    reg_alias(r, "dyn", "dyn");
+    reg_alias(r, "kgf", "kgf");
+    reg_alias(r, "hp", "hp");
+    reg_alias(r, "mpg", "mpg");
+    reg_alias(r, "lb/ft3", "lb/ft3");
+    reg_alias(r, "fc", "fc");
+    reg_alias(r, "semi", "semi");
+    reg_alias(r, "oct", "oct");
+    # Lowercase spellings of SI symbols, exact case only. Left out because
+    # the spelling is another unit: b, kb, mb, gb, ... (bits), mhz (mHz),
+    # mj (mJ), mw (MW or mW), kn (knot), p (pico), t (tesla).
+    reg_spelling(r, "c", "C");
+    reg_spelling(r, "f", "F");
+    reg_spelling(r, "k", "K");
+    reg_spelling(r, "l", "L");
+    reg_spelling(r, "ml", "mL");
+    reg_spelling(r, "j", "J");
+    reg_spelling(r, "kj", "kJ");
+    reg_spelling(r, "wh", "Wh");
+    reg_spelling(r, "kwh", "kWh");
+    reg_spelling(r, "pa", "Pa");
+    reg_spelling(r, "kpa", "kPa");
+    reg_spelling(r, "hz", "Hz");
+    reg_spelling(r, "khz", "kHz");
+    reg_spelling(r, "ghz", "GHz");
+    reg_spelling(r, "n", "N");
+    reg_spelling(r, "w", "W");
+    reg_spelling(r, "kw", "kW");
+    reg_spelling(r, "km/l", "km/L");
+    reg_spelling(r, "l/100km", "L/100km");
+    reg_spelling(r, "g/ml", "g/mL");
+    reg_spelling(r, "kg/l", "kg/L");
+    reg_spelling(r, "cp", "cP");
+    reg_spelling(r, "pas", "Pas");
+    reg_spelling(r, "mpas", "mPas");
     # Tempo / audio
     reg_alias(r, "bpm", "bpm");
     reg_alias(r, "bpms", "bpm");
     reg_alias(r, "beats_per_min", "bpm");
     # Pitch
     reg_alias(r, "semitones", "semi");
-    reg_alias(r, "st", "semi");
     reg_alias(r, "cents", "cent");
     reg_alias(r, "octaves", "oct");
     # Temperature
     reg_alias(r, "degc", "C");
     reg_alias(r, "degf", "F");
     reg_alias(r, "centigrade", "C");
-    # Length
-    reg_alias(r, "metres", "m");
-    reg_alias(r, "kilometres", "km");
+    # Length (British singulars; the plural strip covers "metres" etc.)
+    reg_alias(r, "metre", "m");
+    reg_alias(r, "kilometre", "km");
+    reg_alias(r, "centimetre", "cm");
+    reg_alias(r, "millimetre", "mm");
     reg_alias(r, "feet", "ft");
     reg_alias(r, "inches", "in");
-    reg_alias(r, "centimetres", "cm");
-    reg_alias(r, "millimetres", "mm");
     # Mass
     reg_alias(r, "kilogramme", "kg");
     reg_alias(r, "gramme", "g");
     reg_alias(r, "lbs", "lb");
     reg_alias(r, "pounds", "lb");
     reg_alias(r, "ounces", "oz");
-    reg_alias(r, "tonnes", "t");
+    reg_alias(r, "tonne", "t");
     # Speed
     reg_alias(r, "kph", "km/h");
     reg_alias(r, "kmh", "km/h");

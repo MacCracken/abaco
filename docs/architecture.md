@@ -1,8 +1,9 @@
 # Architecture
 
 Abaco is a single Cyrius module set with a flat namespace. It has no
-workspace, no sub-crates, no feature flags at link time — consumers
-include exactly the `src/*.cyr` modules they need.
+workspace, no sub-crates, no feature flags at link time. Consumers depend on
+the one bundle `dist/abaco.cyr` (all six modules, in `[lib]` order) through
+`[deps.abaco]`; see [`guides/consuming-abaco.md`](guides/consuming-abaco.md).
 
 ## Module layout
 
@@ -11,13 +12,13 @@ abaco
 ├── src/core.cyr      — Value, Unit, UnitCategory, Currency,
 │                       ConversionResult, str_lower / str_upper
 ├── src/ntheory.cyr   — is_prime, next/prev_prime, factor, totient,
-│                       fibonacci, binomial, mod_pow
+│                       abaco_binomial, mod_pow
 ├── src/dsp.cyr       — Windows, interpolation, dB, MIDI, chromagram,
 │                       SIMD batch ops, samples↔ms, BPM↔Hz
 ├── src/eval.cyr      — Tokenizer + recursive-descent parser,
 │                       Evaluator, 43+ built-in functions, variables
 ├── src/units.cyr     — UnitRegistry (vec + 2 hashmaps),
-│                       reg_add / reg_add_inv / reg_alias,
+│                       reg_add / reg_add_inv / reg_alias / reg_spelling,
 │                       UnitRegistry_find / _convert / _list
 ├── src/ai.cyr        — NlParser, ParsedQuery, CalcHistory,
 │                       CurrencyCache (set_rates / fetch / convert)
@@ -60,9 +61,12 @@ explicit, not hidden behind a wrapper type.
 
 ### Error handling via tagged values or error-slot state
 Two idioms coexist:
-1. **Return tagged values** — `is_ok(r) / payload(r)` from
-   `lib/tagged.cyr`, used by `ntheory::prev_prime`, `Value_as_f64`,
-   and the `_nl_parse_f64` helper.
+1. **Return tagged values** — `Ok(v)` / `Err(e)` from `lib/tagged.cyr`,
+   read with the two-value destructure:
+   `var t, v = prev_prime(n); if (is_ok(t) == 1) { ... v ... }`.
+   Used by `prev_prime`, `abaco_binomial`, `abaco_f64_to_i64`,
+   `Value_as_f64` and the `_nl_parse_f64` helper. (The single-value
+   `payload(r)` form of the pre-6.x stdlib no longer compiles.)
 2. **Error slot on the struct** — `UnitRegistry` and `Evaluator` each
    hold an `err` field; callers check `reg_err(r)` / `eval_err(e)`
    after each operation.
@@ -78,18 +82,19 @@ not have.
 ## Data flow — a unit conversion
 
 ```
-1. user input            "5 km to miles"
+1. user input            "Convert 5 km to miles"
                               │
-2. NlParser (ai.cyr)          │
-   nl_parse() returns         ▼
+2. NlParser (ai.cyr)          │  keywords matched on a lowercased copy;
+   nl_parse() returns         ▼  unit words keep the case typed
    PQ_CONVERSION tagged       ParsedQuery { kind=1, v=5.0,
                                             s1="km", s2="miles" }
                               │
 3. UnitRegistry_convert       ▼
-   (units.cyr)                UnitRegistry_find("km")    -> Unit ptr
-                              UnitRegistry_find("miles") -> Unit ptr
-                              base_val = value * factor + offset
-                              result = (base_val - offset_to) / factor_to
+   (units.cyr)                UnitRegistry_find("km")    -> Unit ptr (exact symbol)
+                              UnitRegistry_find("miles") -> Unit ptr (plural of a name)
+                              base_val = (value + offset) * factor
+                              result   = base_val / factor_to - offset_to
+                              (a reciprocal unit: base_val = factor / value)
                               │
 4. Return f64 bits            ▼
                               3.10686 * f64
@@ -124,16 +129,18 @@ not have.
 ## Consumer layering
 
 ```
-    ┌─── abacus (GUI) ─── dhvani (audio) ─── hisab (physics/high math) ───┐
-    │        │                   │                        │                │
-    │        └───────────────────┴────────────────────────┘                │
-    │                            │                                         │
-    │                         abaco                                        │
-    │                            │                                         │
-    │                      cyrius stdlib                                   │
-    └──────────────────────────────────────────────────────────────────────┘
+    ┌──── dhvani (audio) ──── jalwa ──── abacus (GUI, planned) ────┐
+    │          │                 │               │                 │
+    │          └─────────────────┴───────────────┘                 │
+    │                            │                                 │
+    │                         abaco          hisab (sibling: high  │
+    │                            │           math, not a consumer) │
+    │                      cyrius stdlib                           │
+    └──────────────────────────────────────────────────────────────┘
 ```
 
 Abaco exposes a stable API that consumers depend on. It does not
 reach upward into any consumer. New consumers add themselves by
 depending on the `dist/abaco.cyr` bundle through their `cyrius.cyml`.
+Which consumers are live, and on which tag, is in
+[`development/state.md`](development/state.md).

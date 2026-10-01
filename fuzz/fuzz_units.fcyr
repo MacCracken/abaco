@@ -3,7 +3,14 @@
 #   - UnitRegistry_find never crashes on any string.
 #   - UnitRegistry_convert never crashes; sets UERR_UNKNOWN / UERR_INCOMPAT cleanly.
 #   - Round-trip within a category: convert(convert(x, a, b), b, a) ≈ x.
-#   - Converting a value between the same unit is the identity.
+#   - Two spellings of one unit (symbol, name, alias, plural) convert as the
+#     identity. Through 2.4.8 this used convert(x, a, a), which returns x
+#     without looking at a factor and so could never fail.
+#   - 1 unit of a sampled unit is exactly its reference factor in the base
+#     unit (correctly rounded from the exact definition; an independent
+#     oracle, unlike the round trip, which cancels any factor error).
+#   - A two-byte query "<letter>s" never resolves: the plural strip must not
+#     turn "ms" into metre or "ns" into newton.
 
 include "src/core.cyr"
 include "src/ntheory.cyr"
@@ -70,6 +77,48 @@ fn _rt_pair(i, out_from, out_to) {
     return 0;
 }
 
+# Pairs of different spellings of the same unit.
+var SP_PAIRS_N = 12;
+fn _sp_pair(i, out_a, out_b) {
+    switch (i) {
+        case 0:  { store64(out_a, "lb");    store64(out_b, "pounds");     return 0; }
+        case 1:  { store64(out_a, "km");    store64(out_b, "Kilometers"); return 0; }
+        case 2:  { store64(out_a, "m");     store64(out_b, "metre");      return 0; }
+        case 3:  { store64(out_a, "L");     store64(out_b, "litres");     return 0; }
+        case 4:  { store64(out_a, "Hz");    store64(out_b, "hertz");      return 0; }
+        case 5:  { store64(out_a, "C");     store64(out_b, "Celsius");    return 0; }
+        case 6:  { store64(out_a, "ft");    store64(out_b, "FEET");       return 0; }
+        case 7:  { store64(out_a, "kWh");   store64(out_b, "kwh");        return 0; }
+        case 8:  { store64(out_a, "t");     store64(out_b, "tonne");      return 0; }
+        case 9:  { store64(out_a, "st");    store64(out_b, "Stones");     return 0; }
+        case 10: { store64(out_a, "semi");  store64(out_b, "semitones");  return 0; }
+    }
+    store64(out_a, "km/h");
+    store64(out_b, "kph");
+    return 0;
+}
+
+# (unit, base unit, bits of the correctly rounded exact factor).
+var FX_N = 12;
+fn _fx(i, out_u, out_b) {
+    switch (i) {
+        case 0:  { store64(out_u, "lb");   store64(out_b, "kg");   return 0x3FDD07A84AB75E51; }
+        case 1:  { store64(out_u, "gal");  store64(out_b, "L");    return 0x400E4885F9316256; }
+        case 2:  { store64(out_u, "tsp");  store64(out_b, "L");    return 0x3F74305950CB96E4; }
+        case 3:  { store64(out_u, "ac");   store64(out_b, "m2");   return 0x40AF9DB67CFF2F20; }
+        case 4:  { store64(out_u, "kn");   store64(out_b, "m/s");  return 0x3FE07654320FEDCC; }
+        case 5:  { store64(out_u, "torr"); store64(out_b, "Pa");   return 0x4060AA50D79435E5; }
+        case 6:  { store64(out_u, "mmHg"); store64(out_b, "Pa");   return 0x4060AA50FF698225; }
+        case 7:  { store64(out_u, "BTU");  store64(out_b, "J");    return 0x40907C39316DE12F; }
+        case 8:  { store64(out_u, "psi");  store64(out_b, "Pa");   return 0x40BAEEC1DDF70F99; }
+        case 9:  { store64(out_u, "hp");   store64(out_b, "W");    return 0x40874D995645AA01; }
+        case 10: { store64(out_u, "mpg");  store64(out_b, "km/L"); return 0x3FDB358DF3E0D871; }
+    }
+    store64(out_u, "mi");
+    store64(out_b, "m");
+    return 0x409925604189374C;
+}
+
 fn main() {
     alloc_init();
     args_init();
@@ -80,8 +129,18 @@ fn main() {
         iters = 0;
         var ai = 0;
         while (load8(arg + ai) != 0) {
-            iters = iters * 10 + load8(arg + ai) - 48;
+            var dig = load8(arg + ai);
+            # A typo must not run 0 iterations and report a pass.
+            if (dig < 48 || dig > 57 || ai >= 9) {
+                println("usage: <harness> [iterations, 1-999999999]");
+                sys_exit(2);
+            }
+            iters = iters * 10 + dig - 48;
             ai = ai + 1;
+        }
+        if (iters <= 0) {
+            println("usage: <harness> [iterations, 1-999999999]");
+            sys_exit(2);
         }
     }
 
@@ -131,11 +190,36 @@ fn main() {
             sys_exit(1);
         }
 
-        # Identity: converting to same unit = input.
-        var same = UnitRegistry_convert(reg, x, a, a);
-        if (f64_to(same) != x_i) {
+        # Identity across spellings of one unit.
+        _sp_pair(_fz_u(SP_PAIRS_N), from_slot, to_slot);
+        var sa = load64(from_slot);
+        var sb = load64(to_slot);
+        var same = UnitRegistry_convert(reg, x, sa, sb);
+        if (reg_err(reg) != UERR_NONE || same != x) {
             _fz_puts("FAIL: identity ");
-            _fz_puts(a); println("");
+            _fz_puts(sa); _fz_puts(" = "); println(sb);
+            sys_exit(1);
+        }
+
+        # Factor oracle: x units in the base unit is x * factor, bit for bit
+        # (the converter does exactly that multiply, with offset 0).
+        var fbits = _fx(_fz_u(FX_N), from_slot, to_slot);
+        var fu = load64(from_slot);
+        var got = UnitRegistry_convert(reg, x, fu, load64(to_slot));
+        if (reg_err(reg) != UERR_NONE || got != f64_mul(x, fbits)) {
+            _fz_puts("FAIL: factor ");
+            _fz_puts(fu); println("");
+            sys_exit(1);
+        }
+
+        # "<letter>s" is never a unit.
+        var two = alloc(3);
+        store8(two, 65 + _fz_u(58));
+        store8(two + 1, 115);
+        store8(two + 2, 0);
+        if (UnitRegistry_find(reg, two) != 0) {
+            _fz_puts("FAIL: plural strip resolved ");
+            println(two);
             sys_exit(1);
         }
 

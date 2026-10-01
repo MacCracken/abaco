@@ -61,6 +61,9 @@ Retrieve calculation history.
 List available units, optionally filtered by category.
 
 **Parameters:**
-- `category` (string, optional) — Filter by category (e.g., "Length", "Mass", "Temperature")
+- `category` (string, optional) — Filter by category (e.g., "Length", "Mass", "Temperature"). Matched by
+  `category_from_str`, which ignores case and treats spaces and underscores alike, so the display names
+  `category_name` returns ("Data Size", "Fuel Economy") and keys such as "data_size" all work (2.4.9; through
+  2.4.8 only the exact lowercase keys did, so every example above was rejected)
 
 **Returns:** `{ "units": [{ "name": "meter", "symbol": "m", "category": "Length" }] }`

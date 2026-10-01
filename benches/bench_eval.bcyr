@@ -16,9 +16,12 @@ include "src/core.cyr"
 include "src/ntheory.cyr"
 include "src/dsp.cyr"
 include "src/eval.cyr"
+include "src/units.cyr"
+include "src/ai.cyr"
 
 var BENCH_ITERS = 10000;
 var _ev = 0;
+var _hist = 0;
 
 fn _bench_eval_addition() { Evaluator_eval(_ev, "2 + 3"); return 0; }
 fn _bench_eval_mixed() { Evaluator_eval(_ev, "2 + 3 * 4"); return 0; }
@@ -31,12 +34,16 @@ fn _bench_eval_pow() { Evaluator_eval(_ev, "pow(2, 10)"); return 0; }
 fn _bench_eval_min() { Evaluator_eval(_ev, "min(3, 5)"); return 0; }
 fn _bench_eval_lcm() { Evaluator_eval(_ev, "lcm(12, 18)"); return 0; }
 # `choose` is the evaluator's binomial alias — the same path, under a name
-# that does not collide with bench.bcyr's direct `binomial` row in the CSV.
+# that does not collide with bench.bcyr's direct `abaco_binomial` row in the CSV.
 fn _bench_eval_choose() { Evaluator_eval(_ev, "choose(20, 10)"); return 0; }
 fn _bench_eval_complex() { Evaluator_eval(_ev, "2^3 + sqrt(9) * 2"); return 0; }
 fn _bench_eval_nested() { Evaluator_eval(_ev, "((1 + 2) * (3 + 4)) / (5 - 1)"); return 0; }
 fn _bench_eval_trig() { Evaluator_eval(_ev, "sin(pi / 4) * cos(pi / 4)"); return 0; }
 fn _bench_eval_long_add() { Evaluator_eval(_ev, "1+2+3+4+5+6+7+8+9+10"); return 0; }
+# The NL front end and a history push at capacity, the case that copied the
+# whole history on every push through 2.4.8 (CHANGELOG 2.4.9).
+fn _bench_nl_parse_convert() { nl_parse("convert 5 MW to kW"); return 0; }
+fn _bench_history_push_full() { CalcHistory_push(_hist, "2 + 3", "5", "2026-09-30T00:00:00Z"); return 0; }
 fn _bench_eval_sci_add() { Evaluator_eval(_ev, "1.5e10 + 2.3e9"); return 0; }
 fn _bench_eval_sci_mul() { Evaluator_eval(_ev, "1e-3 * 1e3"); return 0; }
 
@@ -76,7 +83,10 @@ fn main() {
     bench_report(b);
 
     println("--- eval_functions ---");
-    b = bench_new("sqrt");
+    # `eval_sqrt`, not `sqrt`: bench.bcyr's DSP group has its own `sqrt` row
+    # (f64_sqrt), and the trail keys rows by name alone, so through 2.4.8
+    # bench-latest.md showed that row twice and this one never (CHANGELOG 2.4.9).
+    b = bench_new("eval_sqrt");
     bench_run(b, &_bench_eval_sqrt, BENCH_ITERS);
     bench_report(b);
 
@@ -137,6 +147,18 @@ fn main() {
 
     b = bench_new("tok_complex");
     bench_run(b, &_bench_tok_complex, BENCH_ITERS);
+    bench_report(b);
+
+    println("--- ai ---");
+    b = bench_new("nl_parse_convert");
+    bench_run(b, &_bench_nl_parse_convert, BENCH_ITERS);
+    bench_report(b);
+
+    _hist = CalcHistory_new(1000);
+    var hi = 0;
+    while (hi < 1000) { CalcHistory_push(_hist, "1", "1", "t"); hi = hi + 1; }
+    b = bench_new("history_push_full");
+    bench_run(b, &_bench_history_push_full, BENCH_ITERS);
     bench_report(b);
 
     return 0;

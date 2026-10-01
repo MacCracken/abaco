@@ -13,13 +13,22 @@
 #   - CalcHistory_from_json never crashes on malformed JSON and leaves the
 #     history within bounds.
 #   - _ccy_load_body never crashes, and EVERY rate that survives it is finite,
-#     strictly positive and < 10^6 (the audit MED-7 poisoning invariant).
+#     strictly positive and <= 10^6 (the audit MED-7 poisoning invariant),
+#     judged on the bits by an oracle that does not call the loader's own
+#     predicate. A planted literal of a must-drop class (0, negative, +-Inf,
+#     > 10^6, underflow, unparseable) is absent; one of a must-keep class is
+#     present whenever the load succeeds.
+#   - "<pct>% of <base>" is rewritten to "<base> * <pct> / 100" exactly when
+#     both operands are strict decimal literals (the CWE-917 guard), checked
+#     against a literal grammar written out here, not the parser's.
+#   - _nl_parse_f64 accepts exactly the strict literals, and gives each the
+#     value the evaluator gives the same text.
 #   - _ccy_validate_url NEVER accepts a URL containing a control byte
 #     (the CRLF header-injection guard, audit §4.1), and never accepts
 #     plaintext http:// to a non-loopback host (audit §4.3) — including a
 #     remote name that only starts with a loopback one (2.4.7).
-#   - CurrencyCache_convert reports an error rather than returning a result
-#     when a code is absent from the cache.
+#   - CurrencyCache_convert returns 0 with AI_ERR_CURRENCY exactly when a
+#     code is absent from the cache (decided from the known code set).
 
 include "src/core.cyr"
 include "src/ntheory.cyr"
@@ -162,6 +171,7 @@ fn _fz_phrase() {
 # that was true of ~4% of them. Recording what was planted makes the claim
 # exact and costs nothing.
 var _FZ_PLANTED = 0;
+var _FZ_PLANTED_CLASS = 0;
 
 # A rates payload with adversarial values in the real {"base","rates"} shape.
 var _FZ_RATE_N = 12;
@@ -177,12 +187,19 @@ fn _fz_rate_literal(n) {
     if (n == 7)  { return "0.0000000001"; }   # tiny but plausible
     if (n == 8)  { return "nan"; }            # unparseable
     if (n == 9)  { return "1e-400"; }         # underflows to 0 -> dropped
-    if (n == 10) { return "12345678901234567890123"; }  # long digit run
+    if (n == 10) { return "12345678901234567890123"; }  # 1.2e22 > 10^6 -> dropped
     return "1.0";
+}
+
+# 1 when literal class n must be dropped by the loader, 0 when it must be kept.
+fn _fz_rate_must_drop(n) {
+    if (n == 0 || n == 6 || n == 7 || n == 11) { return 0; }
+    return 1;
 }
 
 fn _fz_rates_json() {
     _FZ_PLANTED = vec_new();
+    _FZ_PLANTED_CLASS = vec_new();
     var buf = alloc(1024);
     var pos = 0;
     memcpy(buf + pos, "{\"base\":\"", 9); pos = pos + 9;
@@ -206,7 +223,9 @@ fn _fz_rates_json() {
         memcpy(buf + pos, key, 3); pos = pos + 3;
         store8(buf + pos, 34); pos = pos + 1;
         store8(buf + pos, 58); pos = pos + 1;
-        var lit = _fz_rate_literal(_fz_u(_FZ_RATE_N));
+        var cls = _fz_u(_FZ_RATE_N);
+        vec_push(_FZ_PLANTED_CLASS, cls);
+        var lit = _fz_rate_literal(cls);
         var ll = strlen(lit);
         memcpy(buf + pos, lit, ll); pos = pos + ll;
         i = i + 1;
@@ -246,25 +265,142 @@ fn _fz_nested_json(depth) {
 # Invariant checks
 # ================================================================
 
-# Every rate the cache accepted must satisfy _ccy_rate_plausible. This is the
-# audit MED-7 property: a poisoned response must not smuggle NaN / Inf / zero /
-# absurd magnitudes past the loader.
-fn _check_rates_plausible(c) {
-    var rates = ccy_rates(c);
-    if (rates == 0) { return 0; }
-    if (_FZ_PLANTED == 0) { return 0; }
+# Independent of _ccy_rate_plausible: a positive finite double <= 10^6 is
+# one whose bits lie in (0, bits(1e6)], because positive doubles order as
+# their bit patterns do.
+fn _fz_rate_ok_bits(bits) {
+    if (bits <= 0) { return 0; }                     # 0, -0 and the sign bit
+    if (bits > 0x412E848000000000) { return 0; }     # > 1e6, +Inf, NaN
+    return 1;
+}
+
+# Times key i of the planted list was planted.
+fn _fz_planted_count(key) {
+    var n = 0;
     var i = 0;
     while (i < vec_len(_FZ_PLANTED)) {
+        if (streq(vec_get(_FZ_PLANTED, i), key) == 1) { n = n + 1; }
+        i = i + 1;
+    }
+    return n;
+}
+
+# Every rate in the cache must pass the bit oracle — the audit MED-7
+# property: a poisoned response must not smuggle NaN / Inf / zero / absurd
+# magnitudes past the loader. With `loaded` (the load returned 0), every
+# planted key of a must-keep class is present and every must-drop one is
+# absent; keys planted twice are skipped (the later value decides).
+fn _check_rates_plausible(c, loaded) {
+    var rates = ccy_rates(c);
+    if (rates == 0) { return 0; }
+    var keys = map_keys(rates);
+    var i = 0;
+    while (i < vec_len(keys)) {
+        if (_fz_rate_ok_bits(map_get(rates, vec_get(keys, i))) == 0) {
+            _fz_fail("cache holds an implausible rate (MED-7 invariant)");
+        }
+        i = i + 1;
+    }
+    if (_FZ_PLANTED == 0 || loaded == 0) { return 0; }
+    i = 0;
+    while (i < vec_len(_FZ_PLANTED)) {
         var key = vec_get(_FZ_PLANTED, i);
-        if (map_has(rates, key) == 1) {
-            var bits = map_get(rates, key);
-            if (_ccy_rate_plausible(bits) == 0) {
-                _fz_fail("cache holds an implausible rate (MED-7 invariant)");
-            }
+        if (_fz_planted_count(key) == 1) {
+            var drop = _fz_rate_must_drop(vec_get(_FZ_PLANTED_CLASS, i));
+            if (drop == 1 && map_has(rates, key) == 1) { _fz_fail("a must-drop rate was kept"); }
+            if (drop == 0 && map_has(rates, key) == 0) { _fz_fail("a plausible rate was dropped"); }
         }
         i = i + 1;
     }
     return 0;
+}
+
+# Strict decimal literal, written out independently of _nl_parse_f64: blanks,
+# optional sign, digits with at most one '.' and at least one digit, optional
+# e/E, optional sign, 1+ digits, end.
+fn _fz_strict_literal(s) {
+    var n = strlen(s);
+    var i = 0;
+    while (i < n) {
+        var b = load8(s + i);
+        if (b != 32 && b != 9) { break; }
+        i = i + 1;
+    }
+    if (i < n) {
+        var sg = load8(s + i);
+        if (sg == 43 || sg == 45) { i = i + 1; }
+    }
+    var digits = 0;
+    var dots = 0;
+    while (i < n) {
+        var c = load8(s + i);
+        if (c >= 48 && c <= 57) { digits = digits + 1; i = i + 1; }
+        elif (c == 46) { dots = dots + 1; i = i + 1; }
+        else { break; }
+    }
+    if (digits == 0 || dots > 1) { return 0; }
+    if (i < n) {
+        var e = load8(s + i);
+        if (e != 101 && e != 69) { return 0; }
+        i = i + 1;
+        if (i < n) {
+            var es = load8(s + i);
+            if (es == 43 || es == 45) { i = i + 1; }
+        }
+        var ed = 0;
+        while (i < n) {
+            var d = load8(s + i);
+            if (d < 48 || d > 57) { return 0; }
+            ed = ed + 1;
+            i = i + 1;
+        }
+        if (ed == 0) { return 0; }
+    }
+    return 1;
+}
+
+# Operand shapes for the percent-of probe: strict and malformed. None ends
+# in '.', which nl_parse drops from the end of the text.
+var _FZ_OPER_N = 16;
+fn _fz_operand(n) {
+    if (n == 0)  { return "15"; }
+    if (n == 1)  { return "1.5"; }
+    if (n == 2)  { return "1.5.3"; }
+    if (n == 3)  { return "1e"; }
+    if (n == 4)  { return "1e5"; }
+    if (n == 5)  { return "2+3"; }
+    if (n == 6)  { return "(4"; }
+    if (n == 7)  { return "7)"; }
+    if (n == 8)  { return ".5"; }
+    if (n == 9)  { return "1..2"; }
+    if (n == 10) { return "-3"; }
+    if (n == 11) { return "1e+"; }
+    if (n == 12) { return " 8"; }
+    if (n == 13) { return "2E-3"; }
+    if (n == 14) { return "x"; }
+    return "1e999";
+}
+
+# Strict literal grammar for _nl_parse_f64 probes: short strings over the
+# alphabet a literal is made of.
+fn _fz_numish() {
+    var len = _fz_u(8) + 1;
+    var buf = alloc(len + 1);
+    var i = 0;
+    while (i < len) {
+        var k = _fz_u(16);
+        var c = 48 + _fz_u(10);
+        if (k == 10) { c = 46; }
+        if (k == 11) { c = 101; }
+        if (k == 12) { c = 69; }
+        if (k == 13) { c = 43; }
+        if (k == 14) { c = 45; }
+        if (k == 15) { c = 32; }
+        store8(buf + i, c);
+        i = i + 1;
+    }
+    store8(buf + len, 0);
+    return buf;
 }
 
 fn _check_history_bounds(h, maxn) {
@@ -283,6 +419,50 @@ fn _check_history_bounds(h, maxn) {
     return 0;
 }
 
+# A currency code for the convert probe: known, lowercase known, or junk.
+fn _fz_code() {
+    var k = _fz_u(6);
+    if (k == 0) { return "USD"; }
+    if (k == 1) { return "eur"; }
+    if (k == 2) { return "GBP"; }
+    if (k == 3) { return "JPY"; }
+    return _fz_str(6);
+}
+
+# 1 when code s, uppercased here byte by byte, is USD, EUR or GBP.
+fn _fz_code_known(s) {
+    var n = strlen(s);
+    if (n != 3) { return 0; }
+    var u = alloc(4);
+    var i = 0;
+    while (i < 3) {
+        var c = load8(s + i);
+        if (c >= 97 && c <= 122) { c = c - 32; }
+        store8(u + i, c);
+        i = i + 1;
+    }
+    store8(u + 3, 0);
+    if (streq(u, "USD") == 1 || streq(u, "EUR") == 1 || streq(u, "GBP") == 1) { return 1; }
+    return 0;
+}
+
+# 1 when needle occurs in hay.
+fn _fz_contains(hay, needle) {
+    var hl = strlen(hay);
+    var nl = strlen(needle);
+    var i = 0;
+    while (i + nl <= hl) {
+        if (memeq(hay + i, needle, nl) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _fz_skip_blanks(s) {
+    while (load8(s) == 32 || load8(s) == 9) { s = s + 1; }
+    return s;
+}
+
 fn main() {
     alloc_init();
     args_init();
@@ -293,8 +473,18 @@ fn main() {
         iters = 0;
         var ai = 0;
         while (load8(arg + ai) != 0) {
-            iters = iters * 10 + load8(arg + ai) - 48;
+            var dig = load8(arg + ai);
+            # A typo must not run 0 iterations and report a pass.
+            if (dig < 48 || dig > 57 || ai >= 9) {
+                println("usage: <harness> [iterations, 1-999999999]");
+                sys_exit(2);
+            }
+            iters = iters * 10 + dig - 48;
             ai = ai + 1;
+        }
+        if (iters <= 0) {
+            println("usage: <harness> [iterations, 1-999999999]");
+            sys_exit(2);
         }
     }
 
@@ -317,6 +507,40 @@ fn main() {
         }
         # Empty input must not crash.
         nl_parse("");
+
+        # Percent-of rewrite happens exactly for two strict literals.
+        var po = _fz_operand(_fz_u(_FZ_OPER_N));
+        var bo = _fz_operand(_fz_u(_FZ_OPER_N));
+        var pb = alloc(64);
+        var pp = 0;
+        if (_fz_u(2) == 0) { memcpy(pb, "what is ", 8); pp = 8; }
+        memcpy(pb + pp, po, strlen(po)); pp = pp + strlen(po);
+        memcpy(pb + pp, "% of ", 5); pp = pp + 5;
+        memcpy(pb + pp, bo, strlen(bo)); pp = pp + strlen(bo);
+        store8(pb + pp, 0);
+        q = nl_parse(pb);
+        var rewritten = 0;
+        if (q != 0 && pq_kind(q) == PQ_CALCULATION && _fz_contains(pq_s1(q), "% of") == 0) { rewritten = 1; }
+        var both = 0;
+        if (_fz_strict_literal(po) == 1 && _fz_strict_literal(bo) == 1) { both = 1; }
+        if (rewritten == 1 && both == 0) { _fz_fail("percent-of rewrote a non-literal operand (CWE-917)"); }
+        if (rewritten == 0 && both == 1 && _fz_contains(po, "999") == 0 && _fz_contains(bo, "999") == 0) {
+            _fz_fail("percent-of did not rewrite two strict literals");
+        }
+
+        # _nl_parse_f64 accepts exactly the strict literals.
+        var ns = _fz_numish();
+        var nt, nv = _nl_parse_f64(ns);
+        var strict = _fz_strict_literal(ns);
+        if (is_ok(nt) == 1 && strict == 0) { _fz_fail("_nl_parse_f64 accepted a malformed literal"); }
+        if (strict == 1 && load8(_fz_skip_blanks(ns)) != 43) {
+            var ev = Evaluator_new();
+            var want = Evaluator_eval(ev, ns);
+            if (is_ok(nt) == 1 && nv != want) { _fz_fail("_nl_parse_f64 value differs from the evaluator's"); }
+            if (is_ok(nt) == 0 && (want & 0x7FF0000000000000) != 0x7FF0000000000000) {
+                _fz_fail("_nl_parse_f64 refused a finite strict literal");
+            }
+        }
 
         # --- CalcHistory: bounded ring buffer ----------------------------
         var maxn = _fz_u(8) + 1;
@@ -353,14 +577,17 @@ fn main() {
 
         # Well-shaped payload with adversarial values.
         var body = _fz_rates_json();
-        _ccy_load_body(c, body, strlen(body));
-        _check_rates_plausible(c);
+        var lr = _ccy_load_body(c, body, strlen(body));
+        var loaded = 0;
+        if (lr == 0) { loaded = 1; }
+        _check_rates_plausible(c, loaded);
 
         # Raw garbage.
         c = CurrencyCache_new("https://example.invalid");
         var junk = _fz_str(200);
+        _FZ_PLANTED = 0;
         _ccy_load_body(c, junk, strlen(junk));
-        _check_rates_plausible(c);
+        _check_rates_plausible(c, 0);
 
         # Deep nesting. Assert the MED-4 guard DIRECTLY rather than through
         # _ccy_load_body: a nested payload is rejected by the `kept == 0` check
@@ -401,19 +628,21 @@ fn main() {
         }
         c = CurrencyCache_new("https://example.invalid");
         _ccy_load_body(c, nested, strlen(nested));
-        _check_rates_plausible(c);
+        _check_rates_plausible(c, 0);
 
         # --- convert with codes that may or may not be cached -------------
         c = CurrencyCache_new("https://example.invalid");
         var good = "{\"base\":\"USD\",\"rates\":{\"EUR\":0.92,\"GBP\":0.79}}";
         _ccy_load_body(c, good, strlen(good));
         ai_clear_err();
-        var res = CurrencyCache_convert(c, f64_from(_fz_u(1000) + 1),
-          _fz_str(6), _fz_str(6));
-        if (res == 0) {
-            if (ai_last_err() == AI_OK) {
-                _fz_fail("convert returned 0 without setting an error");
-            }
+        var cf = _fz_code();
+        var ct = _fz_code();
+        var res = CurrencyCache_convert(c, f64_from(_fz_u(1000) + 1), cf, ct);
+        var known = 0;
+        if (_fz_code_known(cf) == 1 && _fz_code_known(ct) == 1) { known = 1; }
+        if (known == 1 && res == 0) { _fz_fail("convert failed on cached codes"); }
+        if (known == 0 && (res != 0 || ai_last_err() != AI_ERR_CURRENCY)) {
+            _fz_fail("convert of an absent code did not return 0 with AI_ERR_CURRENCY");
         }
         # A known pair must always work and must round-trip within tolerance.
         ai_clear_err();

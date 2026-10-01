@@ -1,86 +1,88 @@
 # Benchmark Results — Last 3 Runs
 
-| Benchmark | 26-08-23 (59f9182) | 26-09-30 (796e3d1) | 26-09-30 (51c35ee) |
+| Benchmark | 26-09-30 (796e3d1) | 26-09-30 (51c35ee) | 26-10-01 (79c4885-dirty) |
 |-----------|------|------|------|
-| is_prime_small | 2.43 us | 2.40 us | 2.39 us |
-| is_prime_large | 5.86 us | 5.93 us | 5.95 us |
-| next_prime | 2.87 us | 3.00 us | 2.93 us |
-| factor_small | 112 ns | 110 ns | 111 ns |
-| factor_large | 3.15 us | 3.10 us | 3.10 us |
-| totient | 57 ns | 61 ns | 56 ns |
-| fibonacci | 100 ns | 106 ns | 100 ns |
-| binomial | 117 ns | 123 ns | 123 ns |
-| poly_blep_mid | 11 ns | 11 ns | 12 ns |
-| poly_blep_edge | 13 ns | 14 ns | 14 ns |
+| is_prime_small | 2.40 us | 2.39 us | 2.42 us |
+| is_prime_large | 5.93 us | 5.95 us | 5.94 us |
+| next_prime | 3.00 us | 2.93 us | 2.94 us |
+| factor_small | 110 ns | 111 ns | 131 ns |
+| factor_large | 3.10 us | 3.10 us | 3.21 us |
+| totient | 61 ns | 56 ns | 57 ns |
+| fibonacci | 106 ns | 100 ns | 99 ns |
+| abaco_binomial | — | — | 122 ns |
+| poly_blep_mid | 11 ns | 12 ns | 12 ns |
+| poly_blep_edge | 14 ns | 14 ns | 14 ns |
 | angular_frequency | 6 ns | 6 ns | 6 ns |
-| sanitize_finite | 8 ns | 5 ns | 6 ns |
-| sanitize_nan | 6 ns | 6 ns | 6 ns |
-| hypot | 8 ns | 30 ns | 30 ns |
-| lerp | 7 ns | 8 ns | 7 ns |
+| sanitize_finite | 5 ns | 6 ns | 6 ns |
+| sanitize_nan | 6 ns | 6 ns | 5 ns |
+| hypot | 30 ns | 30 ns | 30 ns |
+| lerp | 8 ns | 7 ns | 8 ns |
 | clamp | 7 ns | 7 ns | 7 ns |
-| round | 7 ns | 8 ns | 8 ns |
-| sqrt | 4 ns | 3 ns | 3 ns |
-| abs | 4 ns | 3 ns | 3 ns |
-| amplitude_to_db | 42 ns | 40 ns | 40 ns |
-| db_to_amplitude | 32 ns | 20 ns | 21 ns |
-| db_gain_factor | 32 ns | 21 ns | 23 ns |
-| midi_to_freq | 35 ns | 36 ns | 38 ns |
-| freq_to_midi | 28 ns | 28 ns | 29 ns |
-| pitch_class | — | — | 59 ns |
-| time_constant | 40 ns | 38 ns | 39 ns |
-| pan_center | 107 ns | 65 ns | 64 ns |
-| crossfade_mid | 108 ns | 66 ns | 67 ns |
-| category_name | 6 ns | 5 ns | 5 ns |
-| category_from_str | 1.23 us | 1.23 us | 1.23 us |
-| value_integer | 13 ns | 14 ns | 14 ns |
-| value_as_f64 | 30 ns | 19 ns | 19 ns |
-| sanitize_4096 | 14.47 us | 14.19 us | 14.26 us |
-| poly_blep_4096 | 30.00 us | 29.34 us | 29.23 us |
-| hypot_4096 | 17.73 us | 57.65 us | 57.65 us |
-| sqrt_4096 | 8.65 us | 8.36 us | 9.20 us |
-| round_4096 | 26.79 us | 24.97 us | 25.02 us |
-| simd_add_4096 | 4.62 us | 1.47 us | 1.51 us |
-| simd_mul_4096 | 4.38 us | 1.47 us | 1.52 us |
-| simd_sub_4096 | 4.65 us | 1.48 us | 1.50 us |
-| simd_mac_4096 | 10.82 us | 9.87 us | 10.02 us |
-| simd_div_4096 | 4.68 us | 2.22 us | 2.20 us |
-| simd_sqrt_4096 | 4.49 us | 4.33 us | 4.27 us |
-| simd_abs_4096 | 3.90 us | 1.11 us | 1.08 us |
-| addition | 1.43 us | 832 ns | 816 ns |
-| mixed_ops | 1.64 us | 1.02 us | 991 ns |
-| parentheses | 1.79 us | 1.19 us | 1.17 us |
-| division | 1.43 us | 822 ns | 825 ns |
-| sqrt | 4 ns | 3 ns | 3 ns |
-| sin | 1.98 us | 1.27 us | 1.26 us |
-| log2 | 2.11 us | 1.40 us | 1.38 us |
-| pow | 2.17 us | 1.50 us | 1.47 us |
-| min | 2.08 us | 1.37 us | 1.35 us |
-| lcm | — | — | 1.57 us |
-| choose | — | — | 1.75 us |
-| mixed_ops_funcs | 2.42 us | 1.72 us | 1.79 us |
-| nested_parens | 3.00 us | 2.29 us | 2.29 us |
-| trig_chain | 3.19 us | 2.44 us | 2.45 us |
-| long_addition | 2.98 us | 2.31 us | 2.29 us |
-| sci_add | 1.51 us | 889 ns | 889 ns |
-| sci_mul | 1.52 us | 844 ns | 847 ns |
-| tok_simple | 1.30 us | 700 ns | 701 ns |
-| tok_complex | 2.16 us | 1.55 us | 1.67 us |
-| km_to_miles | 278 ns | 290 ns | 292 ns |
-| celsius_to_fahr | 245 ns | 314 ns | 265 ns |
-| bytes_to_gb | 369 ns | 264 ns | 265 ns |
-| bytes_to_gib | 274 ns | 290 ns | 291 ns |
-| gb_to_gib_cross | 410 ns | 305 ns | 305 ns |
-| same_unit_id | 259 ns | 276 ns | 276 ns |
-| exact_symbol | 111 ns | 121 ns | 120 ns |
-| by_name | 311 ns | 391 ns | 249 ns |
-| case_insensitive | 363 ns | 323 ns | 371 ns |
-| plural | 273 ns | 328 ns | 406 ns |
-| miss | 814 ns | 1.19 us | 482 ns |
-| alias_kph | 211 ns | 185 ns | 196 ns |
-| mpg_to_l100km | 402 ns | 720 ns | 416 ns |
-| density_g_to_kg | 371 ns | 604 ns | 379 ns |
-| viscosity_cp_pas | 291 ns | 405 ns | 363 ns |
-| lux_to_fc | 543 ns | 479 ns | 584 ns |
-| registry_creation | 139.83 us | 147.49 us | 146.84 us |
+| round | 8 ns | 8 ns | 11 ns |
+| sqrt | 3 ns | 3 ns | 3 ns |
+| abs | 3 ns | 3 ns | 3 ns |
+| amplitude_to_db | 40 ns | 40 ns | 48 ns |
+| db_to_amplitude | 20 ns | 21 ns | 22 ns |
+| db_gain_factor | 21 ns | 23 ns | 22 ns |
+| midi_to_freq | 36 ns | 38 ns | 37 ns |
+| freq_to_midi | 28 ns | 29 ns | 30 ns |
+| pitch_class | — | 59 ns | 62 ns |
+| time_constant | 38 ns | 39 ns | 46 ns |
+| pan_center | 65 ns | 64 ns | 66 ns |
+| crossfade_mid | 66 ns | 67 ns | 68 ns |
+| category_name | 5 ns | 5 ns | 6 ns |
+| category_from_str | 1.23 us | 1.23 us | 834 ns |
+| value_integer | 14 ns | 14 ns | 14 ns |
+| value_as_f64 | 19 ns | 19 ns | 19 ns |
+| sanitize_4096 | 14.19 us | 14.26 us | 14.13 us |
+| poly_blep_4096 | 29.34 us | 29.23 us | 29.15 us |
+| hypot_4096 | 57.65 us | 57.65 us | 57.32 us |
+| sqrt_4096 | 8.36 us | 9.20 us | 8.49 us |
+| round_4096 | 24.97 us | 25.02 us | 32.62 us |
+| simd_add_4096 | 1.47 us | 1.51 us | 1.48 us |
+| simd_mul_4096 | 1.47 us | 1.52 us | 1.45 us |
+| simd_sub_4096 | 1.48 us | 1.50 us | 1.44 us |
+| simd_mac_4096 | 9.87 us | 10.02 us | 8.08 us |
+| simd_div_4096 | 2.22 us | 2.20 us | 2.30 us |
+| simd_sqrt_4096 | 4.33 us | 4.27 us | 4.29 us |
+| simd_abs_4096 | 1.11 us | 1.08 us | 1.06 us |
+| addition | 832 ns | 816 ns | 393 ns |
+| mixed_ops | 1.02 us | 991 ns | 549 ns |
+| parentheses | 1.19 us | 1.17 us | 786 ns |
+| division | 822 ns | 825 ns | 376 ns |
+| eval_sqrt | — | — | 743 ns |
+| sin | 1.27 us | 1.26 us | 828 ns |
+| log2 | 1.40 us | 1.38 us | 966 ns |
+| pow | 1.50 us | 1.47 us | 1.30 us |
+| min | 1.37 us | 1.35 us | 925 ns |
+| lcm | — | 1.57 us | 1.15 us |
+| choose | — | 1.75 us | 1.31 us |
+| mixed_ops_funcs | 1.72 us | 1.79 us | 1.45 us |
+| nested_parens | 2.29 us | 2.29 us | 1.88 us |
+| trig_chain | 2.44 us | 2.45 us | 1.99 us |
+| long_addition | 2.31 us | 2.29 us | 1.85 us |
+| sci_add | 889 ns | 889 ns | 448 ns |
+| sci_mul | 844 ns | 847 ns | 421 ns |
+| tok_simple | 700 ns | 701 ns | 896 ns |
+| tok_complex | 1.55 us | 1.67 us | 1.69 us |
+| nl_parse_convert | — | — | 1.78 us |
+| history_push_full | — | — | 30 ns |
+| km_to_miles | 290 ns | 292 ns | 288 ns |
+| celsius_to_fahr | 314 ns | 265 ns | 270 ns |
+| bytes_to_gb | 264 ns | 265 ns | 268 ns |
+| bytes_to_gib | 290 ns | 291 ns | 297 ns |
+| gb_to_gib_cross | 305 ns | 305 ns | 308 ns |
+| same_unit_id | 276 ns | 276 ns | 277 ns |
+| exact_symbol | 121 ns | 120 ns | 124 ns |
+| by_name | 391 ns | 249 ns | 647 ns |
+| case_insensitive | 323 ns | 371 ns | 325 ns |
+| plural | 328 ns | 406 ns | 221 ns |
+| miss | 1.19 us | 482 ns | 251 ns |
+| alias_kph | 185 ns | 196 ns | 190 ns |
+| mpg_to_l100km | 720 ns | 416 ns | 619 ns |
+| density_g_to_kg | 604 ns | 379 ns | 440 ns |
+| viscosity_cp_pas | 405 ns | 363 ns | 315 ns |
+| lux_to_fc | 479 ns | 584 ns | 301 ns |
+| registry_creation | 147.49 us | 146.84 us | 161.41 us |
 
 _Generated by `scripts/bench-history.sh` — Cyrius port benchmarks_

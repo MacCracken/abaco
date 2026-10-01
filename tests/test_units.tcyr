@@ -63,6 +63,288 @@ fn test_registry_integrity(r) {
     return 0;
 }
 
+# 1 unit of `sym` in base unit `base` must be exactly `bits`: the correctly
+# rounded value of the unit's exact definition (NIST SP 811 App. B, the 1959
+# yard and pound). Through 2.4.8 the US/imperial factors were 6-digit
+# truncations (lb = 0.453592, 1 cup = 15.999946 tbsp).
+fn unit_factor_is(r, sym, base, bits) {
+    var v = UnitRegistry_convert(r, f64_from(1), sym, base);
+    assert_eq(reg_err(r), UERR_NONE, sym);
+    assert_eq(v, bits, sym);
+    return 0;
+}
+
+fn test_exact_factors(r) {
+    unit_factor_is(r, "km", "m", 0x408F400000000000);   # 1000.0
+    unit_factor_is(r, "cm", "m", 0x3F847AE147AE147B);   # 0.01
+    unit_factor_is(r, "mm", "m", 0x3F50624DD2F1A9FC);   # 0.001
+    unit_factor_is(r, "mi", "m", 0x409925604189374C);   # 1609.344
+    unit_factor_is(r, "yd", "m", 0x3FED42C3C9EECBFB);   # 0.9144
+    unit_factor_is(r, "ft", "m", 0x3FD381D7DBF487FD);   # 0.3048
+    unit_factor_is(r, "in", "m", 0x3F9A027525460AA6);   # 0.0254
+    unit_factor_is(r, "nmi", "m", 0x409CF00000000000);   # 1852.0
+    unit_factor_is(r, "g", "kg", 0x3F50624DD2F1A9FC);   # 0.001
+    unit_factor_is(r, "mg", "kg", 0x3EB0C6F7A0B5ED8D);   # 1e-06
+    unit_factor_is(r, "lb", "kg", 0x3FDD07A84AB75E51);   # 0.45359237
+    unit_factor_is(r, "oz", "kg", 0x3F9D07A84AB75E51);   # 0.028349523125
+    unit_factor_is(r, "t", "kg", 0x408F400000000000);   # 1000.0
+    unit_factor_is(r, "st", "kg", 0x401966B341607287);   # 6.35029318
+    unit_factor_is(r, "min", "s", 0x404E000000000000);   # 60.0
+    unit_factor_is(r, "hr", "s", 0x40AC200000000000);   # 3600.0
+    unit_factor_is(r, "d", "s", 0x40F5180000000000);   # 86400.0
+    unit_factor_is(r, "wk", "s", 0x4122750000000000);   # 604800.0
+    unit_factor_is(r, "yr", "s", 0x417E187E00000000);   # 31557600.0
+    unit_factor_is(r, "kB", "B", 0x408F400000000000);   # 1000.0
+    unit_factor_is(r, "MB", "B", 0x412E848000000000);   # 1000000.0
+    unit_factor_is(r, "GB", "B", 0x41CDCD6500000000);   # 1000000000.0
+    unit_factor_is(r, "TB", "B", 0x426D1A94A2000000);   # 1000000000000.0
+    unit_factor_is(r, "PB", "B", 0x430C6BF526340000);   # 1000000000000000.0
+    unit_factor_is(r, "KiB", "B", 0x4090000000000000);   # 1024.0
+    unit_factor_is(r, "MiB", "B", 0x4130000000000000);   # 1048576.0
+    unit_factor_is(r, "GiB", "B", 0x41D0000000000000);   # 1073741824.0
+    unit_factor_is(r, "TiB", "B", 0x4270000000000000);   # 1099511627776.0
+    unit_factor_is(r, "PiB", "B", 0x4310000000000000);   # 1125899906842624.0
+    unit_factor_is(r, "km/h", "m/s", 0x3FD1C71C71C71C72);   # 0.2777777777777778
+    unit_factor_is(r, "mph", "m/s", 0x3FDC9C4DA9003EEA);   # 0.44704
+    unit_factor_is(r, "kn", "m/s", 0x3FE07654320FEDCC);   # 0.5144444444444445
+    unit_factor_is(r, "ft/s", "m/s", 0x3FD381D7DBF487FD);   # 0.3048
+    unit_factor_is(r, "yd/s", "m/s", 0x3FED42C3C9EECBFB);   # 0.9144
+    unit_factor_is(r, "km2", "m2", 0x412E848000000000);   # 1000000.0
+    unit_factor_is(r, "ha", "m2", 0x40C3880000000000);   # 10000.0
+    unit_factor_is(r, "ft2", "m2", 0x3FB7C87E5E7FBD25);   # 0.09290304
+    unit_factor_is(r, "in2", "m2", 0x3F4523FE8CE352CB);   # 0.00064516
+    unit_factor_is(r, "ac", "m2", 0x40AF9DB67CFF2F20);   # 4046.8564224
+    unit_factor_is(r, "mL", "L", 0x3F50624DD2F1A9FC);   # 0.001
+    unit_factor_is(r, "gal", "L", 0x400E4885F9316256);   # 3.785411784
+    unit_factor_is(r, "qt", "L", 0x3FEE4885F9316256);   # 0.946352946
+    unit_factor_is(r, "pt", "L", 0x3FDE4885F9316256);   # 0.473176473
+    unit_factor_is(r, "cup", "L", 0x3FCE4885F9316256);   # 0.2365882365
+    unit_factor_is(r, "tbsp", "L", 0x3F8E4885F9316256);   # 0.01478676478125
+    unit_factor_is(r, "tsp", "L", 0x3F74305950CB96E4);   # 0.00492892159375
+    unit_factor_is(r, "kJ", "J", 0x408F400000000000);   # 1000.0
+    unit_factor_is(r, "cal", "J", 0x4010BC6A7EF9DB23);   # 4.184
+    unit_factor_is(r, "kcal", "J", 0x40B0580000000000);   # 4184.0
+    unit_factor_is(r, "Wh", "J", 0x40AC200000000000);   # 3600.0
+    unit_factor_is(r, "kWh", "J", 0x414B774000000000);   # 3600000.0
+    unit_factor_is(r, "BTU", "J", 0x40907C39316DE12F);   # 1055.05585262
+    unit_factor_is(r, "MJ", "J", 0x412E848000000000);   # 1000000.0
+    unit_factor_is(r, "kPa", "Pa", 0x408F400000000000);   # 1000.0
+    unit_factor_is(r, "bar", "Pa", 0x40F86A0000000000);   # 100000.0
+    unit_factor_is(r, "atm", "Pa", 0x40F8BCD000000000);   # 101325.0
+    unit_factor_is(r, "psi", "Pa", 0x40BAEEC1DDF70F99);   # 6894.757293168362
+    unit_factor_is(r, "mmHg", "Pa", 0x4060AA50FF698225);   # 133.322387415
+    unit_factor_is(r, "torr", "Pa", 0x4060AA50D79435E5);   # 133.32236842105263
+    unit_factor_is(r, "kHz", "Hz", 0x408F400000000000);   # 1000.0
+    unit_factor_is(r, "MHz", "Hz", 0x412E848000000000);   # 1000000.0
+    unit_factor_is(r, "GHz", "Hz", 0x41CDCD6500000000);   # 1000000000.0
+    unit_factor_is(r, "bpm", "Hz", 0x3F91111111111111);   # 0.016666666666666666
+    unit_factor_is(r, "kN", "N", 0x408F400000000000);   # 1000.0
+    unit_factor_is(r, "lbf", "N", 0x4011CAFA9B6B9DD7);   # 4.4482216152605
+    unit_factor_is(r, "dyn", "N", 0x3EE4F8B588E368F1);   # 1e-05
+    unit_factor_is(r, "kgf", "N", 0x40239D013A92A305);   # 9.80665
+    unit_factor_is(r, "kW", "W", 0x408F400000000000);   # 1000.0
+    unit_factor_is(r, "MW", "W", 0x412E848000000000);   # 1000000.0
+    unit_factor_is(r, "hp", "W", 0x40874D995645AA01);   # 745.6998715822702
+    unit_factor_is(r, "mW", "W", 0x3F50624DD2F1A9FC);   # 0.001
+    unit_factor_is(r, "mpg", "km/L", 0x3FDB358DF3E0D871);   # 0.425143707430272
+    unit_factor_is(r, "g/cm3", "kg/m3", 0x408F400000000000);   # 1000.0
+    unit_factor_is(r, "g/mL", "kg/m3", 0x408F400000000000);   # 1000.0
+    unit_factor_is(r, "kg/L", "kg/m3", 0x408F400000000000);   # 1000.0
+    unit_factor_is(r, "lb/ft3", "kg/m3", 0x403004BA04035526);   # 16.018463373960138
+    unit_factor_is(r, "fc", "lx", 0x4025871F4421AF19);   # 10.763910416709722
+    unit_factor_is(r, "lm/m2", "lx", 0x3FF0000000000000);   # 1.0
+    unit_factor_is(r, "ph", "lx", 0x40C3880000000000);   # 10000.0
+    unit_factor_is(r, "mPas", "Pas", 0x3F50624DD2F1A9FC);   # 0.001
+    unit_factor_is(r, "P", "Pas", 0x3FB999999999999A);   # 0.1
+    unit_factor_is(r, "cP", "Pas", 0x3F50624DD2F1A9FC);   # 0.001
+    unit_factor_is(r, "cent", "semi", 0x3F847AE147AE147B);   # 0.01
+    unit_factor_is(r, "oct", "semi", 0x4028000000000000);   # 12.0
+    unit_factor_is(r, "deg", "rad", 0x3F91DF46A2529D39);   # 0.017453292519943295
+    unit_factor_is(r, "grad", "rad", 0x3F9015BF9217271A);   # 0.015707963267948967
+    unit_factor_is(r, "arcmin", "rad", 0x3F33104B57CF96A3);   # 0.0002908882086657216
+    unit_factor_is(r, "arcsec", "rad", 0x3ED455A5B2FF8F9D);   # 4.84813681109536e-06
+    return 0;
+}
+
+# |got - want| <= 1e-12 * |want|.
+fn near_rel(got, want, what) {
+    var d = f64_abs(f64_sub(got, want));
+    var tol = f64_mul(f64_abs(want), f64_div(f64_from(1), f64_from(1000000000000)));
+    assert(f64_le(d, tol) == 1, what);
+    return 0;
+}
+
+fn conv1(r, a, b) { return UnitRegistry_convert(r, f64_from(1), a, b); }
+
+# Definitional identities between registered units.
+fn test_unit_identities(r) {
+    near_rel(conv1(r, "gal", "qt"), f64_from(4), "gal = 4 qt (was 3.999998)");
+    near_rel(conv1(r, "qt", "pt"), f64_from(2), "qt = 2 pt");
+    near_rel(conv1(r, "cup", "tbsp"), f64_from(16), "cup = 16 tbsp (was 15.999946)");
+    near_rel(conv1(r, "tbsp", "tsp"), f64_from(3), "tbsp = 3 tsp (was 3.000008)");
+    near_rel(conv1(r, "gal", "tsp"), f64_from(768), "gal = 768 tsp");
+    near_rel(conv1(r, "ft2", "in2"), f64_from(144), "ft2 = 144 in2");
+    near_rel(conv1(r, "ac", "ft2"), f64_from(43560), "acre = 43560 ft2");
+    near_rel(conv1(r, "atm", "torr"), f64_from(760), "atm = 760 torr");
+    near_rel(conv1(r, "st", "lb"), f64_from(14), "stone = 14 lb");
+    near_rel(conv1(r, "lb", "oz"), f64_from(16), "lb = 16 oz");
+    near_rel(conv1(r, "kn", "km/h"), f64_div(f64_from(1852), f64_from(1000)), "knot = 1.852 km/h");
+    near_rel(conv1(r, "mi", "ft"), f64_from(5280), "mile = 5280 ft");
+    near_rel(conv1(r, "kg", "lb"), f64_div(f64_from(100000000), f64_from(45359237)), "kg = 1/0.45359237 lb");
+    near_rel(conv1(r, "hp", "W"), f64_mul(f64_from(550), f64_mul(conv1(r, "ft", "m"), conv1(r, "lbf", "N"))),
+      "hp = 550 ft lbf/s");
+    # torr and mmHg are different units (they were the same value).
+    assert(conv1(r, "torr", "Pa") != conv1(r, "mmHg", "Pa"), "torr != mmHg");
+    return 0;
+}
+
+fn test_temperature_and_inverse(r) {
+    assert_eq(UnitRegistry_convert(r, f64_from(0), "C", "K"), 0x4071126666666666, "0 C = 273.15 K");
+    assert_eq(UnitRegistry_convert(r, f64_from(0 - 40), "C", "F"), f64_from(0 - 40), "-40 C = -40 F");
+    assert_eq(UnitRegistry_convert(r, f64_from(5), "L/100km", "km/L"), f64_from(20), "5 L/100km = 20 km/L");
+    assert_eq(UnitRegistry_convert(r, f64_from(20), "km/L", "L/100km"), f64_from(5), "20 km/L = 5 L/100km");
+    var back = UnitRegistry_convert(r, UnitRegistry_convert(r, f64_from(30), "mpg", "L/100km"), "L/100km", "mpg");
+    near_rel(back, f64_from(30), "mpg -> L/100km -> mpg");
+    # A reciprocal unit needs a finite amount > 0, and a finite answer.
+    UnitRegistry_convert(r, f64_from(0), "L/100km", "km/L");
+    assert_eq(reg_err(r), UERR_CONVERT, "0 L/100km refused");
+    UnitRegistry_convert(r, f64_from(0 - 5), "L/100km", "km/L");
+    assert_eq(reg_err(r), UERR_CONVERT, "-5 L/100km refused (was -20 km/L)");
+    UnitRegistry_convert(r, f64_from(0 - 30), "mpg", "L/100km");
+    assert_eq(reg_err(r), UERR_CONVERT, "-30 mpg to L/100km refused");
+    UnitRegistry_convert(r, 0x7FF8000000000000, "L/100km", "km/L");
+    assert_eq(reg_err(r), UERR_CONVERT, "NaN L/100km refused");
+    UnitRegistry_convert(r, 1, "L/100km", "km/L");
+    assert_eq(reg_err(r), UERR_CONVERT, "subnormal L/100km refused (was Inf)");
+    UnitRegistry_convert(r, 1, "km/L", "L/100km");
+    assert_eq(reg_err(r), UERR_CONVERT, "subnormal km/L to L/100km refused (was Inf)");
+    # The same unit under two spellings still gets the domain check, and a
+    # reciprocal amount whose linear result overflows is refused (2.4.9 final
+    # review: -5 came back as -5, and 1e-306 L/100km to mpg as +Inf).
+    UnitRegistry_convert(r, f64_from(0 - 5), "L/100km", "l/100km");
+    assert_eq(reg_err(r), UERR_CONVERT, "-5 L/100km to l/100km refused");
+    UnitRegistry_convert(r, 0x7FF8000000000000, "L/100km", "liters_per_100km");
+    assert_eq(reg_err(r), UERR_CONVERT, "NaN L/100km to itself refused");
+    assert_eq(UnitRegistry_convert(r, f64_from(5), "L/100km", "l/100km"), f64_from(5), "5 L/100km to itself is 5");
+    assert_eq(reg_err(r), UERR_NONE, "and no error");
+    UnitRegistry_convert(r, f64_div(f64_from(100), 0x7FE0000000000000), "L/100km", "mpg");
+    assert_eq(reg_err(r), UERR_CONVERT, "an overflowing mpg result refused");
+    return 0;
+}
+
+fn finds(r, q, sym, what) {
+    var u = UnitRegistry_find(r, q);
+    assert(u != 0, what);
+    if (u != 0) { assert(streq(Unit_symbol(u), sym) == 1, what); }
+    return 0;
+}
+
+fn unknown(r, q, what) {
+    assert_eq(UnitRegistry_find(r, q), 0, what);
+    return 0;
+}
+
+# 2.4.9 lookup policy: symbols exact, names and aliases in any case, plurals
+# of names only. Through 2.4.8 every symbol was also matched case-folded, so
+# MW became milliwatt and kN knot whenever case was lost, unregistered SI
+# symbols landed on registered ones (mHz -> MHz, Mm -> mm, Mb -> MB), and the
+# plural strip made "ms" a metre and "ns" a newton.
+fn test_lookup_policy(r) {
+    finds(r, "MW", "MW", "MW is megawatt");
+    finds(r, "mW", "mW", "mW is milliwatt");
+    unknown(r, "mw", "mw ambiguous (was milliwatt)");
+    unknown(r, "Mw", "Mw ambiguous (was milliwatt)");
+    finds(r, "kN", "kN", "kN is kilonewton");
+    finds(r, "kn", "kn", "kn is knot");
+    unknown(r, "KN", "KN ambiguous (was kilonewton)");
+    unknown(r, "ms", "ms unknown (was metre)");
+    unknown(r, "ns", "ns unknown (was newton)");
+    unknown(r, "ks", "ks unknown (was kelvin)");
+    unknown(r, "ps", "ps unknown (was poise)");
+    unknown(r, "Ws", "Ws unknown (was watt)");
+    unknown(r, "gs", "gs unknown (was gram)");
+    unknown(r, "mHz", "mHz unknown (was MHz)");
+    unknown(r, "Mm", "Mm unknown (was mm)");
+    unknown(r, "Mb", "Mb unknown (was MB)");
+    unknown(r, "b", "b (bit) unknown (was byte)");
+    unknown(r, "kb", "kb (kilobit) unknown (was kB)");
+    unknown(r, "Gb", "Gb unknown (was GB)");
+    unknown(r, "G", "G unknown (was gram)");
+    unknown(r, "T", "T unknown (was ton)");
+    unknown(r, "Cal", "Cal unknown (was calorie)");
+    unknown(r, "ML", "ML (megalitre) unknown");
+    unknown(r, "HZ", "HZ unknown: lowercase spellings are exact");
+    finds(r, "st", "st", "st is stone");
+    finds(r, "ST", "st", "ST is stone (was semitone)");
+    finds(r, "semi", "semi", "semi");
+    finds(r, "Semitones", "semi", "Semitones");
+    # Names and aliases match in any case; plurals of names resolve.
+    finds(r, "KILOMETER", "km", "KILOMETER");
+    finds(r, "Meters", "m", "Meters");
+    finds(r, "Feet", "ft", "Feet");
+    finds(r, "LBS", "lb", "LBS");
+    finds(r, "Gal", "gal", "Gal");
+    finds(r, "MPH", "mph", "MPH");
+    finds(r, "gigabytes", "GB", "gigabytes");
+    finds(r, "Kelvins", "K", "Kelvins");
+    finds(r, "celsius", "C", "celsius ends in s");
+    # British singulars (only the plurals resolved).
+    finds(r, "metre", "m", "metre");
+    finds(r, "kilometre", "km", "kilometre");
+    finds(r, "centimetre", "cm", "centimetre");
+    finds(r, "millimetre", "mm", "millimetre");
+    finds(r, "tonne", "t", "tonne");
+    finds(r, "metres", "m", "metres");
+    finds(r, "tonnes", "t", "tonnes");
+    # Lowercase spellings of SI symbols, exactly as written.
+    finds(r, "hz", "Hz", "hz");
+    finds(r, "khz", "kHz", "khz");
+    finds(r, "ghz", "GHz", "ghz");
+    finds(r, "ml", "mL", "ml");
+    finds(r, "l", "L", "l");
+    finds(r, "kwh", "kWh", "kwh");
+    finds(r, "kpa", "kPa", "kpa");
+    finds(r, "kw", "kW", "kw");
+    finds(r, "c", "C", "c");
+    finds(r, "f", "F", "f");
+    finds(r, "k", "K", "k");
+    finds(r, "l/100km", "L/100km", "l/100km");
+    # NULL query.
+    unknown(r, 0, "NULL query (was SIGSEGV)");
+    UnitRegistry_convert(r, f64_from(1), 0, "m");
+    assert_eq(reg_err(r), UERR_UNKNOWN, "NULL unit -> UERR_UNKNOWN");
+    # No case-insensitive key is left ambiguous by a collision among the
+    # built-in names and aliases: a new alias that clashes shows up here.
+    var keys = map_keys(reg_low(r));
+    var bad = 0;
+    var i = 0;
+    while (i < vec_len(keys)) {
+        if (map_get(reg_low(r), vec_get(keys, i)) == 0) { bad = bad + 1; }
+        i = i + 1;
+    }
+    assert_eq(bad, 0, "no ambiguous name or alias");
+    assert_eq(vec_len(reg_units(r)), 110, "110 units");
+    return 0;
+}
+
+# category_name gives display names ("Data Size"); category_from_str must
+# take them back (through 2.4.8 it took none of the 19).
+fn test_category_roundtrip(r) {
+    var c = 0;
+    var ok = 1;
+    while (c < UNIT_CATEGORY_COUNT) {
+        if (category_from_str(category_name(c)) != c) { ok = 0; }
+        if (vec_len(UnitRegistry_list(r, category_from_str(category_name(c)))) == 0) { ok = 0; }
+        c = c + 1;
+    }
+    assert_eq(ok, 1, "category_from_str(category_name(c)) == c for all 19");
+    assert_eq(category_from_str("data size"), CAT_DATASIZE, "data size");
+    assert_eq(category_from_str("DATA_SIZE"), CAT_DATASIZE, "DATA_SIZE");
+    assert_eq(category_from_str("Fuel Economy"), CAT_FUELECONOMY, "Fuel Economy");
+    assert_eq(category_from_str("nonsense"), 0 - 1, "unknown category");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco units tests ===");
@@ -107,6 +389,11 @@ fn main() {
     assert(UnitRegistry_find(r, "semitones") != 0, "find semitones alias");
     test_registry_integrity(r);
     test_hashmap_collisions();
+    test_exact_factors(r);
+    test_unit_identities(r);
+    test_temperature_and_inverse(r);
+    test_lookup_policy(r);
+    test_category_roundtrip(r);
     # Propagate failure to the process exit code. assert_summary() RETURNS
     # _assert_fail; discarding it and returning 0 made a red suite exit 0, and
     # CI gates on the exit code — so failures shipped green (fixed 2.4.4).

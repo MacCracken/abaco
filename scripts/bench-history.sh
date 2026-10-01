@@ -16,6 +16,15 @@ HISTORY_FILE="${1:-bench-history.csv}"
 MD_FILE="${2:-bench-latest.md}"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+# A run on uncommitted changes measures code HEAD does not hold; through 2.4.8
+# such rows carried HEAD's hash bare, crediting the new numbers to the old tree.
+# Only what is measured counts — this script's own outputs (the tracked CSV and
+# markdown) are dirty after every run and would mark every later run of a clean
+# HEAD as dirty too.
+if [ "$COMMIT" != "unknown" ] \
+    && ! git diff --quiet HEAD -- src benches cyrius.cyml cyrius.lock 2>/dev/null; then
+    COMMIT="${COMMIT}-dirty"
+fi
 BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
 CYRIUS="${CYRIUS_HOME:-$HOME/.cyrius}/bin/cyrius"
 
@@ -30,16 +39,37 @@ echo "  branch:  $BRANCH"
 echo "  compiler: $CYRIUS"
 echo ""
 
-# Run all benchmark files via cyrius
+# Run every benchmark file. Each runs on its own so a file that fails to
+# build or crashes is named, with its output, instead of `set -e` ending the
+# script in silence (through 2.4.8 a bench compile error exited 1 with no
+# message).
 BENCH_OUTPUT=""
-for benchfile in benches/bench.bcyr benches/bench_eval.bcyr benches/bench_units.bcyr; do
-    if [ -f "$benchfile" ]; then
-        BENCH_OUTPUT="${BENCH_OUTPUT}
-$("$CYRIUS" bench "$benchfile" 2>&1)"
+for benchfile in benches/*.bcyr; do
+    [ -f "$benchfile" ] || continue
+    rc=0
+    out=$("$CYRIUS" bench "$benchfile" 2>&1) || rc=$?
+    if [ $rc -ne 0 ] || echo "$out" | grep -q 'FAIL: compile error'; then
+        echo "$out" >&2
+        echo "error: $benchfile failed (exit $rc) — nothing appended" >&2
+        exit 1
     fi
+    BENCH_OUTPUT="${BENCH_OUTPUT}
+${out}"
 done
 echo "$BENCH_OUTPUT"
 echo ""
+
+# Row names must be unique across every benches/*.bcyr: the CSV and the
+# markdown table key rows by name alone, so a second row of the same name is
+# silently shadowed by the first. Through 2.4.8 `sqrt` existed in both bench.bcyr
+# and bench_eval.bcyr and the evaluator's row never reached bench-latest.md.
+# Checked before anything is appended, so a collision costs a re-run, not data.
+DUPES=$(echo "$BENCH_OUTPUT" | grep -E 'avg.*min=.*max=' | sed -E 's/^[[:space:]]*//; s/:.*//' | sort | uniq -d)
+if [ -n "$DUPES" ]; then
+    echo "error: duplicate benchmark names (rename one of each in benches/*.bcyr):" >&2
+    echo "$DUPES" | sed 's/^/  /' >&2
+    exit 1
+fi
 
 # ── Helper: parse time string to nanoseconds ────────────────────────────────
 to_ns() {

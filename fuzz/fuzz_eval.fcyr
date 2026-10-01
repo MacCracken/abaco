@@ -1,8 +1,19 @@
 # Fuzz: expression evaluator with random input strings.
 # Invariants:
 #   - Evaluator_eval never crashes on any input.
-#   - err is set when input is invalid; result f64 is still a defined word.
-#   - Evaluator_eval_partial never crashes (strips trailing operators).
+#   - A byte outside the grammar is never evaluated past: err != NONE (2.4.9 —
+#     through 2.4.8 such bytes were skipped silently; this line claimed the
+#     invariant and nothing checked it).
+#   - Evaluator_eval_partial never crashes, and agrees with Evaluator_eval
+#     whenever the full expression succeeds (same bits) or fails semantically
+#     (same DIV_ZERO / MATH / UNKNOWN_* error) — 2.4.8 previewed 1/0 as 1.
+#   - The domain caps answer ABACO_ERR_MATH past their bound and a value under it.
+#   - Any named function with 1-40 adversarial arguments: more than 32 is an
+#     error; an integer function given a fraction, NaN, Inf or |x| >= 2^63 is
+#     ABACO_ERR_MATH (isprime: 0); gcd / lcm / binomial / choose on small
+#     operands equal an i64 oracle (Euclid, Pascal's triangle); mean / median /
+#     stddev with a NaN argument are NaN (2.4.9 — through 2.4.8 no fuzz
+#     execution reached any function but four).
 #   - Whitespace idempotence: " 2 + 3 " == "2+3".
 #   - Commutativity: a + b == b + a, a * b == b * a (on valid expressions).
 
@@ -184,8 +195,182 @@ fn _fz_pathological(which, e) {
     store8(buf + pos, 41); pos = pos + 1;
     store8(buf + pos, 0);
     Evaluator_eval(e, buf);
-    # Any outcome is acceptable except a hang; an out-of-domain argument must
-    # report ABACO_ERR_MATH rather than grinding.
+    # 2.4.9: assert the outcome (through 2.4.8 any outcome passed, so removing
+    # the factorial / fib caps kept the gate green). Recompute the argument;
+    # past i64 it is out of every domain.
+    var val = 0;
+    var big = 0;
+    var di = nl;
+    while (di < nl + digits) {
+        if (val > 922337203685477579) { big = 1; }
+        val = val * 10 + (load8(buf + di) - 48);
+        di = di + 1;
+    }
+    var want = ABACO_ERR_NONE;
+    if (n == 0) { if (big == 1 || val > 1000000000000) { want = ABACO_ERR_MATH; } }
+    if (n == 1) { if (big == 1 || val > 170) { want = ABACO_ERR_MATH; } }
+    if (n == 2) { if (big == 1 || val > 92) { want = ABACO_ERR_MATH; } }
+    if (eval_err(e) != want) { _fz_puts(buf); _fz_fail(" domain cap answered the wrong error"); }
+    return 0;
+}
+
+# Function table for the call shape: name and arity (-1 = variadic).
+var _FZ_FN_N = 19;
+fn _fz_fn(i, out_arity) {
+    store64(out_arity, 1);
+    if (i == 0)  { store64(out_arity, 2); return "gcd"; }
+    if (i == 1)  { store64(out_arity, 2); return "lcm"; }
+    if (i == 2)  { store64(out_arity, 2); return "binomial"; }
+    if (i == 3)  { store64(out_arity, 2); return "choose"; }
+    if (i == 4)  { return "nextprime"; }
+    if (i == 5)  { return "prevprime"; }
+    if (i == 6)  { return "isprime"; }
+    if (i == 7)  { return "factorial"; }
+    if (i == 8)  { return "fib"; }
+    if (i == 9)  { return "totient"; }
+    if (i == 10) { store64(out_arity, 0 - 1); return "mean"; }
+    if (i == 11) { store64(out_arity, 0 - 1); return "median"; }
+    if (i == 12) { store64(out_arity, 0 - 1); return "stddev"; }
+    if (i == 13) { store64(out_arity, 2); return "min"; }
+    if (i == 14) { store64(out_arity, 2); return "max"; }
+    if (i == 15) { store64(out_arity, 2); return "atan2"; }
+    if (i == 16) { return "sqrt"; }
+    if (i == 17) { return "abs"; }
+    store64(out_arity, 2);
+    return "pow";
+}
+
+# Argument kinds: 0 small integer 0..60, 1 negative integer, 2 fraction,
+# 3 +-1e300, 4 2^63, 5 NaN expression, 6 +Inf expression.
+var _FZ_ARG_N = 7;
+fn _fz_arg_text(kind, small) {
+    var b = alloc(32);
+    if (kind == 0) { var n0 = fmt_int_buf(small, b); store8(b + n0, 0); return b; }
+    if (kind == 1) { store8(b, 48); store8(b + 1, 45); var n1 = fmt_int_buf(small + 1, b + 2); store8(b + 2 + n1, 0); return b; }
+    if (kind == 2) { return "2.5"; }
+    if (kind == 3) { if (small % 2 == 0) { return "1e300"; } return "0-1e300"; }
+    if (kind == 4) { return "9223372036854775808"; }
+    if (kind == 5) { return "sqrt(0-1)"; }
+    return "1e308*10";
+}
+
+# gcd of two non-negative i64, by Euclid.
+fn _fz_gcd(a, b) {
+    while (b != 0) { var t = a % b; a = b; b = t; }
+    return a;
+}
+
+# C(n, k) for 0 <= k <= n <= 60 by Pascal's triangle (every entry fits i64).
+var _FZ_PASCAL = 0;
+fn _fz_choose(n, k) {
+    if (_FZ_PASCAL == 0) {
+        _FZ_PASCAL = alloc(61 * 61 * 8);
+        var r = 0;
+        while (r <= 60) {
+            var c = 0;
+            while (c <= 60) {
+                var v = 0;
+                if (c == 0 || c == r) { v = 1; }
+                elif (c < r) { v = load64(_FZ_PASCAL + ((r - 1) * 61 + c - 1) * 8) + load64(_FZ_PASCAL + ((r - 1) * 61 + c) * 8); }
+                store64(_FZ_PASCAL + (r * 61 + c) * 8, v);
+                c = c + 1;
+            }
+            r = r + 1;
+        }
+    }
+    return load64(_FZ_PASCAL + (n * 61 + k) * 8);
+}
+
+# One call to a named function with adversarial arguments.
+fn _fz_call_shape(e) {
+    var arb = alloc(8);
+    var fi = _fz_u(_FZ_FN_N);
+    var name = _fz_fn(fi, arb);
+    var arity = load64(arb);
+    var nargs = arity;
+    if (arity < 0 || _fz_u(8) == 0) { nargs = _fz_u(40) + 1; }
+    var buf = alloc(40 * 24 + 32);
+    var nl = strlen(name);
+    memcpy(buf, name, nl);
+    var pos = nl;
+    store8(buf + pos, 40); pos = pos + 1;
+    var bad = 0;          # some argument is a fraction, NaN, Inf or |x| >= 2^63
+    var nan = 0;
+    var allsmall = 1;
+    var v0 = 0;
+    var v1 = 0;
+    var i = 0;
+    while (i < nargs) {
+        if (i > 0) { store8(buf + pos, 44); pos = pos + 1; }
+        var kind = 0;
+        if (_fz_u(2) == 0) { kind = _fz_u(_FZ_ARG_N); }
+        var small = _fz_u(61);
+        var t = _fz_arg_text(kind, small);
+        memcpy(buf + pos, t, strlen(t)); pos = pos + strlen(t);
+        if (kind >= 2) { bad = 1; }
+        if (kind == 5) { nan = 1; }
+        if (kind != 0) { allsmall = 0; }
+        if (i == 0) { v0 = small; }
+        if (i == 1) { v1 = small; }
+        i = i + 1;
+    }
+    store8(buf + pos, 41); pos = pos + 1;
+    store8(buf + pos, 0);
+    var r = Evaluator_eval(e, buf);
+    var err = eval_err(e);
+    if (nargs > 32) {
+        if (err == ABACO_ERR_NONE) { _fz_puts(buf); _fz_fail(" call with more than 32 arguments accepted"); }
+        return 0;
+    }
+    if (arity >= 0 && nargs != arity) { return 0; }
+    var intfn = 0;
+    if (fi <= 9) { intfn = 1; }
+    if (intfn == 1 && bad == 1) {
+        if (fi == 6) {
+            if (err != ABACO_ERR_NONE || r != 0) { _fz_puts(buf); _fz_fail(" isprime of a non-integer is not 0"); }
+        } elif (err != ABACO_ERR_MATH) {
+            _fz_puts(buf); _fz_fail(" integer function took a non-integer argument");
+        }
+        return 0;
+    }
+    if (allsmall == 1 && fi <= 3) {
+        var want = 0;
+        var ok = 1;
+        if (fi == 0) { want = _fz_gcd(v0, v1); }
+        if (fi == 1) {
+            if (v0 == 0 || v1 == 0) { want = 0; }
+            else { want = v0 / _fz_gcd(v0, v1) * v1; }
+        }
+        if (fi >= 2) {
+            if (v1 > v0) { want = 0; }
+            else { want = _fz_choose(v0, v1); }
+        }
+        if (ok == 1 && (err != ABACO_ERR_NONE || r != f64_from(want))) {
+            _fz_puts(buf); _fz_fail(" disagrees with the i64 oracle");
+        }
+        return 0;
+    }
+    if (nan == 1 && (fi == 10 || fi == 11 || fi == 12)) {
+        if (err != ABACO_ERR_NONE || f64_eq(r, r) == 1) { _fz_puts(buf); _fz_fail(" statistic of a NaN argument is not NaN"); }
+    }
+    return 0;
+}
+
+# 1 when s holds a byte outside the evaluator's grammar.
+fn _fz_has_foreign(s) {
+    var i = 0;
+    while (load8(s + i) != 0) {
+        var c = load8(s + i);
+        var ok = 0;
+        if (c == 32 || c == 9 || c == 10 || c == 13) { ok = 1; }
+        if (c >= 48 && c <= 57) { ok = 1; }
+        if (c >= 65 && c <= 90) { ok = 1; }
+        if (c >= 97 && c <= 122) { ok = 1; }
+        if (c == 95 || c == 46 || c == 43 || c == 45 || c == 42 || c == 47) { ok = 1; }
+        if (c == 37 || c == 94 || c == 40 || c == 41 || c == 44 || c == 33) { ok = 1; }
+        if (ok == 0) { return 1; }
+        i = i + 1;
+    }
     return 0;
 }
 
@@ -199,8 +384,18 @@ fn main() {
         iters = 0;
         var ai = 0;
         while (load8(arg + ai) != 0) {
-            iters = iters * 10 + load8(arg + ai) - 48;
+            var dig = load8(arg + ai);
+            # A typo must not run 0 iterations and report a pass.
+            if (dig < 48 || dig > 57 || ai >= 9) {
+                println("usage: <harness> [iterations, 1-999999999]");
+                sys_exit(2);
+            }
+            iters = iters * 10 + dig - 48;
             ai = ai + 1;
+        }
+        if (iters <= 0) {
+            println("usage: <harness> [iterations, 1-999999999]");
+            sys_exit(2);
         }
     }
     var ev = Evaluator_new();
@@ -210,13 +405,29 @@ fn main() {
         var s = _fz_expr();
 
         # Must not crash.
-        Evaluator_eval(ev, s);
-        # Partial eval must not crash either.
-        Evaluator_eval_partial(ev, s);
+        var fr = Evaluator_eval(ev, s);
+        var ferr = eval_err(ev);
+        if (_fz_has_foreign(s) == 1 && ferr == ABACO_ERR_NONE) {
+            _fz_fail("an expression with a byte outside the grammar evaluated cleanly");
+        }
+        # Partial eval must not crash either, and must agree with the full one
+        # on a complete expression's success or semantic failure.
+        var pr = Evaluator_eval_partial(ev, s);
+        var perr = eval_err(ev);
+        if (ferr == ABACO_ERR_NONE) {
+            if (perr != ABACO_ERR_NONE || pr != fr) { _fz_fail("eval_partial disagrees with a successful eval"); }
+        }
+        if (ferr == ABACO_ERR_DIV_ZERO || ferr == ABACO_ERR_MATH) {
+            if (perr != ferr) { _fz_fail("eval_partial hid a semantic error"); }
+        }
+        if (ferr == ABACO_ERR_UNKNOWN_VAR || ferr == ABACO_ERR_UNKNOWN_FN) {
+            if (perr != ferr) { _fz_fail("eval_partial hid an unknown name"); }
+        }
 
         # Every 4th iteration, run one targeted adversarial shape instead of
         # relying on the random stream to stumble into it.
         if (iter % 4 == 0) { _fz_pathological(_fz_u(5), ev); }
+        if (iter % 4 == 1) { _fz_call_shape(ev); }
 
         # Whitespace idempotence + commutativity on synthesized valid exprs.
         # a in [1..1000), b in [1..1000).

@@ -481,34 +481,86 @@ Maintenance patch. No abaco behaviour change, no API change:
 - [x] Benchmark rows `pitch_class`, `lcm`, `choose`; A/B against 2.4.7 flat
       (geomean ×0.99). Suite 909 → **938**; fuzz 4/4 at 20,000
 
+### 2.4.9 — project-wide audit ✅ (2026-09-30)
+
+A 45-agent audit (finders per area plus adversarial verifiers): 170 findings,
+166 confirmed, 4 refuted; then a 4-agent review of the finished diff found 14
+more (two introduced by the fixes), all fixed. Report and every disposition:
+[`docs/audit/2026-09-30-audit.md`](../audit/2026-09-30-audit.md).
+
+- [x] ⛔ **`batch_*` with odd `n` wrote past `dst`** (heap corruption);
+      `batch_scale` / `batch_mac` leaked `n * 8` bytes per call
+- [x] ⛔ **Units case-folded symbols** — `MW` read as milliwatt and `kN` as knot
+      whenever case was lost (always, through `nl_parse`); unregistered SI
+      symbols resolved to neighbours (`mHz` → MHz). Symbols are exact now,
+      names and aliases case-insensitive; factors exact to the definitions
+- [x] ⛔ **`factor` / `totient` / `next_prime` never returned near 2^63**
+      (`d * d` wrapped; the prime search ran off the end of i64)
+- [x] Evaluator: unknown bytes and malformed literals are parse errors;
+      fractions refused by integer functions; double-double integer `pow`;
+      exact `log10` of powers of ten and exact `%`; NaN propagation;
+      error codes kept through parentheses; `eval_partial` bounded (was
+      O(T²), 88 s on 1000 tokens); per-evaluator scratch arena (was 16-33 KB
+      leaked per call; passed explicitly, so one Evaluator per thread is safe);
+      `abaco_binomial` exact whenever the result fits
+- [x] DSP: Kaiser / I₀ for β > 20, windows outside `[0, size)`, correctly
+      rounded dB constants, NaN through `amplitude_to_db`, `time_constant`
+      refuses an integer sample rate, `f64_round_half_away` edges, `f64_rms2`,
+      compensated `batch_sum`, unfused `batch_fmadd` on every target
+- [x] NL / history / currency: case kept, strict correctly rounded numbers,
+      verbs before every form, ring buffer, strict all-or-nothing JSON load,
+      full escapes, atomic save, matching 16 MiB bounds, non-finite rates refused
+- [x] Tests and fuzzers that could not fail now can (discrimination runs
+      against 2.4.8 recorded in the report); CI gates lint status, bench
+      builds, `cyrius.lock`, pinned-tag installer, read-only default token
+- [x] `bench-history.sh`: duplicate-name guard (the `sqrt` collision), per-bench
+      diagnostics, `-dirty` commit stamp; `binomial` row renamed
+      `abaco_binomial` so the trail does not splice two functions
+
 ### Still open
 
 > The two residuals the 2.3.5 fix audit left open were closed in 2.4.0.
 
-
-- [ ] Live currency-rate fetch via **hoosh** — `src/ai.cyr`'s `CurrencyCache` is
-      a pure rates cache today (`set_rates` + `convert`); the live HTTP path
-      needs `[deps.hoosh]` and a JSON parser for nested rate maps. (Referenced
-      from the `src/ai.cyr` header and `CurrencyCache` comments.)
-- [ ] Wire the first real consumers to `dist/abaco.cyr` (Abacus, dhvani)
+- [ ] **Move the live consumers to 2.4.9.** dhvani and jalwa ship the 2.4.6
+      bundle. dhvani must pass `f64_from(sample_rate)` to `time_constant`
+      (compressor, limiter) first — 2.4.9 answers NaN for the integer it
+      passes today. Then Abacus.
 - [ ] Audit consumers for duplicated math that should use `abaco::dsp` —
-      dhvani (first target), shruti, jalwa, tarang
+      dhvani (first target; its chroma uses its own C0 literal), shruti, tarang
 - [ ] Standardize AGNOS projects on abaco for shared math
-- [ ] DSP expansion as consumer needs surface (filters, additional windows)
-- [ ] `lib/tls.cyr` integration for the currency cache once the stdlib TLS API
-      stabilizes (replaces the plaintext `http_get` path). Since Cyrius 6.6.9
-      `http_get` really connects, so the loopback dev path works; an `https://`
-      base URL still fails before any lookup, because there is no TLS
-- [ ] **Upstream (ganita):** `ganita_binomial` multiplies before it divides —
-      its last step holds C(n, k) · k — so it refuses results above
-      `i64_MAX / k` that fit (C(62, 31) ≈ 4.65e17 is the first central case;
-      exact through C(61, 30)). abaco reports those as `ABACO_ERR_MATH` and
-      `test_binomial_lcm_overflow` pins the limit; dividing by gcd(result, i+1)
-      before multiplying would make every representable C(n, k) exact
-- [ ] `bench-history.sh` keys rows by name alone, and `sqrt` exists in both
-      `bench.bcyr` (`f64_sqrt`) and `bench_eval.bcyr` (`"sqrt(16)"`), so
-      `bench-latest.md` shows the first row twice and the evaluator's never.
-      Rename one row or key the trail by file as well
+- [ ] DSP expansion as consumer needs surface (filters, additional windows,
+      a periodic/DFT-even window variant)
+- [ ] **Currency TLS.** `CurrencyCache_fetch` works against a plaintext
+      loopback server only; `lib/tls.cyr` (or routing through hoosh, which
+      would add TLS) once the stdlib TLS API stabilizes
+- [ ] **aarch64 CI lane.** Nothing builds or tests aarch64; the 2.4.9 audit ran
+      the suites under qemu by hand (all green after 2.4.9's `ev_near` fix)
+- [ ] **Upstream (ganita):** `sinh` / `tanh` / `asinh` / `atanh` lose up to
+      ~3.7e7 ulp for small |x|, `acosh` near 1 and `asin` near ±1 likewise;
+      `atan2` misses C99's signed-zero and (±Inf, ±Inf) rows. abaco passes NaN
+      through; the cancellation needs the stdlib kernels. `tan` as sin/cos is
+      ~2 ulp — a `k_tan` kernel would make it 1
+- [ ] **Upstream (bayan):** aarch64 `bayan_u64_mulmod` is always the 128-bit
+      bit-serial path (~300× x86 in `is_prime`); a 64-bit fast path when the
+      product fits would close most of it. (ganita's `binomial` refusal is moot
+      for abaco since `abaco_binomial`, but still worth fixing upstream)
+- [ ] **Literal rounding residual** — subnormal results are rounded twice and
+      digits past the 18th carry no sticky bit, so ~0.3% of literals are 1 ulp
+      off (either direction). Round once at the target precision and keep a
+      sticky flag; no bignum needed
+- [ ] `factorial` accumulates up to ~6 ulp (170! is 4 ulp low); `mean` /
+      `stddev` overflow on large finite inputs (scale or compensate);
+      `stdev` / population-vs-sample semantics to document
+- [ ] A wrong argument count reports `ABACO_ERR_UNKNOWN_FN` for a known name;
+      a dedicated arity error (or `ABACO_ERR_INVALID`) would be clearer
+- [ ] Units: the US short ton and UK long ton (`ton` is the metric tonne);
+      whether a temperature below absolute zero should be an error (abaco is
+      a linear converter today and does not check)
+- [ ] Windows and `sinc_kernel` are symmetric to within ~3 ulp, not bit-exact;
+      a centred-argument evaluation would make FIR taps exactly linear-phase
+- [ ] Function dispatch is a linear chain of `streq` (~45 names, two `strlen`
+      each): ~1.1 µs of a 1.7 µs function call (2.4.9 audit). A hashed or
+      first-byte dispatch would cut most of it
 - [ ] Decide whether to commit the `dist/abaco.deps` sidecar. Since 2.4.6 its
       name is exactly what a consumer's `cyrius deps` reads, but it lists every
       `[deps].stdlib` module, including the test / bench-only `assert`, `bench`

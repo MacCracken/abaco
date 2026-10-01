@@ -235,6 +235,46 @@ fn test_value_to_latex() {
     return 0;
 }
 
+# 2.4.9 audit: TEXT was copied into \text{...} raw, and subnormals whose 10^e is
+# itself subnormal rendered with wrong digits.
+fn test_value_to_latex_text_and_subnormals() {
+    assert_streq(Value_to_latex(Value_text("50% off")), "\\text{50\\% off}", "% is escaped (was a TeX comment)");
+    assert_streq(Value_to_latex(Value_text("R&D")), "\\text{R\\&D}", "& is escaped");
+    assert_streq(Value_to_latex(Value_text("a_b")), "\\text{a\\_b}", "_ is escaped");
+    assert_streq(Value_to_latex(Value_text("}\\input{x}")),
+      "\\text{\\}\\textbackslash{}input\\{x\\}}", "braces and backslash cannot inject TeX");
+    assert_streq(Value_to_latex(Value_text("^~#$")),
+      "\\text{\\textasciicircum{}\\textasciitilde{}\\#\\$}", "^ ~ # $ are escaped");
+    # Truncation never splits an escape or a UTF-8 sequence: 119 'A' leave room
+    # for exactly one more byte before the closing brace.
+    var t = alloc(140);
+    var i = 0;
+    while (i < 119) { store8(t + i, 65); i = i + 1; }
+    store8(t + 119, 92);
+    store8(t + 120, 0);
+    var out = Value_to_latex(Value_text(t));
+    var n = strlen(out);
+    assert_eq(load8(out + n - 1), 125, "a cut escape leaves the closing brace intact");
+    assert_eq(load8(out + n - 2), 65, "and drops the whole escape");
+    store8(t + 119, 195);
+    store8(t + 120, 169);
+    store8(t + 121, 0);
+    out = Value_to_latex(Value_text(t));
+    n = strlen(out);
+    assert_eq(load8(out + n - 2), 65, "a UTF-8 sequence that does not fit is dropped whole, no lone lead byte");
+    store8(t + 118, 195);
+    store8(t + 119, 169);
+    store8(t + 120, 0);
+    out = Value_to_latex(Value_text(t));
+    n = strlen(out);
+    assert_eq(load8(out + n - 2), 169, "one that fits is kept whole");
+    # Subnormal digits (2.4.8: 1.500000 and 1.001980).
+    assert_streq(Value_to_latex(Value_float(3)), "1.482197 \\times 10^{-323}", "subnormal 3 * 2^-1074");
+    assert_streq(Value_to_latex(Value_float(0x7E8)), "9.999889 \\times 10^{-321}", "the literal 1e-320");
+    assert_streq(Value_to_latex(Value_float(0x8000000000000000)), "-0.0", "-0 keeps its sign (was 0.0)");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco integration tests ===");
@@ -248,6 +288,7 @@ fn main() {
     test_bpm_two_ways();
     test_unparseable_safe();
     test_value_to_latex();
+    test_value_to_latex_text_and_subnormals();
     # Propagate failure to the process exit code. assert_summary() RETURNS
     # _assert_fail; discarding it and returning 0 made a red suite exit 0, and
     # CI gates on the exit code — so failures shipped green (fixed 2.4.4).

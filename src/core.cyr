@@ -27,6 +27,10 @@ fn str_upper(s) { return str_upper_cstr(s); }
 var ABACO_I64_BOUND_HI = 0x43E0_0000_0000_0000;   #  2^63, exclusive
 var ABACO_I64_BOUND_LO = 0xC3E0_0000_0000_0000;   # -2^63, inclusive
 
+# i64 maximum — the ceiling integer results are checked against before they are
+# formed (abaco_binomial, the evaluator's lcm).
+var ABACO_I64_MAX = 9223372036854775807;
+
 fn abaco_f64_to_i64(x) {
     # Both tests are ordered comparisons, which a NaN fails, so NaN is Err.
     if (f64_lt(x, ABACO_I64_BOUND_HI) == 1) {
@@ -41,7 +45,7 @@ fn abaco_f64_to_i64(x) {
 #   FLOAT:    tag=1, data1=f64 (as bits),        data2=unused
 #   FRACTION: tag=2, data1=numerator (i64),      data2=denominator (i64)
 #   COMPLEX:  tag=3, data1=real (f64 bits),      data2=imag (f64 bits)
-#   TEXT:     tag=4, data1=Str pointer,           data2=unused
+#   TEXT:     tag=4, data1=cstring (caller owns), data2=unused
 
 enum ValueTag { INTEGER; FLOAT; FRACTION; COMPLEX; TEXT; }
 
@@ -200,7 +204,11 @@ fn _val_sci_at(buf, v) {
     # 10^300 first (any subnormal lands well inside normal range) and divide by
     # 10^(e+300), which is representable. Same trick src/eval.cyr's _div_pow10
     # uses one module away.
-    if (f64_eq(p10, f64_from(0)) == 1) {
+    # ⚠ The condition is the exponent, not p10 == 0. Through 2.4.8 the pre-scale
+    # ran only once 10^e had underflowed all the way to 0, but a SUBNORMAL 10^e
+    # (e in -323..-308) has lost bits already, so 1e-320 rendered as
+    # 1.001980 x 10^{-320} (2.4.9 audit). Below 1e-290, scale first.
+    if (e < (0 - 290)) {
         m = f64_div(f64_mul(v, ABACO_LATEX_SCALE_UP),
           f64_pow(f64_from(10), f64_from(e + 300)));
     }
@@ -255,6 +263,21 @@ fn _val_num_at(buf, v) {
     return fmt_float_buf(v, buf, ABACO_LATEX_DECIMALS);
 }
 
+# The LaTeX escape for one of the ten special characters, or 0 for any other byte.
+fn _latex_escape(c) {
+    if (c == 92) { return "\\textbackslash{}"; }
+    if (c == 123) { return "\\{"; }
+    if (c == 125) { return "\\}"; }
+    if (c == 35) { return "\\#"; }
+    if (c == 36) { return "\\$"; }
+    if (c == 37) { return "\\%"; }
+    if (c == 38) { return "\\&"; }
+    if (c == 95) { return "\\_"; }
+    if (c == 94) { return "\\textasciicircum{}"; }
+    if (c == 126) { return "\\textasciitilde{}"; }
+    return 0;
+}
+
 fn Value_to_latex(self) {
     var t = load64(self);
     var d1 = load64(self + 8);
@@ -284,7 +307,12 @@ fn Value_to_latex(self) {
             store8(buf + scl, 0);
             return buf;
         }
-        # Whole numbers keep the N.0 form.
+        # Whole numbers keep the N.0 form; -0 keeps its sign, as a COMPLEX part's
+        # does (through 2.4.8 it printed "0.0").
+        if (d1 == 0x8000_0000_0000_0000) {
+            memcpy(buf, "-0.0", 5);
+            return buf;
+        }
         var i = f64_to(d1);
         if (f64_eq(d1, f64_from(i)) == 1) {
             var len = fmt_int_buf(i, buf);
@@ -339,20 +367,39 @@ fn Value_to_latex(self) {
         return buf;
     }
     if (t == TEXT) {
+        # LaTeX's ten special characters are escaped (Lamport, LaTeX §2.2.1), so
+        # ordinary text typesets and caller text cannot inject TeX: through 2.4.8
+        # "50% off" commented out its own closing brace and "\\input{...}" went
+        # through as a command (2.4.9 audit). Truncation stays — this is a display
+        # helper over a fixed buffer — but cuts only between whole escapes and
+        # never inside a UTF-8 sequence (RFC 3629). Reserved: "}" + NUL.
         memcpy(buf, "\\text{", 6);
-        var slen = strlen(d1);
-        # Bound the copy. This wrote the caller's string into a 128-byte buffer
-        # with no length check, so any TEXT value longer than 120 bytes ran off
-        # the end of the allocation — the caller controls that string. Pre-dates
-        # 2.4.4; found while rewriting the numeric branches, and fixed here
-        # rather than left in a function this release rewrites. Truncation, not
-        # rejection: this is a display helper, and the 8 bytes reserved are
-        # "\\text{" (6) + "}" + NUL.
-        var room = ABACO_LATEX_BUF - 8;
-        if (slen > room) { slen = room; }
-        memcpy(buf + 6, d1, slen);
-        store8(buf + 6 + slen, 125);
-        store8(buf + 6 + slen + 1, 0);
+        var pos = 6;
+        var room = ABACO_LATEX_BUF - 2;
+        var si = 0;
+        var go = 1;
+        while (go == 1) {
+            var c = load8(d1 + si);
+            if (c == 0) { go = 0; }
+            else {
+                var esc = _latex_escape(c);
+                var w = 1;
+                if (esc != 0) { w = strlen(esc); }
+                if (c >= 192) {
+                    # A lead byte travels with its continuation bytes.
+                    while (w < 4 && load8(d1 + si + w) >= 128 && load8(d1 + si + w) < 192) { w = w + 1; }
+                }
+                if (pos + w > room) { go = 0; }
+                else {
+                    if (esc != 0) { memcpy(buf + pos, esc, w); }
+                    else { memcpy(buf + pos, d1 + si, w); }
+                    pos = pos + w;
+                    if (esc != 0) { si = si + 1; } else { si = si + w; }
+                }
+            }
+        }
+        store8(buf + pos, 125);
+        store8(buf + pos + 1, 0);
         return buf;
     }
     store8(buf, 0);
@@ -413,8 +460,26 @@ fn category_name(cat) {
     }
 }
 
-# Parse category from string, returns category id or -1 on error
-fn category_from_str(s) {
+# Parse category from string, returns category id or -1 on error. Case, spaces
+# and underscores are ignored, so every category_name() string round-trips —
+# "Data Size", "Fuel Economy" — where through 2.4.8 none of the 19 did, and
+# UnitRegistry_list(-1) answered an empty list (2.4.9 audit).
+fn category_from_str(str) {
+    var kb[32];
+    var kn = 0;
+    var ki = 0;
+    while (load8(str + ki) != 0) {
+        var kc = load8(str + ki);
+        if (kc != 32 && kc != 95) {
+            if (kn >= 31) { return 0 - 1; }
+            if (kc >= 65 && kc <= 90) { kc = kc + 32; }
+            store8(&kb + kn, kc);
+            kn = kn + 1;
+        }
+        ki = ki + 1;
+    }
+    store8(&kb + kn, 0);
+    var s = &kb;
     if (streq(s, "length") == 1) { return CAT_LENGTH; }
     if (streq(s, "mass") == 1) { return CAT_MASS; }
     if (streq(s, "weight") == 1) { return CAT_MASS; }
@@ -422,7 +487,6 @@ fn category_from_str(s) {
     if (streq(s, "temp") == 1) { return CAT_TEMPERATURE; }
     if (streq(s, "time") == 1) { return CAT_TIME; }
     if (streq(s, "datasize") == 1) { return CAT_DATASIZE; }
-    if (streq(s, "data_size") == 1) { return CAT_DATASIZE; }
     if (streq(s, "data") == 1) { return CAT_DATASIZE; }
     if (streq(s, "speed") == 1) { return CAT_SPEED; }
     if (streq(s, "velocity") == 1) { return CAT_SPEED; }
@@ -437,7 +501,6 @@ fn category_from_str(s) {
     if (streq(s, "power") == 1) { return CAT_POWER; }
     if (streq(s, "wattage") == 1) { return CAT_POWER; }
     if (streq(s, "fueleconomy") == 1) { return CAT_FUELECONOMY; }
-    if (streq(s, "fuel_economy") == 1) { return CAT_FUELECONOMY; }
     if (streq(s, "fuel") == 1) { return CAT_FUELECONOMY; }
     if (streq(s, "mpg") == 1) { return CAT_FUELECONOMY; }
     if (streq(s, "density") == 1) { return CAT_DENSITY; }
@@ -452,7 +515,7 @@ fn category_from_str(s) {
 }
 
 # --- Unit struct ---
-# Unit { name (Str), symbol (Str), category (i64), to_base_factor (f64),
+# Unit { name (cstring), symbol (cstring), category (i64), to_base_factor (f64),
 #        to_base_offset (f64), to_base_inverse (i64 bool) }
 
 struct Unit { name; symbol; category; to_base_factor; to_base_offset; to_base_inverse; }
@@ -491,7 +554,7 @@ fn Unit_offset(self) { return load64(self + 32); }
 fn Unit_inverse(self) { return load64(self + 40); }
 
 # --- ConversionResult ---
-# { from_value (f64), from_unit (Str), to_value (f64), to_unit (Str) }
+# { from_value (f64), from_unit (cstring), to_value (f64), to_unit (cstring) }
 
 struct ConversionResult { from_value; from_unit; to_value; to_unit; }
 
@@ -511,7 +574,7 @@ fn ConversionResult_to_value(self) { return load64(self + 16); }
 fn ConversionResult_to_unit(self) { return load64(self + 24); }
 
 # --- Currency ---
-# { code (Str), name (Str), symbol (Str) }
+# { code (cstring), name (cstring), symbol (cstring) }
 
 struct Currency { code; name; symbol; }
 

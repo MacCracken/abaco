@@ -3,12 +3,17 @@
 `src/eval.cyr` stores the tokenized expression as a flat array, not a struct
 vector.
 
-- `ABACO_MAX_TOKENS = 512` — the per-expression token cap. `tok_alloc()` allocates
-  `ABACO_MAX_TOKENS * 16` bytes.
-- `tokenize()` and `implicit_mul()` **enforce** the cap, returning
-  `ABACO_TOK_OVERFLOW` (which both entry points map to `ABACO_ERR_PARSE`).
-  `implicit_mul` needs its own check because it can insert one `*` per token,
-  so its output can exceed the cap even when its input did not.
+- `ABACO_MAX_TOKENS = 1024` (512 through 2.3.x) — the per-expression token cap.
+  `tok_alloc()` allocates `ABACO_MAX_TOKENS * 16` bytes from the evaluator's
+  scratch arena (2.4.9; `alloc` outside an evaluation), which is rewound at the
+  start of every evaluation.
+- `tokenize()` and `implicit_mul()` **enforce** the cap. Both return a
+  `(count, ok)` tuple (since 2.4.1; before that an overflow came back as the
+  negative count `ABACO_TOK_OVERFLOW`). `ok == 0` — the cap was exceeded, a
+  literal was malformed, or (since 2.4.9) a byte was outside the grammar — maps
+  to `ABACO_ERR_PARSE`. `implicit_mul` needs its own check because it can
+  insert one `*` per token, so its output can exceed the cap even when its
+  input did not.
 
 > **Corrected 2026-08-13 (2.3.4).** The cap was declared and allocated against
 > but never checked: `tokenize` incremented its counter with no bound, so input
@@ -33,4 +38,5 @@ Consequences if you touch this:
   are not derived from a shared constant.
 - A NUMBER payload is raw f64 bits, never an integer — read it with the f64
   accessors, not as an `i64` magnitude.
-- 512 tokens is a hard cap per expression; the tokenizer does not grow past it.
+- `ABACO_MAX_TOKENS` is a hard cap per expression; the tokenizer does not grow
+  past it.

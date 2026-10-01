@@ -17,7 +17,7 @@
 ## Prerequisites
 
 - The Cyrius toolchain on `PATH` at the version pinned in `cyrius.cyml`
-  (`[package].cyrius`, currently `6.5.35`) — `which cyrius` should resolve
+  (`[package].cyrius`, the one place the pin lives) — `which cyrius` should resolve
 - Run `cyrius deps` to vendor the pinned stdlib into `lib/`
 
 No Cargo, no Rust, no Python — the entire toolchain is Cyrius.

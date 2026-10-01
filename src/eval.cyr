@@ -75,11 +75,33 @@ var ABACO_TOTIENT_MAX = 1000000000000;
 # and `0 - 9223372036854775808` would not parse. eval_pow needs it to recognise
 # the one magnitude that cannot be negated without overflowing.
 var ABACO_I64_MIN = (0 - 9223372036854775807) - 1;
-# i64 maximum — the ceiling the evaluator's lcm checks its product against.
-var ABACO_I64_MAX = 9223372036854775807;
 
 # Token array: each token is 16 bytes (type + value)
 fn tok_alloc() { return alloc(ABACO_MAX_TOKENS * 16); }
+fn _tok_alloc_a(a) { return _eval_alloc(a, ABACO_MAX_TOKENS * 16); }
+
+# Per-evaluation scratch — token arrays, identifier strings, argument buffers.
+# Through 2.4.8 every Evaluator_eval took them straight from the never-freeing
+# bump allocator: 16-33 KB per evaluation, 827 MB after 30,000, which a
+# calculator that previews on every keystroke reaches in an afternoon (2.4.9
+# audit). Each Evaluator now owns a growable arena that is rewound at the start
+# of every evaluation, so memory settles at the high-water mark of the largest
+# expression it has seen and stops growing. Nothing allocated here outlives the
+# evaluation: results are f64 values, and Evaluator_eval_value builds its Value
+# on the ordinary heap.
+#
+# The arena is passed down explicitly (`a`, 0 = plain alloc), never through a
+# global: the first cut parked it in one, and two Evaluators on two threads then
+# allocated from each other's arena and crashed (2.4.9 final review). Every
+# request is bounded (tokens 16 KB, arguments 256 B, identifiers
+# ABACO_MAX_IDENT), so none exceeds a chunk and the arena never chains an
+# oversize one per evaluation.
+enum EvalArena { ABACO_EVAL_ARENA_CHUNK = 65536; ABACO_MAX_IDENT = 4096; }
+
+fn _eval_alloc(a, size) {
+    if (a != 0) { return arena_alloc(a, size); }
+    return alloc(size);
+}
 fn tok_type(toks, i) { return load64(toks + i * 16); }
 fn tok_val(toks, i) { return load64(toks + i * 16 + 8); }
 fn tok_set(toks, i, typ, val) {
@@ -89,21 +111,36 @@ fn tok_set(toks, i, typ, val) {
 }
 
 # -- Evaluator state --
-# { variables_map, tokens, token_count, pos, error, depth }
-struct Evaluator { vars; toks; ntoks; pos; err; depth; }
+# { variables_map, tokens, token_count, pos, error, depth, arena }
+struct Evaluator { vars; toks; ntoks; pos; err; depth; arena; }
 
 # Build a fresh evaluator with empty variable map and no pending expression.
 # Call Evaluator_set_variable to install user vars, then Evaluator_eval.
 fn Evaluator_new() {
-    var e = alloc(48);
+    var e = alloc(56);
     store64(e, map_new());
     store64(e + 8, 0);
     store64(e + 16, 0);
     store64(e + 24, 0);
     store64(e + 32, ABACO_ERR_NONE);
     store64(e + 40, 0);
+    store64(e + 48, 0);   # arena, created on first evaluation
     return e;
 }
+
+# Start an evaluation: rewind this evaluator's arena (creating it on first
+# use) and return it.
+fn _eval_begin(e) {
+    var a = load64(e + 48);
+    if (a == 0) {
+        a = arena_new_growable(ABACO_EVAL_ARENA_CHUNK);
+        store64(e + 48, a);
+    }
+    arena_reset(a);
+    return a;
+}
+
+fn eval_arena(e) { return load64(e + 48); }
 
 fn eval_vars(e) { return load64(e); }
 fn eval_toks(e) { return load64(e + 8); }
@@ -120,9 +157,22 @@ fn eval_set_depth(e, d) { store64(e + 40, d); return 0; }
 fn eval_advance(e) { store64(e + 24, load64(e + 24) + 1); return 0; }
 
 # Bind `name` (cstring) to an f64 bit-pattern value. Later expressions that
-# reference this identifier resolve to `val`.
+# reference this identifier resolve to `val`. The name is copied: through 2.4.8
+# the map kept the caller's pointer, so reusing that buffer renamed or lost the
+# variable (2.4.9 audit).
 fn Evaluator_set_variable(e, name, val) {
-    map_set(load64(e), name, val);
+    # Rebinding updates the entry in place and keeps the copy made at the first
+    # binding; copying on every call leaked 8+ bytes per call in a plot loop.
+    var ep = _map_lookup(load64(e), name);
+    if (ep != 0) {
+        store64(ep + 8, val);
+        return 0;
+    }
+    var n = strlen(name);
+    var own = alloc(n + 1);
+    memcpy(own, name, n);
+    store8(own + n, 0);
+    map_set(load64(e), own, val);
     return 0;
 }
 
@@ -187,7 +237,12 @@ var _DD_E22 = 0;        # 10^22 — the largest power of ten f64 holds exactly
 var _DD_UP = 0;         # 2^256
 var _DD_DOWN = 0;       # 2^-256
 var _DD_THRESH = 0;     # ~10^200, the rescale trigger
-var _DD_P10 = 0;        # table of 10^0 .. 10^22, each EXACT in f64
+var _DD_P10 = 0;        # &_DD_P10_TAB once built: 10^0 .. 10^22, each EXACT
+# Static storage (a top-level `var x[N]` is N * 8 bytes). Through 2.4.8 the table
+# came from alloc() and its pointer was cached here, so a consumer that called
+# alloc_reset() left it dangling and every decimal literal parsed as +Inf with no
+# error (2.4.9 audit).
+var _DD_P10_TAB[23];
 var _DD_READY = 0;
 
 # f64 holds every integer below 2^53 exactly, and every power of ten up to
@@ -222,7 +277,7 @@ fn _dd_init() {
     _DD_THRESH = acc;
     # Exact powers of ten, built once. Rebuilding these per literal is what made
     # the 2.3.5 parser slow: every call re-ran the 10^22 chain from scratch.
-    _DD_P10 = alloc((ABACO_EXACT_P10_MAX + 1) * 8);
+    _DD_P10 = &_DD_P10_TAB;
     acc = f64_from(1);
     i = 0;
     while (i <= ABACO_EXACT_P10_MAX) {
@@ -390,10 +445,19 @@ fn _div_pow10(mant, k) {
 # This form is also more accurate for fractions: "3.14" is one correctly-rounded
 # 314/100 rather than an accumulation of inexact tenths, and it keeps whole
 # numbers bit-exact, which `eval_pow`'s integer fast path depends on.
+#
+# Strict since 2.4.9, as the Rust original was: a second '.' ENDS the literal
+# (so "1.2.3" is two numbers side by side, a parse error, not 1.23), and e/E
+# starts an exponent only when a digit follows, optionally after one sign — so
+# "2e" is 2 times the constant e, as "2pi" and "2 e" already were, where it used
+# to be 2, and "1e-pi" is 1*e - pi rather than pi. A literal with no digit at
+# all ("." or ".e5") returns end == start, which the tokenizer reports as
+# ABACO_ERR_PARSE; through 2.4.8 it was the number 0.
 fn parse_number(input, start, len): (f64, i64) {
     var i = start;
     var mant = 0;
     var mdigits = 0;
+    var any_digit = 0;
     var dec_exp = 0;
     var has_dot = 0;
     var seen_sig = 0;
@@ -405,6 +469,7 @@ fn parse_number(input, start, len): (f64, i64) {
         else {
             var c = load8(input + i);
             if (is_digit(c) == 1) {
+                any_digit = 1;
                 if (mdigits < ABACO_MANT_DIGITS) {
                     # Leading zeros carry no significance — skip them so
                     # "0.0000001" spends none of the mantissa's 18 digits.
@@ -429,20 +494,35 @@ fn parse_number(input, start, len): (f64, i64) {
                 i = i + 1;
             }
             elif (c == 46) {
-                has_dot = 1;
-                i = i + 1;
+                if (has_dot == 1) { pgo = 0; }
+                else {
+                    has_dot = 1;
+                    i = i + 1;
+                }
             }
             else { pgo = 0; }
         }
     }
 
-    # Scientific notation: e/E followed by optional +/- and digits
+    if (any_digit == 0) { return (f64_from(0), start); }
+
+    # Scientific notation: e/E, an optional +/-, then AT LEAST ONE digit. Without
+    # the digit the e/E is not part of the number at all.
     var sci = 0;
     if (i < len) {
         var c = load8(input + i);
         var is_exp = 0;
         if (c == 101) { is_exp = 1; }
         if (c == 69) { is_exp = 1; }
+        if (is_exp == 1) {
+            var di = i + 1;
+            if (di < len) {
+                var sc = load8(input + di);
+                if (sc == 43 || sc == 45) { di = di + 1; }
+            }
+            if (di >= len) { is_exp = 0; }
+            elif (is_digit(load8(input + di)) == 0) { is_exp = 0; }
+        }
         if (is_exp == 1) {
             i = i + 1;
             var exp_sign = 1;
@@ -536,7 +616,11 @@ fn parse_number(input, start, len): (f64, i64) {
 # the bump allocator handed out next (pre-2.4.1 that was the per-number scratch
 # cells, which silently changed results from ~343 terms on).
 # Returns (token_count, ok). `ok` is 0 when the input needed more than
-# ABACO_MAX_TOKENS tokens; callers map that to ABACO_ERR_PARSE.
+# ABACO_MAX_TOKENS tokens, held a malformed literal, or held a byte outside the
+# grammar; callers map all three to ABACO_ERR_PARSE. Through 2.4.8 an unknown
+# byte was silently skipped, so a Unicode minus, a superscript, brackets or a
+# stray symbol changed the answer with no error: "−5+3" (U+2212) was 8, "3² +
+# 4²" was 7, "[2+3]*2" was 8 (2.4.9 audit; the Rust original rejected them).
 #
 # Until 2.4.1 the overflow condition was smuggled back as a NEGATIVE count
 # (`ABACO_TOK_OVERFLOW = -1`), because there was no way to return "count AND
@@ -544,6 +628,12 @@ fn parse_number(input, start, len): (f64, i64) {
 # as a length. Cyrius 6.5.21 tuples made the honest shape expressible; abaco
 # cited this exact site in the proposal that asked for them.
 fn tokenize(input, toks): (i64, i64) {
+    var n, ok = _tokenize_a(0, input, toks);
+    return (n, ok);
+}
+
+# tokenize with its scratch drawn from arena `a` (0 = alloc).
+fn _tokenize_a(a, input, toks): (i64, i64) {
     var len = strlen(input);
     var i = 0;
     var nt = 0;
@@ -584,6 +674,7 @@ fn tokenize(input, toks): (i64, i64) {
         }
         elif (c == 46) {
             var dnum, dend = parse_number(input, i, len);
+            if (dend == i) { return (0, 0); }
             tok_set(toks, nt, TOK_NUMBER, dnum);
             nt = nt + 1;
             i = dend;
@@ -597,19 +688,21 @@ fn tokenize(input, toks): (i64, i64) {
                 else { i = i + 1; }
             }
             var ident_len = i - start;
-            var ident = alloc(ident_len + 1);
+            # No builtin name is longer than 9 bytes; a longer identifier is a
+            # variable at most, and past ABACO_MAX_IDENT it is refused so no
+            # single request outgrows an arena chunk.
+            if (ident_len > ABACO_MAX_IDENT) { return (0, 0); }
+            var ident = _eval_alloc(a, ident_len + 1);
             memcpy(ident, input + start, ident_len);
             store8(ident + ident_len, 0);
             tok_set(toks, nt, TOK_IDENT, ident);
             nt = nt + 1;
         }
-        else {
-            i = i + 1;
-        }
+        else { return (0, 0); }
     }
 
     # Insert implicit multiplication
-    var mt, mok = implicit_mul(toks, nt);
+    var mt, mok = _implicit_mul_a(a, toks, nt);
     if (mok == 0) { return (0, 0); }
     return (mt, 1);
 }
@@ -635,6 +728,11 @@ fn needs_star(toks, nt, i) {
 
 # Insert implicit * tokens in-place (shifts tokens right)
 fn implicit_mul(toks, nt): (i64, i64) {
+    var n, ok = _implicit_mul_a(0, toks, nt);
+    return (n, ok);
+}
+
+fn _implicit_mul_a(a, toks, nt): (i64, i64) {
     # Check if any insertion needed
     var need = 0;
     var i = 0;
@@ -648,7 +746,7 @@ fn implicit_mul(toks, nt): (i64, i64) {
     # outrun ABACO_MAX_TOKENS even when `nt` did not — this needs its own bound, not
     # the caller's. Overflowing here would both write past newtoks and make the
     # memcpy below copy an oversized run back over `toks`.
-    var newtoks = tok_alloc();
+    var newtoks = _tok_alloc_a(a);
     var ni = 0;
     i = 0;
     while (i < nt) {
@@ -676,8 +774,10 @@ fn implicit_mul(toks, nt): (i64, i64) {
 # Parser-recursion cap. `(((...)))` or `f(f(f(...)))` past this depth sets
 # ABACO_ERR_PARSE rather than recursing further and risking a native stack overflow
 # (SandboxJS GHSA-8pfc-jjgw-6g26, CPython #32758 / #95185 class).
-# 256 levels is ~64 KB of C stack frames at ~256 bytes/frame — well below
-# any platform's default limit while still comfortable for human input.
+# At the cap a parse uses roughly 130-160 KB of native stack on x86_64 (~500 B
+# per level) and ~90 KB on aarch64, as measured by the 2.4.9 audit (this said
+# ~64 KB). Far below the default 8 MB main and 2 MB Cyrius thread stacks; a
+# consumer evaluating on a smaller worker stack should give it 256 KB or more.
 var ABACO_MAX_DEPTH = 256;
 
 # Helper: check if current token matches type
@@ -768,14 +868,208 @@ fn parse_term(e) {
                     eval_set_err(e, ABACO_ERR_DIV_ZERO);
                     return left;
                 }
-                # Modulo: a - floor(a/b)*b
-                var quot = f64_floor(f64_div(left, right));
-                left = f64_sub(left, f64_mul(quot, right));
+                # Modulo, floored and exact (see _eval_mod).
+                left = _eval_mod(left, right);
             }
         }
         else { return left; }
     }
     return left;
+}
+
+# ---- Integer powers in double-double ----
+#
+# x^n by square-and-multiply on a (hi, lo) pair with ~106 bits of significand,
+# the binary exponent carried apart so nothing overflows or underflows mid-chain,
+# rounded ONCE at the end (Dekker 1971 for the pair arithmetic; Graillat 2009,
+# "Accurate floating-point product and exponentiation", for compensated
+# powering). Through 2.4.8 this ran in plain f64: each squaring roughly doubles
+# the relative error already carried, so the error grew like n/2 ulp —
+# 1.0000001^10000000 was 341,619 ulp off and 1.0000000001^1099511627776 2.7e9 —
+# and a negative exponent took 1/(x^|n|), which flushed representable subnormals
+# to 0 (10^(0-310), 2^(0-1074)) once x^|n| overflowed; 10^k disagreed with the
+# literal 1ek for 268 of k = 1..324 (2.4.9 audit). Results are correctly rounded
+# in the normal range; in the subnormal range the final scaling can add one more
+# rounding, so they are within 1 ulp there.
+
+# 2^k as an f64, exactly, for -1022 <= k <= 1023.
+fn _f64_pow2i(k) {
+    return (k + 1023) << 52;
+}
+
+# (m, e) with x = m * 2^e and 1 <= m < 2, for positive finite x (subnormals too).
+fn _frexp1(x): (f64, i64) {
+    var v = x;
+    var adj = 0;
+    if (((v >> 52) & 0x7FF) == 0) {
+        v = f64_mul(v, _f64_pow2i(64));
+        adj = 64;
+    }
+    var be = ((v >> 52) & 0x7FF) - 1023;
+    return ((v & 0x000F_FFFF_FFFF_FFFF) | 0x3FF0_0000_0000_0000, be - adj);
+}
+
+# Rescale (hi, lo) * 2^ex so that 1 <= hi < 2. hi is positive and within a factor
+# of 4 of that interval here, so the rescale is an exact power-of-two multiply.
+fn _dd_norm1(hi, lo, ex): (f64, f64, i64) {
+    var k = ((hi >> 52) & 0x7FF) - 1023;
+    if (k == 0) { return (hi, lo, ex); }
+    var sc = _f64_pow2i(0 - k);
+    return (f64_mul(hi, sc), f64_mul(lo, sc), ex + k);
+}
+
+# (ah, al) * (bh, bl), renormalised; al * bl is below the pair's precision.
+fn _dd_mul_dd(ah, al, bh, bl): (f64, f64) {
+    var p, e = _two_product(ah, bh);
+    e = f64_add(e, f64_add(f64_mul(ah, bl), f64_mul(al, bh)));
+    var s = f64_add(p, e);
+    return (s, f64_sub(e, f64_sub(s, p)));
+}
+
+# 1 / (hi, lo) as a pair: one Newton step on the f64 reciprocal. 1 - p is exact
+# because p = fl(q * hi) is within an ulp of 1.
+fn _dd_recip(hi, lo): (f64, f64) {
+    var q = f64_div(f64_from(1), hi);
+    var p, pe = _two_product(q, hi);
+    var r = f64_sub(f64_sub(f64_sub(f64_from(1), p), pe), f64_mul(q, lo));
+    var c = f64_mul(q, r);
+    var s = f64_add(q, c);
+    return (s, f64_sub(c, f64_sub(s, q)));
+}
+
+# x * 2^k for 1 <= x <= 2 and |k| up to ~1200: at most two exact power-of-two
+# factors, so a normal result is exact and a subnormal one rounds once more.
+fn _pow_scale(x, k) {
+    if (k > 1023) { return f64_mul(f64_mul(x, _f64_pow2i(1023)), _f64_pow2i(k - 1023)); }
+    if (k < (0 - 1022)) { return f64_mul(f64_mul(x, _f64_pow2i(0 - 1022)), _f64_pow2i(k + 1022)); }
+    return f64_mul(x, _f64_pow2i(k));
+}
+
+# x^n for finite x with x != 0, |x| != 1, and an integer n != 0.
+fn _pow_int_dd(x, n) {
+    # _two_product's split constant is set lazily by _dd_init. The evaluator
+    # always parses a literal first, but eval_pow is public, and called
+    # directly it ran with a zero split — plain f64 in disguise.
+    _dd_init();
+    var sign = 0;
+    if (((x >> 63) & 1) == 1) {
+        if ((n & 1) != 0) { sign = 0x8000_0000_0000_0000; }
+    }
+    var ax = f64_abs(x);
+    # Results certainly outside the f64 range are settled from the magnitude
+    # n * log2|x| before any exponent bookkeeping: |n| near 2^63 reaches here
+    # only for |x| within ~2^-52 of 1, and even there the product is past 1474.
+    # The margins are wide; everything in between runs the pair.
+    var mag = f64_mul(f64_from(n), f64_log2(ax));
+    if (f64_gt(mag, f64_from(1100)) == 1) { return 0x7FF0_0000_0000_0000 | sign; }
+    if (f64_lt(mag, f64_from(0 - 1100)) == 1) { return sign; }
+    var neg = 0;
+    var m = n;
+    if (m < 0) { neg = 1; m = 0 - m; }
+    var bh, be = _frexp1(ax);
+    var bl = f64_from(0);
+    var rh = f64_from(1);
+    var rl = f64_from(0);
+    var re = 0;
+    while (m > 0) {
+        if ((m & 1) == 1) {
+            var ph, pl = _dd_mul_dd(rh, rl, bh, bl);
+            var nh, nl, ne = _dd_norm1(ph, pl, re + be);
+            rh = nh;
+            rl = nl;
+            re = ne;
+        }
+        m = m >> 1;
+        if (m > 0) {
+            var sh, sl = _dd_mul_dd(bh, bl, bh, bl);
+            var qh, ql, qe = _dd_norm1(sh, sl, be + be);
+            bh = qh;
+            bl = ql;
+            be = qe;
+        }
+    }
+    if (neg == 1) {
+        var ih, il = _dd_recip(rh, rl);
+        var jh, jl, je = _dd_norm1(ih, il, 0 - re);
+        rh = jh;
+        rl = jl;
+        re = je;
+    }
+    return _pow_scale(f64_add(rh, rl), re) | sign;
+}
+
+# Ok(n) when x is an integer inside i64 — the domain of the evaluator's integer
+# functions; Err(0) for a fraction, NaN, +/-Inf or |x| >= 2^63. Through 2.4.8 a
+# fraction was truncated without a word: factorial(2.5) = 2, 3.9! = 6,
+# isprime(2.9) = 1, gcd(7.5, 5) = 1 (2.4.9 audit).
+fn _int_arg(x) {
+    var t, n = abaco_f64_to_i64(x);
+    if (is_ok(t) == 0) { return Err(0); }
+    if (f64_eq(x, f64_from(n)) == 0) { return Err(0); }
+    return Ok(n);
+}
+
+# log10(x). ln(x) / ln(10) carries three roundings, so through 2.4.8 it missed
+# exactly where calculator users look: log(1000) was 2.9999999999999996 (and
+# typed FLOAT, not the INTEGER 3), log(1e-3) -2.9999999999999996, 18 of the 43
+# powers 1e-20..1e22 wrong (2.4.9 audit). When x is exactly the double the
+# literal 1ek reads as — _pow_int_dd(10, k) is correctly rounded — the answer is
+# k. Elsewhere the quotient stays, within ~2 ulp.
+fn _eval_log10(x) {
+    var y = f64_div(f64_ln(x), f64_ln(f64_from(10)));
+    if (f64_gt(x, f64_from(0)) == 1 && f64_eq(f64_sub(x, x), f64_from(0)) == 1) {
+        var r = f64_round_half_away(y);
+        var kt, k = abaco_f64_to_i64(r);
+        if (is_ok(kt) == 1 && k >= (0 - 323) && k <= 308) {
+            var pk = f64_from(1);
+            if (k != 0) { pk = _pow_int_dd(f64_from(10), k); }
+            if (pk == x) { return r; }
+        }
+    }
+    return y;
+}
+
+# a mod b, floored (the result takes b's sign, as a - floor(a/b)*b would),
+# computed EXACTLY by binary long division: each step subtracts the largest
+# |b| * 2^k <= r, and that subtraction is exact (Sterbenz). Through 2.4.8 this
+# WAS a - floor(a/b)*b, whose quotient rounds once both operands pass 2^53 — and
+# a finite a % +/-Inf was NaN (2.4.9 audit). Here a % +/-Inf is a when a is 0
+# or shares b's sign, else b (the floored limit; Python agrees), and NaN or an
+# infinite a give NaN. b == 0 is the caller's ABACO_ERR_DIV_ZERO.
+fn _eval_mod(a, b) {
+    var zero = f64_from(0);
+    var signbit = 0x8000_0000_0000_0000;
+    if (f64_eq(a, a) == 0 || f64_eq(b, b) == 0) { return 0x7FF8_0000_0000_0000; }
+    if (f64_eq(f64_sub(a, a), zero) == 0) { return 0x7FF8_0000_0000_0000; }
+    var ab = f64_abs(b);
+    if (f64_eq(ab, 0x7FF0_0000_0000_0000) == 1) {
+        if (f64_eq(a, zero) == 1) { return a; }
+        if ((a & signbit) == (b & signbit)) { return a; }
+        return b;
+    }
+    var r = f64_abs(a);
+    var bm, bexp = _frexp1(ab);
+    while (f64_ge(r, ab) == 1) {
+        var rm, rexp = _frexp1(r);
+        var k = rexp - bexp;
+        if (f64_lt(rm, bm) == 1) { k = k - 1; }
+        # t = |b| * 2^k, scaled in steps of at most 2^1023: with a subnormal b,
+        # k reaches ~2097, and _f64_pow2i past 1023 overflows its exponent field
+        # (the first cut used two steps, so 1e300 % 5e-324 looped forever and
+        # 1.4e293 % 5e-324 gave -Inf — 2.4.9 final review). Every step is exact:
+        # t never exceeds r <= DBL_MAX.
+        var t = ab;
+        var kk = k;
+        while (kk > 1023) {
+            t = f64_mul(t, _f64_pow2i(1023));
+            kk = kk - 1023;
+        }
+        if (kk > 0) { t = f64_mul(t, _f64_pow2i(kk)); }
+        r = f64_sub(r, t);
+    }
+    if (f64_eq(r, zero) == 1) { return b & signbit; }
+    if ((a & signbit) != (b & signbit)) { r = f64_sub(ab, r); }
+    return r | (b & signbit);
 }
 
 # f64 power: a^b. Named `eval_pow` (not the stdlib `f64_pow` in lib/math.cyr)
@@ -888,6 +1182,10 @@ fn eval_pow(base, exp) {
     }
 
     if (is_int == 1) {
+        # Finite bases: the double-double chain above. +/-Inf and NaN keep plain
+        # square-and-multiply below, which is exact for them — (-Inf)^3 = -Inf
+        # and (-Inf)^(0-3) = -0 carry the sign through the multiplications.
+        if (f64_eq(f64_sub(base, base), zero) == 1) { return _pow_int_dd(base, exp_i); }
         var n = exp_i;
         var neg = 0;
         # (0 - i64_MIN) overflows back to i64_MIN, so peel off the magnitude.
@@ -1039,7 +1337,7 @@ fn parse_power(e) {
         eval_advance(e);
         # Checked, like every integer-domain argument in call_function: a bare
         # f64_to gives 0 for NaN on Cyrius 6.6.8+, so (sqrt(0-1))! answered 1.
-        var nt, n = abaco_f64_to_i64(base);
+        var nt, n = _int_arg(base);
         if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
         if (n > 170) {
             eval_set_err(e, ABACO_ERR_MATH);
@@ -1115,6 +1413,11 @@ fn parse_primary(e) {
         eval_set_depth(e, eval_depth(e) + 1);
         var val = parse_expr(e);
         eval_set_depth(e, eval_depth(e) - 1);
+        # First error wins. The inner parse stops at the failing operand, so the
+        # next token is usually an operator, and through 2.4.8 the ')' check
+        # below then overwrote UNKNOWN_VAR / DIV_ZERO / MATH with PARSE:
+        # "(x+1)*2" reported a syntax error for an unset x (2.4.9 audit).
+        if (eval_err(e) != ABACO_ERR_NONE) { return val; }
         if (eval_not_at(e, TOK_RPAREN) == 1) {
             eval_set_err(e, ABACO_ERR_PARSE);
             return val;
@@ -1133,12 +1436,15 @@ fn parse_primary(e) {
             # legitimate users of large-arity calls, and 32 is generous.
             # Without this cap an adversarial `mean(0,0,0,...)` with 10^5
             # commas would overflow the 32-slot buffer.
-            var args = alloc(32 * 8);
+            var args = _eval_alloc(eval_arena(e), 32 * 8);
             var nargs = 0;
             if (eval_not_at(e, TOK_RPAREN) == 1) {
                 eval_set_depth(e, eval_depth(e) + 1);
                 store64(args + nargs * 8, parse_expr(e));
                 eval_set_depth(e, eval_depth(e) - 1);
+                # An argument's error stands: stop here rather than parse the
+                # rest, overwrite it, and still run the function (2.4.9 audit).
+                if (eval_err(e) != ABACO_ERR_NONE) { return f64_from(0); }
                 nargs = nargs + 1;
                 while (eval_at(e, TOK_COMMA) == 1) {
                     eval_advance(e);
@@ -1149,6 +1455,7 @@ fn parse_primary(e) {
                     eval_set_depth(e, eval_depth(e) + 1);
                     store64(args + nargs * 8, parse_expr(e));
                     eval_set_depth(e, eval_depth(e) - 1);
+                    if (eval_err(e) != ABACO_ERR_NONE) { return f64_from(0); }
                     nargs = nargs + 1;
                 }
             }
@@ -1202,6 +1509,15 @@ fn call_function(e, name, args, nargs) {
             return f64_div(sum, f64_from(nargs));
         }
         if (streq(name, "median") == 1) {
+            # A NaN has no place in an order; through 2.4.8 the bubble sort put
+            # it wherever the comparisons left it, so the answer depended on the
+            # argument order (2.4.9 audit).
+            var ni = 0;
+            while (ni < nargs) {
+                var nv = load64(args + ni * 8);
+                if (f64_eq(nv, nv) == 0) { return nv; }
+                ni = ni + 1;
+            }
             var mi = 0;
             while (mi < nargs - 1) {
                 var mj = 0;
@@ -1248,8 +1564,8 @@ fn call_function(e, name, args, nargs) {
         if (streq(name, "sin") == 1) { return f64_sin(a); }
         if (streq(name, "cos") == 1) { return f64_cos(a); }
         if (streq(name, "tan") == 1) { return f64_div(f64_sin(a), f64_cos(a)); }
-        if (streq(name, "log") == 1) { return f64_div(f64_ln(a), f64_ln(f64_from(10))); }
-        if (streq(name, "log10") == 1) { return f64_div(f64_ln(a), f64_ln(f64_from(10))); }
+        if (streq(name, "log") == 1) { return _eval_log10(a); }
+        if (streq(name, "log10") == 1) { return _eval_log10(a); }
         if (streq(name, "ln") == 1) { return f64_ln(a); }
         if (streq(name, "log2") == 1) { return f64_log2(a); }
         if (streq(name, "abs") == 1) { return f64_abs(a); }
@@ -1270,8 +1586,11 @@ fn call_function(e, name, args, nargs) {
         if (streq(name, "atanh") == 1) { return f64_atanh(a); }
         if (streq(name, "trunc") == 1) { return f64_trunc(a); }
         if (streq(name, "fract") == 1) { return f64_fract(a); }
-        if (streq(name, "sign") == 1) { return f64_sign(a); }
-        if (streq(name, "sgn") == 1) { return f64_sign(a); }
+        # NaN stays NaN; the stdlib's f64_sign answered 0 for it (2.4.9 audit).
+        if (streq(name, "sign") == 1 || streq(name, "sgn") == 1) {
+            if (f64_eq(a, a) == 0) { return a; }
+            return f64_sign(a);
+        }
         if (streq(name, "deg") == 1) {
             # radians to degrees: a * 180/pi
             return f64_mul(a, f64_div(f64_from(180), CONST_PI));
@@ -1280,15 +1599,16 @@ fn call_function(e, name, args, nargs) {
             # degrees to radians: a * pi/180
             return f64_mul(a, f64_div(CONST_PI, f64_from(180)));
         }
-        # Integer-domain functions. Every argument goes through
-        # abaco_f64_to_i64. Through 2.4.6 these tested a bare f64_to result for
+        # Integer-domain functions. Every argument goes through _int_arg
+        # (abaco_f64_to_i64 plus an integrality check — a fraction is out of the
+        # domain, not something to truncate; 2.4.9). Through 2.4.6 these tested a bare f64_to result for
         # `n < 0`, which caught NaN, +/-Inf and |a| >= 2^63 only because x86
         # answered i64_MIN for all of them before Cyrius 6.6.8. Under 6.6.8's
         # saturation NaN arrived as 0 (factorial(NaN) = 1, nextprime(NaN) = 2)
         # and 1e300 as i64_MAX, which next_prime overflowed into a search that
         # never returned. A refused argument gets exactly what that i64_MIN did.
         if (streq(name, "factorial") == 1) {
-            var nt, n = abaco_f64_to_i64(a);
+            var nt, n = _int_arg(a);
             if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             if (n > 170) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             var result = f64_from(1);
@@ -1297,17 +1617,20 @@ fn call_function(e, name, args, nargs) {
             return result;
         }
         if (streq(name, "isprime") == 1) {
-            var nt, n = abaco_f64_to_i64(a);
+            var nt, n = _int_arg(a);
             if (is_ok(nt) == 0 || n < 0) { return f64_from(0); }
             return f64_from(is_prime(n));
         }
         if (streq(name, "nextprime") == 1) {
-            var nt, n = abaco_f64_to_i64(a);
+            var nt, n = _int_arg(a);
             if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
-            return f64_from(next_prime(n));
+            # 0 means i64 has no larger prime (n >= 2^63 - 25).
+            var np = next_prime(n);
+            if (np == 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
+            return f64_from(np);
         }
         if (streq(name, "prevprime") == 1) {
-            var nt, n = abaco_f64_to_i64(a);
+            var nt, n = _int_arg(a);
             if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             var rt, rv = prev_prime(n);
             if (is_ok(rt) == 1) { return f64_from(rv); }
@@ -1315,7 +1638,7 @@ fn call_function(e, name, args, nargs) {
             return f64_from(0);
         }
         if (streq(name, "totient") == 1) {
-            var nt, n = abaco_f64_to_i64(a);
+            var nt, n = _int_arg(a);
             if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             # totient() trial-divides to sqrt(n), so an unbounded n is an
             # attacker-controlled O(sqrt(n)) loop. Cap the domain the way
@@ -1329,7 +1652,7 @@ fn call_function(e, name, args, nargs) {
         if (streq(name, "fibonacci") == 1) { is_fib = 1; }
         if (streq(name, "fib") == 1) { is_fib = 1; }
         if (is_fib == 1) {
-            var nt, n = abaco_f64_to_i64(a);
+            var nt, n = _int_arg(a);
             if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             if (n > 92) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
             return f64_from(fibonacci(n));
@@ -1340,6 +1663,16 @@ fn call_function(e, name, args, nargs) {
 
     # 2-arg functions
     if (nargs == 2) {
+        # NaN in either argument is NaN out. The stdlib min/max drop or keep a
+        # NaN depending on argument order, and atan2 turned NaN into -pi/2
+        # (2.4.9 audit); the signed-zero and (Inf, Inf) rows of C99 atan2 are
+        # ganita's (roadmap).
+        if (f64_eq(a, a) == 0) {
+            if (streq(name, "min") == 1 || streq(name, "max") == 1 || streq(name, "atan2") == 1) { return a; }
+        }
+        if (f64_eq(b, b) == 0) {
+            if (streq(name, "min") == 1 || streq(name, "max") == 1 || streq(name, "atan2") == 1) { return b; }
+        }
         if (streq(name, "min") == 1) { return f64_min(a, b); }
         if (streq(name, "max") == 1) { return f64_max(a, b); }
         if (streq(name, "pow") == 1) { return eval_pow(a, b); }
@@ -1365,8 +1698,8 @@ fn call_function(e, name, args, nargs) {
         # x86 through 6.6.7.) Every other lcm result is unchanged — the stdlib
         # returns |lcm| whatever the operand signs.
         if (streq(name, "gcd") == 1) {
-            var gat, ga = abaco_f64_to_i64(f64_abs(a));
-            var gbt, gb = abaco_f64_to_i64(f64_abs(b));
+            var gat, ga = _int_arg(f64_abs(a));
+            var gbt, gb = _int_arg(f64_abs(b));
             if (is_ok(gat) == 0 || is_ok(gbt) == 0) {
                 eval_set_err(e, ABACO_ERR_MATH);
                 return f64_from(0);
@@ -1374,8 +1707,8 @@ fn call_function(e, name, args, nargs) {
             return f64_from(gcd_int(ga, gb));
         }
         if (streq(name, "lcm") == 1) {
-            var lat, la = abaco_f64_to_i64(f64_abs(a));
-            var lbt, lb = abaco_f64_to_i64(f64_abs(b));
+            var lat, la = _int_arg(f64_abs(a));
+            var lbt, lb = _int_arg(f64_abs(b));
             if (is_ok(lat) == 0 || is_ok(lbt) == 0) {
                 eval_set_err(e, ABACO_ERR_MATH);
                 return f64_from(0);
@@ -1396,22 +1729,19 @@ fn call_function(e, name, args, nargs) {
         if (streq(name, "binomial") == 1) { is_binom = 1; }
         if (streq(name, "choose") == 1) { is_binom = 1; }
         if (is_binom == 1) {
-            var bnt, bn = abaco_f64_to_i64(a);
-            var bkt, bk = abaco_f64_to_i64(b);
+            var bnt, bn = _int_arg(a);
+            var bkt, bk = _int_arg(b);
             if (is_ok(bnt) == 0 || is_ok(bkt) == 0) {
                 eval_set_err(e, ABACO_ERR_MATH);
                 return f64_from(0);
             }
-            # ganita's binomial answers -1 for a negative n or k and for a result
-            # it cannot hold, and through 2.4.7 that -1 came back as the answer:
-            # binomial(-1, 2) = -1 with no error. Every valid C(n, k) is >= 0
-            # (k > n is 0), so a negative result is refused.
-            # ⚠ ganita multiplies before it divides — its last step holds
-            # C(n, k) * k — so it also refuses results above i64_MAX / k that
-            # would fit: C(62, 31), ~4.65e17, is the first central case. That
-            # limit is ganita's; an error is the honest answer until it lifts.
-            var bv = binomial(bn, bk);
-            if (bv < 0) {
+            # abaco_binomial (src/ntheory.cyr), not ganita's binomial: ganita
+            # answered -1 for a negative argument or a result it could not hold
+            # (passed through as the answer until 2.4.8), and multiplies before
+            # it divides, so it refused results above i64_MAX / k that fit —
+            # C(62, 31) was ABACO_ERR_MATH at 2.4.8. Exact iff the result fits.
+            var bt, bv = abaco_binomial(bn, bk);
+            if (is_ok(bt) == 0) {
                 eval_set_err(e, ABACO_ERR_MATH);
                 return f64_from(0);
             }
@@ -1432,12 +1762,18 @@ fn call_function(e, name, args, nargs) {
 # Evaluate expression string, return f64 bits
 # Sets eval_err on the evaluator if error
 fn Evaluator_eval(e, expr) {
-    var toks = tok_alloc();
+    _eval_begin(e);
+    return _eval_run(e, expr);
+}
+
+fn _eval_run(e, expr) {
+    var a = eval_arena(e);
+    var toks = _tok_alloc_a(a);
     eval_set_toks(e, toks);
     eval_set_pos(e, 0);
     eval_set_err(e, ABACO_ERR_NONE);
     eval_set_depth(e, 0);
-    var nt, tok_ok = tokenize(expr, toks);
+    var nt, tok_ok = _tokenize_a(a, expr, toks);
     if (tok_ok == 0) {
         eval_set_ntoks(e, 0);
         eval_set_err(e, ABACO_ERR_PARSE);
@@ -1452,14 +1788,49 @@ fn Evaluator_eval(e, expr) {
     return result;
 }
 
-# Evaluate partial/incomplete expression for live-as-you-type feedback.
-# Strips trailing operators until a valid parse is found.
+# 1 for a token an expression can end on: an operand, or a postfix operator
+# ('%' as percent, '!').
+fn _tok_can_end(t) {
+    if (t == TOK_NUMBER) { return 1; }
+    if (t == TOK_IDENT) { return 1; }
+    if (t == TOK_RPAREN) { return 1; }
+    if (t == TOK_PERCENT) { return 1; }
+    if (t == TOK_BANG) { return 1; }
+    return 0;
+}
+
+# Evaluate a partial/incomplete expression for live-as-you-type feedback.
+#
+# The whole expression first, and it must use every token. Only when that runs
+# out of input (ABACO_ERR_PARSE / ABACO_ERR_INVALID) is the input treated as
+# unfinished: the trailing run of tokens that cannot end an expression (binary
+# operators, '(' and ',', and the name before a dropped '(') is dropped, any
+# parenthesis still open is closed, and the result is parsed again — "2+3*"
+# previews 5, "2*(3+4" previews 14, "2+sqrt(" 2. If closing a call still being
+# typed produces an unknown-name error ("2+max(7" -> max(7), an arity miss),
+# the prefix before that call is tried instead, at most ABACO_PARTIAL_TRIES
+# times. Any other semantic error (DIV_ZERO, MATH, an unknown name with no call
+# left open) is the answer, not a sign the input is unfinished, and is returned
+# as it is.
+#
+# Through 2.4.8 the fallback re-parsed EVERY shorter prefix: O(tokens^2) work, so
+# a pasted 2.7 KB input with a hundred capped totient() calls took 92 s here
+# against 0.18 s in Evaluator_eval; and since it dropped any trailing token, a
+# complete expression that failed was cut back until something succeeded —
+# "1/0" previewed 1, "2+x" 2, "5*171!" 855, all with ABACO_ERR_NONE (2.4.9 audit).
 fn Evaluator_eval_partial(e, expr) {
-    var toks = tok_alloc();
+    _eval_begin(e);
+    return _eval_partial_run(e, expr);
+}
+
+fn _eval_partial_run(e, expr) {
+    var a = eval_arena(e);
+    var toks = _tok_alloc_a(a);
     eval_set_toks(e, toks);
+    eval_set_pos(e, 0);
     eval_set_err(e, ABACO_ERR_NONE);
     eval_set_depth(e, 0);
-    var nt, tok_ok = tokenize(expr, toks);
+    var nt, tok_ok = _tokenize_a(a, expr, toks);
     if (tok_ok == 0) {
         eval_set_ntoks(e, 0);
         eval_set_err(e, ABACO_ERR_PARSE);
@@ -1467,29 +1838,97 @@ fn Evaluator_eval_partial(e, expr) {
     }
     if (nt == 0) { eval_set_err(e, ABACO_ERR_INVALID); return f64_from(0); }
 
-    # Try full expression first
     eval_set_ntoks(e, nt);
-    eval_set_pos(e, 0);
     var result = parse_expr(e);
-    if (eval_err(e) == ABACO_ERR_NONE) { return result; }
+    var err = eval_err(e);
+    if (err == ABACO_ERR_NONE) {
+        if (eval_pos(e) != nt) { eval_set_err(e, ABACO_ERR_PARSE); }
+        return result;
+    }
+    if (err != ABACO_ERR_PARSE && err != ABACO_ERR_INVALID) { return result; }
 
-    # Progressively strip trailing tokens
-    var try_nt = nt - 1;
-    while (try_nt > 0) {
-        eval_set_ntoks(e, try_nt);
+    var k = _partial_cut(toks, nt);
+    var tries = 0;
+    while (tries < ABACO_PARTIAL_TRIES) {
+        if (k == 0) { eval_set_err(e, ABACO_ERR_INVALID); return f64_from(0); }
+        var open = 0;
+        var i = 0;
+        while (i < k) {
+            var t = tok_type(toks, i);
+            if (t == TOK_LPAREN) { open = open + 1; }
+            if (t == TOK_RPAREN) { open = open - 1; }
+            i = i + 1;
+        }
+        if (open < 0 || k + open > ABACO_MAX_TOKENS) { eval_set_err(e, ABACO_ERR_PARSE); return f64_from(0); }
+        var call_at = _partial_open_call(toks, k);
+        i = 0;
+        while (i < open) {
+            tok_set(toks, k + i, TOK_RPAREN, 0);
+            i = i + 1;
+        }
+        eval_set_ntoks(e, k + open);
         eval_set_pos(e, 0);
         eval_set_err(e, ABACO_ERR_NONE);
         eval_set_depth(e, 0);
         result = parse_expr(e);
-        if (eval_err(e) == ABACO_ERR_NONE) {
-            if (eval_pos(e) == try_nt) {
-                return result;
-            }
+        var e2 = eval_err(e);
+        if (e2 == ABACO_ERR_NONE && eval_pos(e) != k + open) {
+            eval_set_err(e, ABACO_ERR_PARSE);
+            return result;
         }
-        try_nt = try_nt - 1;
+        # Closing a call the user is still typing can invent an error they
+        # never typed: "2+max(7" closed is max(7), one argument short. Back off
+        # to before that call and try the shorter prefix ("2"). With no call
+        # left open, an unknown name is real and stands.
+        if ((e2 == ABACO_ERR_UNKNOWN_FN || e2 == ABACO_ERR_UNKNOWN_VAR) && call_at >= 0) {
+            k = _partial_cut(toks, call_at);
+            tries = tries + 1;
+        } else {
+            return result;
+        }
     }
-    eval_set_err(e, ABACO_ERR_INVALID);
+    eval_set_err(e, err);
     return f64_from(0);
+}
+
+# How many prefixes eval_partial tries after the full parse.
+enum EvalPartial { ABACO_PARTIAL_TRIES = 4; }
+
+# Length of the prefix of toks[0..n) that ends on a token an expression can
+# end on: the trailing operators, '(' and ',' are dropped, and a '(' dropped
+# there takes the name before it with it — "2+sqrt(" previews 2, where keeping
+# the bare `sqrt` would read as an unknown variable.
+fn _partial_cut(toks, n) {
+    var k = n;
+    var go = 1;
+    while (go == 1 && k > 0) {
+        var t = tok_type(toks, k - 1);
+        if (_tok_can_end(t) == 1) {
+            go = 0;
+        } else {
+            k = k - 1;
+            if (t == TOK_LPAREN && k > 0 && tok_type(toks, k - 1) == TOK_IDENT) { k = k - 1; }
+        }
+    }
+    return k;
+}
+
+# Index of the name of the innermost call still open in toks[0..k), or -1. A
+# name followed by '(' is always a call here: implicit multiplication never
+# joins an identifier to a following parenthesis.
+fn _partial_open_call(toks, k) {
+    var depth = 0;
+    var i = k - 1;
+    while (i >= 0) {
+        var t = tok_type(toks, i);
+        if (t == TOK_RPAREN) { depth = depth + 1; }
+        elif (t == TOK_LPAREN) {
+            if (depth > 0) { depth = depth - 1; }
+            elif (i > 0 && tok_type(toks, i - 1) == TOK_IDENT) { return i - 1; }
+        }
+        i = i - 1;
+    }
+    return 0 - 1;
 }
 
 # Evaluate and return as Value (Integer if whole, Float otherwise)

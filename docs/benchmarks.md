@@ -32,11 +32,29 @@ no regression held" evidence for the P(-1) hardening pass.
 (Times are whole-microsecond-quantized at the small end by the bench harness's
 µs rounding; sub-µs f64 ops are reported in ns.)
 
+The `binomial` series ends at 2.4.8: it measured ganita's `binomial`. From 2.4.9
+the evaluator uses `abaco_binomial` (exact whenever the result fits), measured
+under its own row name `abaco_binomial` (~128 ns against ganita's ~120 ns at
+C(60, 30)) so the trail does not splice two functions into one line. Likewise
+the evaluator's `sqrt(16)` row is `eval_sqrt` from 2.4.9 (it collided with the
+DSP `sqrt` row through 2.4.8).
+
+## 2.4.9 against 2.4.8
+
+Interleaved A/B, geomean ×0.94 over 78 rows. The evaluator rows fell 25-55%
+(no per-evaluation allocation). The correctness fixes cost a few ns where they
+touch hot paths (`round`, `amplitude_to_db`, `time_constant`, `factor_small`,
+the tokenizer). The DCE-built A/B also showed primality ~20% faster, but the
+non-DCE trail does not, so that is layout, not a win. Details: CHANGELOG
+[2.4.9] "Benchmarks".
+
 ## Running
 
 ```bash
 ./scripts/bench-history.sh         # appends a CSV row, rewrites bench-latest.md
 ```
 
-CI runs the `.bcyr` suite non-fatally (numbers vary by runner); the CSV trail is
-the regression record. Bench files: `benches/{bench,bench_eval,bench_units}.bcyr`.
+CI builds every bench fatally (a bench that no longer compiles fails the gate),
+runs the timings non-fatally (numbers vary by runner) and fails on a duplicate
+row name; the CSV trail is the regression record. Rows from an uncommitted tree
+are stamped `<hash>-dirty`. Bench files: `benches/{bench,bench_eval,bench_units}.bcyr`.

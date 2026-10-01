@@ -184,6 +184,74 @@ fn test_depth_boundary() {
     store8(expr + depth * 2 + 1, 0);
     Evaluator_eval(ev, expr);
     assert(eval_err(ev) != ABACO_ERR_NONE, "depth 512 rejected");
+
+    # The 512 row above is 1025 tokens, so the TOKEN cap rejects it before the
+    # parser runs; it never reached the depth guard. These stay under 1024
+    # tokens and reach parse_expr (2.4.9 audit).
+    ev = Evaluator_new();
+    Evaluator_eval(ev, nested("(", 255));
+    assert_eq(eval_err(ev), ABACO_ERR_NONE, "255-deep parens accepted");
+    ev = Evaluator_new();
+    Evaluator_eval(ev, nested("(", 256));
+    assert_eq(eval_err(ev), ABACO_ERR_PARSE, "256-deep parens hit ABACO_MAX_DEPTH");
+    assert(eval_ntoks(ev) > 0 && eval_ntoks(ev) < ABACO_MAX_TOKENS, "256-deep: tokenized, under the token cap");
+    ev = Evaluator_new();
+    Evaluator_eval(ev, nested("(", 511));
+    assert_eq(eval_err(ev), ABACO_ERR_PARSE, "511-deep parens (1023 tokens) hit the depth cap");
+    ev = Evaluator_new();
+    Evaluator_eval(ev, nested("abs(", 300));
+    assert_eq(eval_err(ev), ABACO_ERR_PARSE, "300-deep nested calls hit the depth cap");
+    assert(eval_ntoks(ev) < ABACO_MAX_TOKENS, "nested calls: under the token cap");
+    return 0;
+}
+
+# `depth` copies of `open`, the digit 1, then `depth` ')'.
+fn nested(open, depth) {
+    var ol = strlen(open);
+    var buf = alloc(depth * (ol + 1) + 2);
+    var p = 0;
+    var i = 0;
+    while (i < depth) { memcpy(buf + p, open, ol); p = p + ol; i = i + 1; }
+    store8(buf + p, 49);
+    p = p + 1;
+    i = 0;
+    while (i < depth) { store8(buf + p, 41); p = p + 1; i = i + 1; }
+    store8(buf + p, 0);
+    return buf;
+}
+
+# Builtins with no value assertion through 2.4.8, or only at points where a
+# wrong implementation agrees (floor/ceil only at 3, exp only at 0), and the
+# constants, which test_constants compared with the very globals the
+# evaluator returns (2.4.9 audit).
+fn test_dispatch_values() {
+    assert_eq(ev("median(1, 2, 3, 4)"), f64_div(f64_from(5), f64_from(2)), "median of an even count");
+    assert_eq(ev("stddev(2, 4, 4, 4, 5, 5, 7, 9)"), f64_from(2), "stddev is the population form");
+    assert_eq(ev("stdev(2, 4, 4, 4, 5, 5, 7, 9)"), f64_from(2), "stdev alias");
+    ev_near("deg(pi)", f64_from(180), 1, "deg(pi) = 180");
+    ev_near("rad(180)", 0x400921FB54442D18, 1, "rad(180) = pi");
+    ev_near("atan(1)", 0x3FE921FB54442D18, 1, "atan(1) = pi/4");
+    assert_eq(ev("sign(0 - 3)"), f64_from(0 - 1), "sign(-3) = -1");
+    assert_eq(ev("sgn(4)"), f64_from(1), "sgn(4) = 1");
+    assert_eq(ev("trunc(0 - 3.7)"), f64_from(0 - 3), "trunc(-3.7) = -3");
+    assert_eq(ev("fract(3.75)"), f64_div(f64_from(3), f64_from(4)), "fract(3.75) = 0.75");
+    assert_eq(ev("floor(0 - 3.2)"), f64_from(0 - 4), "floor(-3.2) = -4");
+    assert_eq(ev("ceil(3.2)"), f64_from(4), "ceil(3.2) = 4");
+    # exp is within 1 ulp (lib/math.cyr), not bit-identical across targets:
+    # x86 gives e exactly, the aarch64 polyfill e + 1 ulp.
+    var ex = ev("exp(1)");
+    assert(ex >= 0x4005BF0A8B145768 && ex <= 0x4005BF0A8B14576A, "exp(1) = e within 1 ulp");
+    assert_eq(ev("e"), 0x4005BF0A8B145769, "e by literal bits");
+    assert_eq(ev("pi"), 0x400921FB54442D18, "pi by literal bits");
+    assert_eq(ev("tau"), 0x401921FB54442D18, "tau by literal bits");
+    # 170! is the largest finite factorial. The product accumulates rounding:
+    # 4 ulp below the correctly rounded 0x7FA4AB7864418639 (roadmap: factorial
+    # ulp). Pinned within 8 ulp, so a cap or loop change still shows.
+    var f170 = ev("170!");
+    assert(f170 >= 0x7FA4AB7864418631 && f170 <= 0x7FA4AB7864418641, "170! within 8 ulp");
+    ev_err_is("171!", ABACO_ERR_MATH, "171! is past the cap");
+    assert_eq(ev("fib(92)"), f64_from(7540113804746346429), "fib(92)");
+    ev_err_is("fib(93)", ABACO_ERR_MATH, "fib(93) is past i64");
     return 0;
 }
 
@@ -873,7 +941,10 @@ fn test_pow_c99_nonfinite_table() {
     assert_eq(Evaluator_eval(e, "(0-(1e200*1e200))^(0-3)"), nzero, "(-Inf)^-3 = -0, odd");
     assert_eq(Evaluator_eval(e, "(0-(1e200*1e200))^(0-4)"), 0, "(-Inf)^-4 = +0, even");
     assert_eq(Evaluator_eval(e, "(1e200*1e200)^(0-3)"), 0, "(+Inf)^-3 = +0");
-    ev_int("2^0.5*2^0.5", 2, "finite non-integer path still computes 2^0.5");
+    # Within a tolerance, not truncated: exp2/log2 are within 1 ulp but not
+    # bit-identical across targets, and on aarch64 the product is
+    # 1.9999999999999996, which f64_to truncated to 1 (2.4.9 audit).
+    ev_near("2^0.5*2^0.5", f64_from(2), 1, "finite non-integer path still computes 2^0.5");
     return 0;
 }
 
@@ -1283,17 +1354,13 @@ fn test_gcd_lcm_binomial_domain() {
 # ganita's binomial answers -1 for a negative argument and for any result it
 # cannot hold, and the evaluator passed that -1 through as the answer; the
 # stdlib lcm multiplies with no overflow check, so a result past i64 wrapped.
-# Both answered with eval_err = NONE through 2.4.7 (CHANGELOG 2.4.8).
+# Both answered with eval_err = NONE through 2.4.7 (CHANGELOG 2.4.8). From 2.4.9
+# the evaluator uses abaco_binomial, exact for every C(n, k) that fits.
 fn test_binomial_lcm_overflow() {
     ev_math_err("binomial(0-1, 2)", "binomial(-1, 2) is a math error (was -1)");
     ev_math_err("binomial(2, 0-1)", "binomial(2, -1) is a math error (was -1)");
     ev_math_err("binomial(100, 50)", "binomial(100, 50), ~1e29, is a math error (was -1)");
     ev_math_err("choose(67, 33)", "choose(67, 33), ~1.4e19, is a math error (was -1)");
-    # ⚠ A KNOWN LIMIT, pinned so it cannot change unnoticed: C(62, 31), ~4.65e17,
-    # fits in i64, but ganita's running product (C(n, k) * k) does not, so ganita
-    # refuses it. When ganita divides before it multiplies, this row fails —
-    # flip it to the value then.
-    ev_math_err("binomial(62, 31)", "binomial(62, 31) refused by ganita's product (was -1)");
     ev_math_err("lcm(4611686018427387904, 3)", "lcm(2^62, 3) is a math error (was 2^62)");
     ev_math_err("lcm(3037000500, 3037000501)", "lcm just past i64_MAX is a math error (wrapped)");
     # Over-reach guards: every result ganita and the stdlib can hold comes back.
@@ -1304,6 +1371,12 @@ fn test_binomial_lcm_overflow() {
     var e = Evaluator_new();
     assert_eq(Evaluator_eval(e, "binomial(61, 30)"), f64_from(232714176627630544),
       "binomial(61, 30), the largest central C(n, k) ganita holds");
+    # Past ganita's limit: these fit in i64 but its running product (C(n, k) * k)
+    # did not, so 2.4.8 answered ABACO_ERR_MATH and 2.4.7 -1 (CHANGELOG 2.4.9).
+    assert_eq(Evaluator_eval(e, "binomial(62, 31)"), f64_from(465428353255261088),
+      "binomial(62, 31) (was ABACO_ERR_MATH, then -1)");
+    assert_eq(Evaluator_eval(e, "choose(66, 33)"), f64_from(7219428434016265740),
+      "choose(66, 33), the largest central C(n, k) in i64 (was ABACO_ERR_MATH)");
     assert_eq(Evaluator_eval(e, "lcm(3037000498, 3037000499)"), f64_from(9223372027889248502),
       "lcm just under i64_MAX still comes back");
     assert_eq(eval_err(e), ABACO_ERR_NONE, "neither edge guard sets an error");
@@ -1347,6 +1420,287 @@ fn test_unary_minus_zero() {
     return 0;
 }
 
+# ==== 2.4.9 audit ==========================================================
+
+# Evaluate on a fresh evaluator; assert the error code.
+fn ev_err_is(expr, code, name) {
+    var e = Evaluator_new();
+    Evaluator_eval(e, expr);
+    assert_eq(eval_err(e), code, name);
+    return 0;
+}
+
+# A cstring from raw bytes, for the UTF-8 rows (no non-ASCII in this source).
+fn bytes3(a, b, c, rest) {
+    var n = strlen(rest);
+    var s = alloc(n + 4);
+    store8(s, a);
+    store8(s + 1, b);
+    store8(s + 2, c);
+    memcpy(s + 3, rest, n);
+    store8(s + 3 + n, 0);
+    return s;
+}
+
+# Through 2.4.8 the tokenizer skipped every byte it did not know and the
+# literal scanner took malformed numbers, so these answered with no error.
+fn test_input_validation() {
+    ev_err_is("2 & 3", ABACO_ERR_PARSE, "2 & 3 is a parse error");
+    ev_err_is("2&+3", ABACO_ERR_PARSE, "2&+3 is a parse error (was 5)");
+    ev_err_is("[2+3]*2", ABACO_ERR_PARSE, "[2+3]*2 is a parse error (was 8)");
+    ev_err_is("sqrt(4)@", ABACO_ERR_PARSE, "a trailing @ is a parse error (was 2)");
+    ev_err_is(bytes3(226, 136, 146, "5+3"), ABACO_ERR_PARSE, "U+2212 minus is a parse error (was 8)");
+    ev_err_is(bytes3(51, 194, 178, " + 4"), ABACO_ERR_PARSE, "a superscript 2 is a parse error (was 7)");
+    ev_err_is("1.2.3", ABACO_ERR_PARSE, "1.2.3 is a parse error (was 1.23)");
+    ev_err_is("192.168.1.1", ABACO_ERR_PARSE, "an IP address is a parse error (was 192.16811)");
+    ev_err_is("1..2", ABACO_ERR_PARSE, "1..2 is a parse error (was 1.2)");
+    ev_err_is(".", ABACO_ERR_PARSE, "a lone dot is a parse error (was 0)");
+    ev_err_is(".e5", ABACO_ERR_PARSE, ".e5 is a parse error (was 0)");
+    # e/E starts an exponent only with a digit after it, so "2e" is 2 * e like
+    # "2pi" and "2 e" (2.4.8: "2e" was 2, "1e-pi" was pi).
+    var e = Evaluator_new();
+    assert_eq(Evaluator_eval(e, "2e"), 0x4015BF0A8B145769, "2e = 2 * e (was 2)");
+    assert_eq(Evaluator_eval(e, "1e-pi"), 0xBFDB1786497EAD78, "1e-pi = e - pi (was pi)");
+    # Compared with 2 * exp(1) as computed, not with 2e's bits: exp is within
+    # 1 ulp, not bit-identical across targets (aarch64 gives e + 1 ulp).
+    var e1 = Evaluator_eval(e, "exp(1)");
+    assert_eq(Evaluator_eval(e, "2exp(1)"), f64_mul(f64_from(2), e1), "2exp(1) = 2 * exp(1) (was UNKNOWN_FN)");
+    assert_eq(Evaluator_eval(e, "1e+-5"), 0xC00240F574EBA897, "1e+-5 = e + -5 (was -4)");
+    assert_eq(Evaluator_eval(e, "1e5"), f64_from(100000), "1e5 unchanged");
+    assert_eq(Evaluator_eval(e, "2E+6"), f64_from(2000000), "2E+6 unchanged");
+    assert_eq(Evaluator_eval(e, ".5"), f64_div(f64_from(1), f64_from(2)), ".5 unchanged");
+    assert_eq(Evaluator_eval(e, "1."), f64_from(1), "1. unchanged");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "none of those is an error");
+    return 0;
+}
+
+# The first error wins (2.4.8 overwrote it with PARSE inside parentheses).
+fn test_error_fidelity() {
+    ev_err_is("(x+1)*2", ABACO_ERR_UNKNOWN_VAR, "(x+1)*2 is UNKNOWN_VAR (was PARSE)");
+    ev_err_is("sqrt(zz+1)", ABACO_ERR_UNKNOWN_VAR, "sqrt(zz+1) is UNKNOWN_VAR (was PARSE)");
+    ev_err_is("2*(1/0+1)", ABACO_ERR_DIV_ZERO, "2*(1/0+1) is DIV_ZERO (was PARSE)");
+    ev_err_is("(171!+1)", ABACO_ERR_MATH, "(171!+1) is MATH (was PARSE)");
+    ev_err_is("(foo(1)+1)", ABACO_ERR_UNKNOWN_FN, "(foo(1)+1) is UNKNOWN_FN (was PARSE)");
+    ev_err_is("max(1/0, x)", ABACO_ERR_DIV_ZERO, "the first argument error stands");
+    ev_err_is("zz+1", ABACO_ERR_UNKNOWN_VAR, "without parentheses, unchanged");
+    return 0;
+}
+
+# Live-as-you-type preview (see Evaluator_eval_partial).
+fn ev_partial(expr) {
+    var e = Evaluator_new();
+    var r = Evaluator_eval_partial(e, expr);
+    assert_eq(eval_err(e), ABACO_ERR_NONE, expr);
+    return r;
+}
+fn ev_partial_err(expr, code, name) {
+    var e = Evaluator_new();
+    Evaluator_eval_partial(e, expr);
+    assert_eq(eval_err(e), code, name);
+    return 0;
+}
+
+fn test_eval_partial() {
+    assert_eq(ev_partial("2+3*"), f64_from(5), "2+3* previews 5");
+    assert_eq(ev_partial("2*(3+4"), f64_from(14), "2*(3+4 closes the paren: 14");
+    assert_eq(ev_partial("2+50%+"), f64_div(f64_from(5), f64_from(2)), "2+50%+ previews 2.5");
+    assert_eq(ev_partial("5!+"), f64_from(120), "5!+ previews 120");
+    assert_eq(ev_partial("sqrt(16"), f64_from(4), "sqrt(16 previews 4");
+    # A call still being typed previews what comes before it; closing it would
+    # be an arity miss (max(7)) or leave its bare name as a variable (2.4.9
+    # final review: the first cut answered UNKNOWN_FN / UNKNOWN_VAR here).
+    assert_eq(ev_partial("2+max(7"), f64_from(2), "2+max(7 previews 2");
+    assert_eq(ev_partial("1+pow(2"), f64_from(1), "1+pow(2 previews 1");
+    assert_eq(ev_partial("2+max(1,"), f64_from(2), "2+max(1, previews 2");
+    assert_eq(ev_partial("2+sqrt("), f64_from(2), "2+sqrt( previews 2");
+    assert_eq(ev_partial("2sqrt("), f64_from(2), "2sqrt( previews 2");
+    assert_eq(ev_partial("sqrt(4)+cos("), f64_from(2), "sqrt(4)+cos( previews 2");
+    assert_eq(ev_partial("2*(3+max(1"), f64_from(6), "2*(3+max(1 previews 6");
+    ev_partial_err("max(7", ABACO_ERR_INVALID, "a lone unfinished call has nothing to preview");
+    ev_partial_err("2+zz+min(3", ABACO_ERR_UNKNOWN_VAR, "an unknown name outside the open call still stands");
+    ev_partial_err("1/0", ABACO_ERR_DIV_ZERO, "1/0 is DIV_ZERO (was 1)");
+    ev_partial_err("2+x", ABACO_ERR_UNKNOWN_VAR, "2+x is UNKNOWN_VAR (was 2)");
+    ev_partial_err("5*171!", ABACO_ERR_MATH, "5*171! is MATH (was 855)");
+    ev_partial_err("2 3", ABACO_ERR_PARSE, "2 3 is a parse error (was 2)");
+    ev_partial_err("1e3)", ABACO_ERR_PARSE, "1e3) is a parse error (was 1000)");
+    ev_partial_err("+", ABACO_ERR_INVALID, "a lone operator is INVALID");
+    # 100 capped totient() calls then 500 unclosed '(' — 1000 tokens. Through
+    # 2.4.8 every shorter prefix was re-evaluated: 92 s. Now one re-parse.
+    var buf = alloc(4096);
+    var pos = 0;
+    var i = 0;
+    while (i < 100) {
+        memcpy(buf + pos, "totient(999999999989)+", 22);
+        pos = pos + 22;
+        i = i + 1;
+    }
+    i = 0;
+    while (i < 500) { store8(buf + pos, 40); pos = pos + 1; i = i + 1; }
+    store8(buf + pos, 0);
+    assert_eq(ev_partial(buf), f64_from(99999999998800), "100 x totient(999999999989) previews in one re-parse");
+    return 0;
+}
+
+fn test_pow_double_double() {
+    var e = Evaluator_new();
+    assert_eq(Evaluator_eval(e, "1.0000001^10000000"), 0x4005BF0A790CE6F2,
+      "1.0000001^1e7 correctly rounded (was 341,619 ulp off)");
+    assert_eq(Evaluator_eval(e, "(1+1/1000000)^1000000"), 0x4005BF09D4A0F972, "(1+1e-6)^1e6 correctly rounded");
+    assert_eq(Evaluator_eval(e, "(1+0.05/12)^360"), 0x4011DEF85D8E2F4D, "(1+0.05/12)^360 correctly rounded (was 53 ulp)");
+    assert_eq(Evaluator_eval(e, "0.1^(0-308)"), 0x7FE1CCF385EBC84A, "0.1^-308 correctly rounded (was 80 ulp)");
+    assert_eq(Evaluator_eval(e, "2^(0-1074)"), 1, "2^-1074 is the smallest subnormal (was 0)");
+    assert_eq(Evaluator_eval(e, "10^(0-310)"), 0x000012688B70E62B, "10^-310 is 1e-310 (was 0)");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "no pow row is an error");
+    # Called directly, before any literal has been parsed (the split constant
+    # is initialised lazily; a zero split is plain f64 in disguise).
+    assert_eq(eval_pow(0x3FF000000006DF38, f64_from(1099511627776)), 0x49D8B15236C6BFCE,
+      "(1+1e-10)^(2^40) correctly rounded (was 2.7e9 ulp off)");
+    # 10^k against the literal 1ek for every k the parser takes: equal in the
+    # normal range, within 1 ulp in the subnormal one (2.4.8: 268 of k = 1..324
+    # disagreed).
+    var lit = alloc(16);
+    var bad = 0;
+    var k = 0 - 323;
+    while (k <= 308) {
+        store8(lit, 49);
+        store8(lit + 1, 101);
+        var nd = fmt_int_buf(k, lit + 2);
+        store8(lit + 2 + nd, 0);
+        var want = Evaluator_eval(e, lit);
+        var got = eval_pow(f64_from(10), f64_from(k));
+        var d = got - want;
+        if (d < 0) { d = 0 - d; }
+        if (k >= (0 - 307)) { if (d != 0) { bad = bad + 1; } }
+        else { if (d > 1) { bad = bad + 1; } }
+        k = k + 1;
+    }
+    assert_eq(bad, 0, "10^k matches the literal 1ek for k = -323..308");
+    return 0;
+}
+
+fn test_log10_exact() {
+    var e = Evaluator_new();
+    var lit = alloc(24);
+    var bad = 0;
+    var k = 0 - 22;
+    while (k <= 22) {
+        memcpy(lit, "log(1e", 6);
+        var nd = fmt_int_buf(k, lit + 6);
+        store8(lit + 6 + nd, 41);
+        store8(lit + 7 + nd, 0);
+        if (Evaluator_eval(e, lit) != f64_from(k)) { bad = bad + 1; }
+        k = k + 1;
+    }
+    assert_eq(bad, 0, "log(10^k) = k exactly for k = -22..22 (18 of 43 were not)");
+    assert_eq(Evaluator_eval(e, "log(1000)"), f64_from(3), "log(1000) = 3 (was 2.9999999999999996)");
+    assert_eq(Evaluator_eval(e, "log10(1e100)"), f64_from(100), "log10(1e100) = 100");
+    assert_eq(Evaluator_eval(e, "log(1e-300)"), f64_from(0 - 300), "log(1e-300) = -300");
+    var v = Evaluator_eval_value(e, "log(1000)");
+    assert_eq(Value_tag(v), INTEGER, "log(1000) types as INTEGER 3 (was FLOAT)");
+    near_tight(Evaluator_eval(e, "log(2)"), 0x3FD34413509F79FF, "log(2) still close");
+    assert_eq(Evaluator_eval(e, "log(0)"), 0xFFF0000000000000, "log(0) = -Inf");
+    var n = Evaluator_eval(e, "log(0-1)");
+    assert(f64_eq(n, n) == 0, "log(-1) is NaN");
+    return 0;
+}
+
+fn test_modulo_exact() {
+    var e = Evaluator_new();
+    # A subnormal divisor puts the quotient's exponent past 2046: the first cut
+    # scaled |b| * 2^k in two steps, so this looped forever or gave +-Inf (2.4.9
+    # final review). References are exact (Python fractions).
+    assert_eq(Evaluator_eval(e, "1e300 % 5e-324"), 0, "1e300 % 5e-324 = +0 (hung)");
+    assert_eq(Evaluator_eval(e, "1.4e293 % 5e-324"), 0, "1.4e293 % 5e-324 = +0 (was -Inf)");
+    assert_eq(Evaluator_eval(e, "(0-1.4e293) % 5e-324"), 0, "-1.4e293 % 5e-324 = +0 (was +Inf)");
+    assert_eq(Evaluator_eval(e, "1e307 % 1e-310"), 0x000007F453889466, "1e307 % 1e-310 exact");
+    assert_eq(Evaluator_eval(e, "1e300 % 3e-320"), 0x0000000000000A68, "1e300 % 3e-320 exact");
+    assert_eq(Evaluator_eval(e, "5.5 % 2"), f64_div(f64_from(3), f64_from(2)), "5.5 % 2 = 1.5");
+    assert_eq(Evaluator_eval(e, "(0-7) % 3"), f64_from(2), "-7 % 3 = 2, floored");
+    assert_eq(Evaluator_eval(e, "7 % (0-3)"), f64_from(0 - 2), "7 % -3 = -2, floored");
+    assert_eq(Evaluator_eval(e, "1e22 % 3"), f64_from(1), "1e22 % 3 = 1 exactly (was 0)");
+    assert_eq(Evaluator_eval(e, "1e17 % 7"), f64_from(5), "1e17 % 7 = 5 exactly");
+    assert_eq(Evaluator_eval(e, "5 % 1e309"), f64_from(5), "5 % +Inf = 5 (was NaN)");
+    assert_eq(Evaluator_eval(e, "(0-5) % 1e309"), 0x7FF0000000000000, "-5 % +Inf = +Inf, floored (was NaN)");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "no modulo row is an error");
+    ev_err_is("5 % 0", ABACO_ERR_DIV_ZERO, "5 % 0 is still DIV_ZERO");
+    return 0;
+}
+
+fn test_nan_and_integer_args() {
+    var e = Evaluator_new();
+    var r = Evaluator_eval(e, "sign(sqrt(0-1))");
+    assert(f64_eq(r, r) == 0, "sign(NaN) is NaN (was 0)");
+    r = Evaluator_eval(e, "min(sqrt(0-1), 1)");
+    assert(f64_eq(r, r) == 0, "min(NaN, 1) is NaN");
+    r = Evaluator_eval(e, "min(1, sqrt(0-1))");
+    assert(f64_eq(r, r) == 0, "min(1, NaN) is NaN, whatever the order");
+    r = Evaluator_eval(e, "max(1, sqrt(0-1))");
+    assert(f64_eq(r, r) == 0, "max(1, NaN) is NaN");
+    r = Evaluator_eval(e, "atan2(sqrt(0-1), 1)");
+    assert(f64_eq(r, r) == 0, "atan2(NaN, 1) is NaN (was -pi/2)");
+    r = Evaluator_eval(e, "median(1, sqrt(0-1), 3)");
+    assert(f64_eq(r, r) == 0, "median with a NaN is NaN");
+    # A fraction is outside the integer functions' domain (2.4.8 truncated it).
+    ev_err_is("2.5!", ABACO_ERR_MATH, "2.5! is a math error (was 2)");
+    ev_err_is("3.9!", ABACO_ERR_MATH, "3.9! is a math error (was 6)");
+    ev_err_is("(0-0.5)!", ABACO_ERR_MATH, "(-0.5)! is a math error (was 1)");
+    ev_err_is("factorial(2.5)", ABACO_ERR_MATH, "factorial(2.5) is a math error (was 2)");
+    ev_err_is("gcd(7.5, 5)", ABACO_ERR_MATH, "gcd(7.5, 5) is a math error (was 1)");
+    ev_err_is("binomial(5.5, 2)", ABACO_ERR_MATH, "binomial(5.5, 2) is a math error");
+    ev_err_is("nextprime(2.5)", ABACO_ERR_MATH, "nextprime(2.5) is a math error");
+    e = Evaluator_new();
+    assert_eq(Evaluator_eval(e, "isprime(2.9)"), 0, "isprime(2.9) = 0 (was 1)");
+    assert_eq(Evaluator_eval(e, "4!"), f64_from(24), "4! = 24 still");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "isprime of a fraction is not an error");
+    return 0;
+}
+
+fn test_evaluator_memory() {
+    var e = Evaluator_new();
+    Evaluator_eval(e, "sqrt(2)*pi+mean(1,2,3)+1");
+    Evaluator_eval_partial(e, "2*(3+");
+    var before = alloc_used();
+    var i = 0;
+    while (i < 200) {
+        Evaluator_eval(e, "sqrt(2)*pi+mean(1,2,3)+1");
+        Evaluator_eval_partial(e, "2*(3+");
+        i = i + 1;
+    }
+    assert_eq(alloc_used() - before, 0, "repeated evaluations allocate nothing (2.4.8: 16-33 KB each)");
+    # Rebinding a variable allocates nothing either (the first 2.4.9 cut copied
+    # the name on every call: 8+ bytes per sample in a plot loop).
+    Evaluator_set_variable(e, "x", f64_from(1));
+    Evaluator_eval(e, "sin(x)*x^2+1");
+    before = alloc_used();
+    i = 0;
+    while (i < 200) {
+        Evaluator_set_variable(e, "x", f64_from(i));
+        Evaluator_eval(e, "sin(x)*x^2+1");
+        i = i + 1;
+    }
+    assert_eq(alloc_used() - before, 0, "rebinding x in a loop allocates nothing");
+    assert_eq(Evaluator_eval(e, "x"), f64_from(199), "the last binding stands");
+    # An identifier past ABACO_MAX_IDENT is refused, so no request outgrows an
+    # arena chunk (oversize ones chained a new chunk each time).
+    var big = alloc(ABACO_MAX_IDENT + 2);
+    var bi = 0;
+    while (bi < ABACO_MAX_IDENT + 1) { store8(big + bi, 97); bi = bi + 1; }
+    store8(big + ABACO_MAX_IDENT + 1, 0);
+    Evaluator_eval(e, big);
+    assert_eq(eval_err(e), ABACO_ERR_PARSE, "an identifier past ABACO_MAX_IDENT is a parse error");
+    store8(big + ABACO_MAX_IDENT, 0);
+    Evaluator_eval(e, big);
+    assert_eq(eval_err(e), ABACO_ERR_UNKNOWN_VAR, "one at ABACO_MAX_IDENT is an ordinary unknown name");
+    # The variable name is copied, so the caller may reuse its buffer.
+    var nm = alloc(8);
+    memcpy(nm, "xx", 3);
+    Evaluator_set_variable(e, nm, f64_from(5));
+    memcpy(nm, "yy", 3);
+    assert_eq(Evaluator_eval(e, "xx+1"), f64_from(6), "xx survives the caller reusing its buffer");
+    ev_err_is("yy", ABACO_ERR_UNKNOWN_VAR, "yy was never bound");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco eval tests ===");
@@ -1363,6 +1717,7 @@ fn main() {
     test_percent();
     test_errors();
     test_depth_boundary();
+    test_dispatch_values();
     test_arity_cap();
     test_exponent_clamp();
     test_token_cap();
@@ -1387,6 +1742,14 @@ fn main() {
     test_binomial_lcm_overflow();
     test_trig_large_arguments();
     test_unary_minus_zero();
+    test_input_validation();
+    test_error_fidelity();
+    test_eval_partial();
+    test_pow_double_double();
+    test_log10_exact();
+    test_modulo_exact();
+    test_nan_and_integer_args();
+    test_evaluator_memory();
     # Propagate failure to the process exit code. assert_summary() RETURNS
     # _assert_fail; discarding it and returning 0 made a red suite exit 0, and
     # CI gates on the exit code — so failures shipped green (fixed 2.4.4).

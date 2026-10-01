@@ -61,17 +61,24 @@ fn sanitize_sample(s) {
 # (Cyrius 4.10.2+). Removed hand-rolled duplicates.
 
 # -- RMS of two values --
-# rms(a, b) = sqrt((a^2 + b^2) / 2)
+# rms(a, b) = sqrt((a^2 + b^2) / 2) = hypot(a, b) / sqrt(2). Through 2.4.8 this
+# squared first, so it overflowed to +Inf above ~1.3e154 and flushed to 0 below
+# ~1e-154; hypot scales by the larger leg first (CHANGELOG 2.4.9).
 fn f64_rms2(a, b) {
-    var sum = f64_add(f64_mul(a, a), f64_mul(b, b));
-    return f64_sqrt(f64_div(sum, f64_from(2)));
+    return f64_mul(f64_hypot(a, b), DSP_FRAC_1_SQRT2);
 }
 
 # f64_hypot, f64_trunc, f64_fract, f64_sign — now provided by stdlib math.cyr
 # (Cyrius 4.10.2+). Removed hand-rolled duplicates.
 
 # -- Round to nearest, ties away from zero --
-# round(x) = floor(x + 0.5) for x >= 0, ceil(x - 0.5) for x < 0.
+# C99 round(): the nearest integer, halfway cases away from zero, sign kept
+# (round(-0.3) = -0). Through 2.4.8 this was floor(x + 0.5), and that addition
+# rounds: 0.49999999999999994 + 0.5 is 1.0, so round(0.49999999999999994) = 1,
+# and every odd integer in [2^52, 2^53) moved to the next even one —
+# round(4503599627370497) = 4503599627370498 (CHANGELOG 2.4.9). Now an f64 of
+# magnitude >= 2^52 is already an integer and comes back unchanged, and below
+# that |x| - trunc(|x|) is exact, so the half test is exact too.
 #
 # Cyrius 6.5.x made `f64_round` a compiler builtin, and the builtin rounds
 # ties to EVEN (round(2.5) = 2, round(-2.5) = -2) per the IEEE-754 default.
@@ -79,13 +86,18 @@ fn f64_rms2(a, b) {
 # expression evaluator's user-facing `round()` has always done and what a
 # desk calculator is expected to do; the name carries the tie rule so the two
 # can never be confused. See test_round_ties_away.
+var DSP_TWO_POW_52 = 0x4330_0000_0000_0000;   # 2^52
+
 fn f64_round_half_away(x) {
-    var half = f64_div(f64_from(1), f64_from(2));
-    var zero = f64_from(0);
-    if (f64_lt(x, zero) == 1) {
-        return f64_ceil(f64_sub(x, half));
-    }
-    return f64_floor(f64_add(x, half));
+    var ax = f64_abs(x);
+    # NaN fails the comparison too, so NaN and +/-Inf come back as they are.
+    if (f64_lt(ax, DSP_TWO_POW_52) == 0) { return x; }
+    # ax >= 0, so floor is trunc; builtins only (the stdlib f64_trunc / f64_ge
+    # are calls, which doubled the cost of this hot path).
+    var t = f64_floor(ax);
+    if (f64_lt(f64_sub(ax, t), DSP_HALF) == 0) { t = f64_add(t, DSP_ONE); }
+    # Copy the sign bit back on; t is >= +0, so this also gives round(-0.3) = -0.
+    return t | (x & 0x8000_0000_0000_0000);
 }
 
 # ================================================================
@@ -96,14 +108,21 @@ fn f64_round_half_away(x) {
 # encodings: DB_SCALE * DB_EXP has to round to ~1.0 or amplitude_to_db and
 # db_to_amplitude stop being inverses and the round trip drifts ~0.081% of |db|
 # (blows a 0.01 dB tolerance for |db| >= 20). See test_db_roundtrip.
-var DB_SCALE    = 0x4021_5F2C_ED38_4F28;   # 20/ln(10)  = 8.685889638065035
-var DB_EXP      = 0x3FBD_791C_5F88_8823;   # ln(10)/20  = 0.11512925464970229
-var DB_GAIN_EXP = 0x3FAD_791C_5F88_8823;   # ln(10)/40  = 0.057564627324851146
+# ⚠ Through 2.4.8 each of the three was still 1 ulp off its correctly rounded
+# value despite this comment — amplitude_to_db(1000) was 59.999999999999986.
+# Re-derived at 80 digits for 2.4.9; test_db_constants_exact pins the bits.
+var DB_SCALE    = 0x4021_5F2C_ED38_4F29;   # 20/ln(10)  = 8.685889638065037
+var DB_EXP      = 0x3FBD_791C_5F88_8822;   # ln(10)/20  = 0.11512925464970228
+var DB_GAIN_EXP = 0x3FAD_791C_5F88_8822;   # ln(10)/40  = 0.05756462732485114
 
-# amplitude_to_db: 20/ln(10) * ln(amp), NEG_INF if amp <= 0
+# amplitude_to_db: 20/ln(10) * ln(amp); -Inf for amp <= 0, NaN for NaN. Through
+# 2.4.8 a NaN amplitude answered -Inf — silence — so a NaN-poisoned signal's
+# level read as quiet instead of broken (CHANGELOG 2.4.9).
 fn amplitude_to_db(amp) {
+    # amp <= 0, written with the comparison builtins (stdlib f64_le is a call);
+    # NaN fails both, so it reaches f64_ln and comes back NaN.
     var zero = f64_from(0);
-    if (f64_gt(amp, zero) == 0) { return 0xFFF0_0000_0000_0000; }
+    if (f64_lt(amp, zero) == 1 || f64_eq(amp, zero) == 1) { return 0xFFF0_0000_0000_0000; }
     return f64_mul(DB_SCALE, f64_ln(amp));
 }
 
@@ -124,7 +143,9 @@ fn db_gain_factor(db) {
 # Exposing the pair as an explicit alias removes the need for every
 # caller to remember that "dBFS" and "dB relative to 1.0" are the same
 # thing in the float-audio world, and keeps call sites self-documenting.
-fn amplitude_to_dbfs(amp) { return amplitude_to_db(amp); }
+# Takes |a| as the formula says: a negative sample of the same magnitude has the
+# same level (through 2.4.8 it answered -Inf).
+fn amplitude_to_dbfs(amp) { return amplitude_to_db(f64_abs(amp)); }
 fn dbfs_to_amplitude(dbfs) { return db_to_amplitude(dbfs); }
 
 # ================================================================
@@ -137,10 +158,11 @@ fn midi_to_freq(note) {
     return f64_mul(DSP_A4_FREQ, f64_exp2(exponent));
 }
 
-# freq_to_midi: 69 + 12 * log2(freq / 440), NEG_INF if freq <= 0
+# freq_to_midi: 69 + 12 * log2(freq / 440); -Inf if freq <= 0, NaN for NaN
+# (through 2.4.8 NaN answered -Inf, like amplitude_to_db).
 fn freq_to_midi(freq) {
     var zero = f64_from(0);
-    if (f64_gt(freq, zero) == 0) { return 0xFFF0_0000_0000_0000; }
+    if (f64_lt(freq, zero) == 1 || f64_eq(freq, zero) == 1) { return 0xFFF0_0000_0000_0000; }
     return f64_add(DSP_A4_MIDI, f64_mul(DSP_SEMITONES, f64_log2(f64_div(freq, DSP_A4_FREQ))));
 }
 
@@ -149,10 +171,25 @@ fn freq_to_midi(freq) {
 # ================================================================
 
 # time_constant: one-pole smoothing coefficient from time in ms
-# c = exp(-1 / (time_ms * 0.001 * sample_rate))
+# c = exp(-1 / (time_ms * 0.001 * sample_rate)); a time under one sample clamps
+# to one sample.
+#
+# Both arguments are f64 BIT PATTERNS, like every DSP argument here —
+# sample_rate is f64_from(48000), not 48000. An integer passed straight in is a
+# subnormal f64 of ~1e-319 Hz, which made every attack/release collapse to the
+# one-sample exp(-1) with no sign of trouble (dhvani's compressor and limiter at
+# 2.4.6). Through 2.4.8 NaN did the same. A sample rate that is not a finite
+# value >= 1 Hz, or a NaN / negative / infinite time, now answers NaN so the
+# mistake shows instead of sounding plausible (CHANGELOG 2.4.9).
 fn time_constant(time_ms, sample_rate) {
     var one = f64_from(1);
     var thousand = f64_from(1000);
+    var zero = f64_from(0);
+    # x - x == 0 exactly when x is finite (NaN and +/-Inf give NaN).
+    if (f64_lt(sample_rate, one) == 1) { return 0x7FF8_0000_0000_0000; }
+    if (f64_eq(f64_sub(sample_rate, sample_rate), zero) == 0) { return 0x7FF8_0000_0000_0000; }
+    if (f64_lt(time_ms, zero) == 1) { return 0x7FF8_0000_0000_0000; }
+    if (f64_eq(f64_sub(time_ms, time_ms), zero) == 0) { return 0x7FF8_0000_0000_0000; }
     var samples = f64_mul(f64_div(time_ms, thousand), sample_rate);
     samples = f64_max(samples, one);
     return f64_exp(f64_neg(f64_div(one, samples)));
@@ -189,81 +226,140 @@ fn equal_power_crossfade(t, out_a, out_b) {
 }
 
 # ================================================================
-# SIMD batch operations (Cyrius 1.9.2+ f64v_add/sub/mul)
+# SIMD batch operations over flat f64 arrays
 # ================================================================
+#
+# The f64v_* builtins step two lanes at a time with no scalar tail, so for an
+# odd n they read one element past every input and WRITE one past dst (Cyrius
+# 6.6.12, x86 and aarch64 alike). Through 2.4.8 every wrapper passed n straight
+# through: heap corruption from a valid call — a 441-sample buffer is 10 ms at
+# 44.1 kHz — and SIGSEGV when the buffer ended at a page boundary. Each wrapper
+# now runs the builtin on the even prefix, finishes an odd last element in
+# scalar code with the same rounding, and returns at once for n <= 0. None of
+# them allocates (batch_scale and batch_mac did, n * 8 bytes per call, never
+# freed). Aliasing dst with an input is fine: every element is read before it
+# is written. (CHANGELOG 2.4.9.)
 
 # Batch add: dst[i] = a[i] + b[i] for n elements
 fn batch_add(dst, a, b, n) {
-    f64v_add(dst, a, b, n);
+    if (n <= 0) { return 0; }
+    var m = n & (0 - 2);
+    if (m > 0) { f64v_add(dst, a, b, m); }
+    if (m < n) { store64(dst + m * 8, f64_add(load64(a + m * 8), load64(b + m * 8))); }
     return 0;
 }
 
 # Batch subtract: dst[i] = a[i] - b[i] for n elements
 fn batch_sub(dst, a, b, n) {
-    f64v_sub(dst, a, b, n);
+    if (n <= 0) { return 0; }
+    var m = n & (0 - 2);
+    if (m > 0) { f64v_sub(dst, a, b, m); }
+    if (m < n) { store64(dst + m * 8, f64_sub(load64(a + m * 8), load64(b + m * 8))); }
     return 0;
 }
 
 # Batch multiply: dst[i] = a[i] * b[i] for n elements
 fn batch_mul(dst, a, b, n) {
-    f64v_mul(dst, a, b, n);
+    if (n <= 0) { return 0; }
+    var m = n & (0 - 2);
+    if (m > 0) { f64v_mul(dst, a, b, m); }
+    if (m < n) { store64(dst + m * 8, f64_mul(load64(a + m * 8), load64(b + m * 8))); }
     return 0;
 }
 
 # Batch scale: dst[i] = src[i] * scalar for n elements
-# Fills a temp buffer with scalar, then uses SIMD mul
 fn batch_scale(dst, src, scalar, n) {
-    var sbuf = alloc(n * 8);
-    var i = 0;
-    while (i < n) {
-        store64(sbuf + i * 8, scalar);
-        i = i + 1;
-    }
-    f64v_mul(dst, src, sbuf, n);
+    if (n <= 0) { return 0; }
+    var m = n & (0 - 2);
+    if (m > 0) { f64v_scale(dst, src, scalar, m); }
+    if (m < n) { store64(dst + m * 8, f64_mul(load64(src + m * 8), scalar)); }
     return 0;
 }
 
-# Batch multiply-accumulate: dst[i] += a[i] * b[i]
+# Batch multiply-accumulate: dst[i] = dst[i] + a[i] * b[i]
 fn batch_mac(dst, a, b, n) {
-    var tmp = alloc(n * 8);
-    f64v_mul(tmp, a, b, n);
-    f64v_add(dst, dst, tmp, n);
-    return 0;
+    return batch_fmadd(dst, a, b, dst, n);
 }
 
 # Batch divide: dst[i] = a[i] / b[i] for n elements
 fn batch_div(dst, a, b, n) {
-    f64v_div(dst, a, b, n);
+    if (n <= 0) { return 0; }
+    var m = n & (0 - 2);
+    if (m > 0) { f64v_div(dst, a, b, m); }
+    if (m < n) { store64(dst + m * 8, f64_div(load64(a + m * 8), load64(b + m * 8))); }
     return 0;
 }
 
 # Batch sqrt: dst[i] = sqrt(src[i]) for n elements
 fn batch_sqrt(dst, src, n) {
-    f64v_sqrt(dst, src, n);
+    if (n <= 0) { return 0; }
+    var m = n & (0 - 2);
+    if (m > 0) { f64v_sqrt(dst, src, m); }
+    if (m < n) { store64(dst + m * 8, f64_sqrt(load64(src + m * 8))); }
     return 0;
 }
 
 # Batch abs: dst[i] = |src[i]| for n elements
 fn batch_abs(dst, src, n) {
-    f64v_abs(dst, src, n);
+    if (n <= 0) { return 0; }
+    var m = n & (0 - 2);
+    if (m > 0) { f64v_abs(dst, src, m); }
+    if (m < n) { store64(dst + m * 8, f64_abs(load64(src + m * 8))); }
     return 0;
 }
 
-# Batch fused multiply-add: dst[i] = a[i]*b[i] + c[i]
+# Batch multiply-add: dst[i] = a[i]*b[i] + c[i], rounded TWICE (product, then
+# sum) on every target. f64v_fmadd lowers to an unfused mul+add on x86 but to a
+# fused FMLA on aarch64, so through 2.4.8 the same inputs gave different bits on
+# the two (a*b - fl(a*b) is 0 on x86 and the exact residue on aarch64), and the
+# odd tail would have mixed both in one call. The product goes through a 64-lane
+# stack chunk instead, which keeps it allocation-free.
 fn batch_fmadd(dst, a, b, c, n) {
-    f64v_fmadd(dst, a, b, c, n);
+    if (n <= 0) { return 0; }
+    var prod[512];   # 64 f64 — one chunk of products
+    var off = 0;
+    while (off < n) {
+        var cnt = n - off;
+        if (cnt > 64) { cnt = 64; }
+        var m = cnt & (0 - 2);
+        var p = off * 8;
+        if (m > 0) {
+            f64v_mul(&prod, a + p, b + p, m);
+            f64v_add(dst + p, &prod, c + p, m);
+        }
+        if (m < cnt) {
+            var q = p + m * 8;
+            store64(dst + q, f64_add(f64_mul(load64(a + q), load64(b + q)), load64(c + q)));
+        }
+        off = off + cnt;
+    }
     return 0;
 }
 
-# Batch sum: return sum of n f64 values (scalar reduction)
+# Batch sum: the sum of n f64 values, compensated (Neumaier 1974). Plain
+# left-to-right summation was ~92,000 ulp off on a million 0.1s and returned 0
+# for [1e16, 1, -1e16] (through 2.4.8); the compensation term carries what each
+# addition rounded away. A non-finite running sum is returned as it is — the
+# compensation of an infinity is NaN, and Inf / NaN are already the answer.
 fn batch_sum(src, n) {
     var sum = f64_from(0);
+    var comp = f64_from(0);
     var i = 0;
     while (i < n) {
-        sum = f64_add(sum, load64(src + i * 8));
+        var x = load64(src + i * 8);
+        var t = f64_add(sum, x);
+        # |sum| >= |x|, as a builtin (stdlib f64_ge is a call, once per sample
+        # here). A NaN takes this branch; either branch gives NaN.
+        if (f64_lt(f64_abs(sum), f64_abs(x)) == 0) {
+            comp = f64_add(comp, f64_add(f64_sub(sum, t), x));
+        } else {
+            comp = f64_add(comp, f64_add(f64_sub(x, t), sum));
+        }
+        sum = t;
         i = i + 1;
     }
-    return sum;
+    if (f64_eq(f64_sub(sum, sum), f64_from(0)) == 0) { return sum; }
+    return f64_add(sum, comp);
 }
 
 # ================================================================
@@ -287,10 +383,26 @@ fn bpm_to_hz(bpm) { return f64_div(bpm, f64_from(60)); }
 fn hz_to_bpm(hz)  { return f64_mul(hz, f64_from(60)); }
 
 # ================================================================
-# Window functions — single-sample generators for FFT/STFT
-# All accept (n, size) where n is the sample index and size is window length.
-# Return the window coefficient at that sample as an f64.
+# Window functions — single-sample generators
+# All accept (n, size) where n is the sample index and size is window length,
+# and return the coefficient at that sample as an f64: 0 for n outside
+# [0, size), 1 for the one sample of a size-1 window.
+#
+# These are the SYMMETRIC forms (denominator size - 1, w(0) = w(size-1)), the
+# right shape for FIR design and for analysing one frame. For STFT overlap-add
+# use the periodic (DFT-even) form Harris 1978 tabulates: evaluate with
+# size + 1 and drop the last sample — the symmetric Hann at 50% overlap ripples
+# ~2.5% where the periodic one sums to exactly 1.
 # ================================================================
+
+# 1 when n is outside the window [0, size). Through 2.4.8 the generators took
+# any n: out-of-range samples wrapped onto the cosine (window_hann(64, 64) =
+# 0.0025, window_hann(3, 3) = 1.0) or went NaN in Kaiser (CHANGELOG 2.4.9).
+fn _win_outside(n, size) {
+    if (n < 0) { return 1; }
+    if (n >= size) { return 1; }
+    return 0;
+}
 
 var WIN_HAMM_A = 0x3FE1_47AE_147A_E148;   # 0.54
 var WIN_HAMM_B = 0x3FDD_70A3_D70A_3D71;   # 0.46
@@ -299,21 +411,24 @@ var WIN_BLK_C  = 0x3FB4_7AE1_47AE_147B;   # 0.08
 
 # Hann: 0.5 * (1 - cos(2π n / (N-1)))
 fn window_hann(n, size) {
-    if (size <= 1) { return DSP_ONE; }
+    if (_win_outside(n, size) == 1) { return f64_from(0); }
+    if (size == 1) { return DSP_ONE; }
     var phase = f64_div(f64_mul(DSP_TAU, f64_from(n)), f64_from(size - 1));
     return f64_mul(DSP_HALF, f64_sub(DSP_ONE, f64_cos(phase)));
 }
 
 # Hamming: 0.54 - 0.46 * cos(2π n / (N-1))
 fn window_hamming(n, size) {
-    if (size <= 1) { return DSP_ONE; }
+    if (_win_outside(n, size) == 1) { return f64_from(0); }
+    if (size == 1) { return DSP_ONE; }
     var phase = f64_div(f64_mul(DSP_TAU, f64_from(n)), f64_from(size - 1));
     return f64_sub(WIN_HAMM_A, f64_mul(WIN_HAMM_B, f64_cos(phase)));
 }
 
 # Blackman: 0.42 - 0.5*cos(2π n/(N-1)) + 0.08*cos(4π n/(N-1))
 fn window_blackman(n, size) {
-    if (size <= 1) { return DSP_ONE; }
+    if (_win_outside(n, size) == 1) { return f64_from(0); }
+    if (size == 1) { return DSP_ONE; }
     var phase = f64_div(f64_mul(DSP_TAU, f64_from(n)), f64_from(size - 1));
     var p2 = f64_add(phase, phase);
     var t1 = f64_mul(DSP_HALF, f64_cos(phase));
@@ -321,17 +436,28 @@ fn window_blackman(n, size) {
     return f64_add(f64_sub(WIN_BLK_A, t1), t2);
 }
 
-# Modified Bessel I0 series (used by Kaiser). Converges for any finite x.
+# Modified Bessel I0 by its power series, sum over k of ((x/2)^k / k!)^2
+# (Abramowitz & Stegun 9.6.12), summed until a term no longer moves the sum.
+# Through 2.4.8 it stopped after a fixed 29 terms, which is only enough for
+# |x| below ~17: I0(50) came out 9% low and I0(100) five orders of magnitude
+# low, so every Kaiser window with beta past ~20 was wrong — and Kaiser's own
+# design rule gives beta ~21 for 60 dB of stop-band (CHANGELOG 2.4.9). The
+# terms peak near k = |x|/2 and then fall geometrically; the cap is far above
+# the ~360 terms the overflow point (|x| ~ 713) needs. Past that I0 is +Inf, so
+# a Kaiser beta above ~700 gives Inf / Inf = NaN.
 fn _bessel_i0(x) {
+    if (f64_eq(x, x) == 0) { return x; }
     var sum = f64_from(1);
     var term = f64_from(1);
     var half_x = f64_div(x, f64_from(2));
     var hx2 = f64_mul(half_x, half_x);
     var k = 1;
-    while (k < 30) {
+    while (k < 2000) {
         var kf = f64_from(k);
         term = f64_mul(term, f64_div(hx2, f64_mul(kf, kf)));
-        sum = f64_add(sum, term);
+        var next = f64_add(sum, term);
+        if (f64_eq(next, sum) == 1) { break; }
+        sum = next;
         k = k + 1;
     }
     return sum;
@@ -341,7 +467,8 @@ fn _bessel_i0(x) {
 # beta controls side-lobe attenuation (common values: 5, 8, 14).
 # For whole-window fills prefer window_kaiser_fill — it hoists the I0(β) denom.
 fn window_kaiser(n, size, beta) {
-    if (size <= 1) { return DSP_ONE; }
+    if (_win_outside(n, size) == 1) { return f64_from(0); }
+    if (size == 1) { return DSP_ONE; }
     var x = f64_sub(f64_div(f64_mul(DSP_TWO, f64_from(n)), f64_from(size - 1)), DSP_ONE);
     var arg = f64_mul(beta, f64_sqrt(f64_sub(DSP_ONE, f64_mul(x, x))));
     return f64_div(_bessel_i0(arg), _bessel_i0(beta));
@@ -387,16 +514,25 @@ fn f64_cubic(a, b, c, d, t) {
     return f64_add(b, f64_add(f64_mul(c1, t), f64_add(f64_mul(c2, t2), f64_mul(c3, t3))));
 }
 
-# Normalized sinc: sinc(x) = sin(pi x)/(pi x), sinc(0) = 1.
+# Normalized sinc: sinc(x) = sin(pi x)/(pi x), sinc(0) = 1. Every f64 of
+# magnitude >= 2^52 is an integer, where sinc is 0, and 0 is also its limit at
+# +/-Inf; through 2.4.8 both answered NaN (CHANGELOG 2.4.9).
 fn f64_sinc(x) {
     if (f64_eq(x, f64_from(0)) == 1) { return DSP_ONE; }
+    var ax = f64_abs(x);
+    if (f64_gt(ax, DSP_TWO_POW_52) == 1 || f64_eq(ax, DSP_TWO_POW_52) == 1) { return f64_from(0); }
     var px = f64_mul(DSP_PI, x);
     return f64_div(f64_sin(px), px);
 }
 
 # Windowed sinc kernel sample at offset x (in samples), Hann-windowed,
-# clipped to +-half_width. Used as a resampling kernel.
+# clipped to +-half_width. Used as a resampling kernel. half_width must be
+# positive: 0, a negative value or NaN gives a zero kernel (through 2.4.8 they
+# gave NaN at x = 0, or silent zeros), and +Inf is the unwindowed sinc
+# (through 2.4.8, NaN everywhere).
 fn sinc_kernel(x, half_width) {
+    if (f64_gt(half_width, f64_from(0)) == 0) { return f64_from(0); }
+    if (f64_eq(half_width, 0x7FF0_0000_0000_0000) == 1) { return f64_sinc(x); }
     var ax = x;
     if (f64_lt(ax, f64_from(0)) == 1) { ax = f64_neg(ax); }
     if (f64_gt(ax, half_width) == 1) { return f64_from(0); }

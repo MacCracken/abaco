@@ -29,7 +29,10 @@ fn _bench_factor_small() { factor(360); return 0; }
 fn _bench_factor_large() { factor(1234567890); return 0; }
 fn _bench_totient() { totient(1000000); return 0; }
 fn _bench_fibonacci() { fibonacci(92); return 0; }
-fn _bench_binomial() { binomial(60, 30); return 0; }
+# abaco_binomial, the evaluator's binomial since 2.4.9. A new row name, so the
+# trail does not splice it onto the `binomial` row, which measured ganita's
+# `binomial` through 2.4.8.
+fn _bench_abaco_binomial() { abaco_binomial(60, 30); return 0; }
 
 fn run_ntheory_benches() {
     println("--- ntheory ---");
@@ -62,8 +65,8 @@ fn run_ntheory_benches() {
     bench_run(b, &_bench_fibonacci, BENCH_ITERS);
     bench_report(b);
 
-    b = bench_new("binomial");
-    bench_run(b, &_bench_binomial, BENCH_ITERS);
+    b = bench_new("abaco_binomial");
+    bench_run(b, &_bench_abaco_binomial, BENCH_ITERS);
     bench_report(b);
 
     return 0;

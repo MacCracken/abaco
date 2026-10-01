@@ -3,7 +3,8 @@
 ## Prerequisites
 
 - The Cyrius toolchain installed at `$CYRIUS_HOME` (default `~/.cyrius`),
-  at the version pinned in `cyrius.cyml` (`[package].cyrius`, currently `6.5.35`)
+  at the version pinned in `cyrius.cyml` (`[package].cyrius` — the only place
+  the pin is written down)
 - `~/.cyrius/bin/cyrius` on `PATH`
 - The vendored stdlib in `lib/` (gitignored) is populated via `cyrius deps`
 
@@ -20,8 +21,8 @@ cyrius build src/main.cyr build/abaco
 # Runnable demo.
 cyrius run programs/basic.cyr
 
-# Syntax check a single file.
-cyrius check src/eval.cyr
+# Check a single file (with the stdlib it resolves through cyrius.cyml).
+cyrius check --with-deps src/eval.cyr
 ```
 
 ## Test
@@ -34,8 +35,9 @@ cyrius test
 cyrius test tests/test_ai.tcyr
 ```
 
-Expected output: 7 files passed, 0 failed, **657 assertions** (or higher).
-Each suite prints its own `N passed, 0 failed (N total)` line.
+Expected output: `7 passed, 0 failed` (one per suite). Each suite prints its
+own `N passed, 0 failed (N total)` line; the current assertion count is in
+[`development/state.md`](development/state.md).
 
 ## Bench
 
@@ -54,44 +56,36 @@ history script and commit the delta.
 ## Fuzz
 
 ```bash
-# All 3 harnesses, 10k iters each.
+# All 4 harnesses, 10k iters each (FUZZ_TIMEOUT seconds per harness, default 600).
 ./fuzz/run.sh
 
-# Higher iter count.
+# Higher iter count (1-999999999; anything else exits 2).
 ./fuzz/run.sh 100000
 
 # Single harness.
 ./build/fuzz_eval 50000
 ./build/fuzz_ntheory 50000
 ./build/fuzz_units 50000
+./build/fuzz_ai 50000
 ```
 
 ## Lint
 
 ```bash
-# Style warnings (snake_case, line length, etc.)
-cyrius lint src/main.cyr
-
-# Per-file.
-cyrius lint src/eval.cyr
+# Style warnings (line length, whitespace, untracked deferrals). Exit status
+# is the warning count with --exit-with-count, which is what CI gates on.
+for f in src/*.cyr; do cyrius lint --exit-with-count "$f" || echo "LINT $f"; done
 ```
 
 Abaco uses `Type_method` PascalCase naming for struct-like types
-(e.g. `Evaluator_eval`). `cyrius lint` flags these as snake_case
-violations — ignore those specific warnings; the convention is
-project-wide and intentional.
+(e.g. `Evaluator_eval`); the convention is project-wide and intentional.
+`src/` is lint-clean, and CI fails on any warning.
 
 ## Docs
 
 ```bash
 # Check doc coverage (per file).
 cyrius doc --check src/core.cyr
-
-# Generate + serve HTML docs.
-cyrius docs --port 8080
-
-# Agent-oriented markdown.
-cyrius docs --agent --port 8080
 
 # Run doctest examples (# >>> / # === comments).
 cyrius doctest src/ntheory.cyr
@@ -111,21 +105,25 @@ cyrius capacity src/main.cyr
 cyrius capacity --check src/main.cyr
 ```
 
-Current headroom: ~3–6% across all tables. We don't need the gate
-yet but the data is useful to watch.
+Most tables are under 2% full; the function-name hash is the busiest at
+roughly half its slots. We don't need the gate yet but the data is useful to
+watch.
 
 ## Release
 
 ```bash
-./scripts/version-bump.sh 1.2.0
+./scripts/version-bump.sh X.Y.Z     # VERSION, CHANGELOG stub, consumer tags
+cyrius distlib                      # regenerate dist/abaco.cyr
 git add -A
-git commit -m "release 1.2.0"
-git tag 1.2.0
+git commit -m "release X.Y.Z"
+git tag X.Y.Z                       # plain semver, no "v", no suffix
 git push origin main --tags
 ```
 
-CI builds `build/abaco` for x86_64 and aarch64 Linux and attaches
-them to the GitHub release.
+The release workflow checks VERSION == cyrius.cyml == tag, runs the CI gate,
+and attaches the source tarball, `dist/abaco.cyr`, the x86_64 Linux smoke
+binary and `SHA256SUMS`. There is no aarch64 artifact (no aarch64 CI lane
+either; see the roadmap).
 
 ## Project structure
 
@@ -137,10 +135,10 @@ abaco/
 │                         # eval, units, ai, main)
 ├── tests/                # *.tcyr — auto-discovered by `cyrius test`
 ├── benches/              # *.bcyr — run by `cyrius bench`
-├── fuzz/                 # fuzz_eval / fuzz_ntheory / fuzz_units
+├── fuzz/                 # fuzz_eval / fuzz_ntheory / fuzz_units / fuzz_ai
 ├── programs/             # runnable demos (basic.cyr)
-├── lib/                  # vendored Cyrius stdlib (managed by
-│                         # `cyrius update`)
+├── lib/                  # vendored Cyrius stdlib (gitignored;
+│                         # `cyrius deps`, checked by cyrius.lock)
 ├── scripts/              # bench-history.sh, version-bump.sh
 ├── docs/                 # this directory
 └── build/                # gitignored — compiled artifacts

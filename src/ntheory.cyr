@@ -6,18 +6,45 @@
 # `mul` + `div` pair on x86-64 is ~1.5× faster than the previous double-and-add
 # binary method on the primitive, and compounds to ~12× on a full
 # Miller–Rabin round.
+#
+# All three operands are u64, as the name says. A negative i64 exponent is an
+# exponent of 2^63 or more, but bayan's loop runs `while (exp > 0)` — signed —
+# so through 2.4.8 mod_pow(3, 0-1, 7) answered 1 instead of 3^(2^64-1) mod 7 = 6
+# (CHANGELOG 2.4.9). Split it: x^e = x^(e - 2^63) * (x^(2^62))^2.
 fn mod_pow(base, exp, modulus) {
-    return bayan_u64_powmod(base, exp, modulus);
+    if (exp >= 0) { return bayan_u64_powmod(base, exp, modulus); }
+    var lo = bayan_u64_powmod(base, exp & ABACO_I64_MAX, modulus);
+    var q = bayan_u64_powmod(base, 4611686018427387904, modulus);   # x^(2^62)
+    return bayan_u64_mulmod(lo, bayan_u64_mulmod(q, q, modulus), modulus);
+}
+
+# One Miller-Rabin round: 1 when witness a proves the odd n composite, where
+# n - 1 = 2^r * d with d odd. A witness >= n proves nothing and is skipped.
+fn _mr_witness(n, d, r, a) {
+    if (a >= n) { return 0; }
+    var x = mod_pow(a, d, n);
+    if (x == 1) { return 0; }
+    if (x == n - 1) { return 0; }
+    var j = 1;
+    while (j < r) {
+        x = mod_pow(x, 2, n);
+        if (x == n - 1) { return 0; }
+        j = j + 1;
+    }
+    return 1;
 }
 
 # Deterministic Miller–Rabin primality test.
 #
-# The witness set {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37} is proven
-# correct for all n < 3.317 × 10^24 (Jaeschke 1993, extended by Sorenson &
-# Webster 2015). That bound comfortably covers the whole i64 range
-# (n < 9.22 × 10^18) so abaco's is_prime is exact — not probabilistic —
+# The witness set {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37} — the first 12
+# primes — is proven correct for all n < 318665857834031151167461 (~3.187e23;
+# Sorenson & Webster 2015, OEIS A014233). That covers all of u64, let alone the
+# i64 range (n < 9.22e18), so abaco's is_prime is exact — not probabilistic —
 # and immune to the "Prime and Prejudice" (CCS 2018) class of attacks on
-# random-witness MR routines.
+# random-witness MR routines. (Through 2.4.8 this comment, docs/sources.md and
+# docs/architecture/004 gave 3.317e24, which is the bound for the first 13.)
+# Every witness is load-bearing: 3825123056546413051 passes bases 2..31 and
+# only 37 catches it (pinned by test_is_prime_pseudoprimes).
 #
 # Do not widen the input beyond i64 without re-selecting witnesses.
 fn is_prime(n) {
@@ -43,48 +70,33 @@ fn is_prime(n) {
         d = d / 2;
         r = r + 1;
     }
-    # Deterministic witnesses for n < 2^64
-    var witnesses = alloc(96);
-    store64(witnesses, 2);
-    store64(witnesses + 8, 3);
-    store64(witnesses + 16, 5);
-    store64(witnesses + 24, 7);
-    store64(witnesses + 32, 11);
-    store64(witnesses + 40, 13);
-    store64(witnesses + 48, 17);
-    store64(witnesses + 56, 19);
-    store64(witnesses + 64, 23);
-    store64(witnesses + 72, 29);
-    store64(witnesses + 80, 31);
-    store64(witnesses + 88, 37);
-    var wi = 0;
-    while (wi < 12) {
-        var a = load64(witnesses + wi * 8);
-        if (a < n) {
-            var x = mod_pow(a, d, n);
-            if (x != 1) {
-                if (x != n - 1) {
-                    var j = 0;
-                    var found = 0;
-                    while (j < r - 1) {
-                        x = mod_pow(x, 2, n);
-                        if (x == n - 1) {
-                            found = 1;
-                            j = r;
-                        }
-                        j = j + 1;
-                    }
-                    if (found == 0) { return 0; }
-                }
-            }
-        }
-        wi = wi + 1;
-    }
+    # Deterministic witnesses for n < 2^64, one round each. Through 2.4.8 the
+    # twelve came from a 96-byte table alloc()ed on EVERY call — the bump
+    # allocator never frees, so 64 MB per million calls (CHANGELOG 2.4.9).
+    if (_mr_witness(n, d, r, 2) == 1) { return 0; }
+    if (_mr_witness(n, d, r, 3) == 1) { return 0; }
+    if (_mr_witness(n, d, r, 5) == 1) { return 0; }
+    if (_mr_witness(n, d, r, 7) == 1) { return 0; }
+    if (_mr_witness(n, d, r, 11) == 1) { return 0; }
+    if (_mr_witness(n, d, r, 13) == 1) { return 0; }
+    if (_mr_witness(n, d, r, 17) == 1) { return 0; }
+    if (_mr_witness(n, d, r, 19) == 1) { return 0; }
+    if (_mr_witness(n, d, r, 23) == 1) { return 0; }
+    if (_mr_witness(n, d, r, 29) == 1) { return 0; }
+    if (_mr_witness(n, d, r, 31) == 1) { return 0; }
+    if (_mr_witness(n, d, r, 37) == 1) { return 0; }
     return 1;
 }
 
-# -- Next prime >= n --
+# -- Smallest prime > n, or 0 when i64 has none --
+# 9223372036854775783 (2^63 - 25) is the largest prime below 2^63, so nothing at
+# or above it has an i64 successor. Through 2.4.8 the scan stepped candidate + 2
+# past i64_MAX, wrapped negative and ran for ~2^62 steps (CHANGELOG 2.4.9). 0 is
+# never a prime, so it cannot be mistaken for an answer.
+var ABACO_LAST_I64_PRIME = 9223372036854775783;
+
 fn next_prime(n) {
+    if (n >= ABACO_LAST_I64_PRIME) { return 0; }
     if (n < 2) { return 2; }
     if (n == 2) { return 3; }
     var candidate = n + 1;
@@ -108,8 +120,32 @@ fn prev_prime(n) {
     return Err(0);
 }
 
+# isqrt(i64_MAX): the largest d whose square fits in i64. An enum, so the loop
+# bounds compare against an immediate rather than load a global each step.
+enum NtheoryBound { ABACO_ISQRT_I64_MAX = 3037000499; }
+
+# floor(sqrt(n)) for n >= 0, exact for every i64. The f64 estimate is within
+# one of the answer; the two loops correct it without ever squaring past
+# ABACO_ISQRT_I64_MAX, so no product overflows.
+fn _isqrt(n) {
+    if (n < 2) { return n; }
+    var r = f64_to(f64_sqrt(f64_from(n)));
+    if (r > ABACO_ISQRT_I64_MAX) { r = ABACO_ISQRT_I64_MAX; }
+    while (r * r > n) { r = r - 1; }
+    while (r < ABACO_ISQRT_I64_MAX && (r + 1) * (r + 1) <= n) { r = r + 1; }
+    return r;
+}
+
 # -- Prime factorization via trial division --
 # Returns a vec of prime factors (sorted, with repetition)
+#
+# The bound is d <= isqrt(n), recomputed only when n shrinks. Through 2.4.8 it
+# was d * d <= n, which overflows i64 once d passes 3037000499 = isqrt(i64_MAX):
+# for a prime in the top ~5.9e9 values below 2^63 the square wrapped negative,
+# the test stayed true, and factor never returned (CHANGELOG 2.4.9). A fixed
+# bound is one compare per step, where `d <= n / d` paid a divide (2x slower)
+# and a guarded `d <= 3037000499 && d * d <= n` still cost ~40%. Same in
+# totient below.
 fn factor(n) {
     var factors = vec_new();
     if (n < 2) { return factors; }
@@ -118,10 +154,14 @@ fn factor(n) {
         n = n / 2;
     }
     var d = 3;
-    while (d * d <= n) {
-        while (n % d == 0) {
-            vec_push(factors, d);
-            n = n / d;
+    var lim = _isqrt(n);
+    while (d <= lim) {
+        if (n % d == 0) {
+            while (n % d == 0) {
+                vec_push(factors, d);
+                n = n / d;
+            }
+            lim = _isqrt(n);
         }
         d = d + 2;
     }
@@ -132,18 +172,26 @@ fn factor(n) {
 }
 
 # -- Euler's totient function --
+# phi(n) for n >= 1; 0 for n <= 0 (through 2.4.8 a negative n came back as
+# itself). Trial division by 2, then odd p only, with the overflow-free bound.
 fn totient(n) {
-    if (n == 0) { return 0; }
+    if (n <= 0) { return 0; }
     var result = n;
-    var p = 2;
-    while (p * p <= n) {
+    if (n % 2 == 0) {
+        while (n % 2 == 0) { n = n / 2; }
+        result = result - result / 2;
+    }
+    var p = 3;
+    var lim = _isqrt(n);
+    while (p <= lim) {
         if (n % p == 0) {
             while (n % p == 0) {
                 n = n / p;
             }
             result = result - result / p;
+            lim = _isqrt(n);
         }
-        p = p + 1;
+        p = p + 2;
     }
     if (n > 1) {
         result = result - result / n;
@@ -151,5 +199,46 @@ fn totient(n) {
     return result;
 }
 
-# fibonacci, binomial — now provided by stdlib math.cyr (Cyrius 4.10.2+).
-# Removed hand-rolled duplicates; callers resolve to the stdlib versions.
+# fibonacci — provided by the stdlib (ganita since the 6.2.x batching).
+
+# -- Binomial coefficient C(n, k) --
+#
+# Ok(C(n, k)) whenever the result fits in i64 — exactly; Err(0) when it does
+# not, or for a negative n or k. k > n is Ok(0).
+#
+# Not ganita's `binomial`, which the evaluator called through 2.4.8: it forms
+# C(n, i) * (n - i) before dividing by i + 1, and that product is C(n, i + 1)
+# * (i + 1), so it refuses any result above i64_MAX / k even when the result
+# fits — C(62, 31) (~4.65e17) is the first central case, C(2^32, 2) another
+# (CHANGELOG 2.4.9). Here the division happens first. C(n, i) * (n - i) =
+# C(n, i + 1) * (i + 1), so with g = gcd(C(n, i), i + 1) the cofactor (i + 1)/g
+# shares nothing with C(n, i)/g and must divide n - i: both quotients are exact,
+# and the only product formed is C(n, i + 1) itself. Overflow is tested on that
+# product, so the answer is exact iff it fits. After the k <= n - k fold the
+# terms only grow, so no intermediate can overflow when the result does not —
+# and the loop stops at the first term that would, within ~34 steps for any n.
+# Knuth, TAOCP Vol. 1 (3rd ed.), §1.2.6 for the recurrence (docs/sources.md).
+fn abaco_binomial(n, k) {
+    if (n < 0 || k < 0) { return Err(0); }
+    if (k > n) { return Ok(0); }
+    if (k > n - k) { k = n - k; }
+    var r = 1;
+    var i = 0;
+    while (i < k) {
+        # Fast path: when C(n, i) * (n - i) fits, multiply first — the division
+        # by i + 1 is exact — and skip the gcd (2.5x slower on every step).
+        if (r <= ABACO_I64_MAX / (n - i)) {
+            r = r * (n - i) / (i + 1);
+            i = i + 1;
+            continue;
+        }
+        var d = i + 1;
+        var g = gcd(r, d);
+        var a = r / g;
+        var f = (n - i) / (d / g);
+        if (a > ABACO_I64_MAX / f) { return Err(0); }
+        r = a * f;
+        i = i + 1;
+    }
+    return Ok(r);
+}
