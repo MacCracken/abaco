@@ -605,3 +605,16 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
       `2026-09-30-f64-tan-missing.md` (fdlibm `s_tan` / `k_tan` on
       `_f64_rem_pio2`; repro exits 6). When it ships, abaco drops its kernel and
       its use of the private `_f64_rem_pio2`
+- [ ] **Upstream shipped — drop the consumer workarounds at the cyrius 6.6.13 pin** (recorded by cyrius
+      6.6.13, 2026-10-02):
+      - ganita 1.2.11 ships `ganita_f64_tan` / `f64_tan` (folded in cyrius 6.6.13): drop abaco's own tan
+        kernel and its use of the private `_f64_rem_pio2` (the item above).
+      - `tls_set_deadline(ctx, abs_ns)` (I8) replaces the per-fetch watchdog thread
+        (`shutdown(SHUT_RD)` + `dup2`), and a CCS flood now fails fast.
+      - An IP-literal host matches iPAddress SANs only (I7): `_ccy_cert_ip_san` can go.
+      - `tls_init_main()` (I3) replaces the `crypto_tls_main_init(); ecdsa_p256_warm(); ecdsa_p384_warm();`
+        pre-warm.
+      - `f64_parse` is correctly rounded (I4): abaco can return to it.
+      - A fatal alert is `TLS_ERR_ALERT`, not EOF (I2 c): `_ccy_tls_err`'s "close_notify — or any alert"
+        comment is now wrong in the good direction.
+      - re-vendor `lib/math.cyr` with `cyrius deps` in the same commit — 6.6.13 made `f64_le` / `f64_ge` / `f64_trunc` compiler builtins (reserved names), and a pre-6.6.13 vendored copy still defines them (`reserved keyword`).
