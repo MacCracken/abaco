@@ -618,3 +618,8 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
       - A fatal alert is `TLS_ERR_ALERT`, not EOF (I2 c): `_ccy_tls_err`'s "close_notify — or any alert"
         comment is now wrong in the good direction.
       - re-vendor `lib/math.cyr` with `cyrius deps` in the same commit — 6.6.13 made `f64_le` / `f64_ge` / `f64_trunc` compiler builtins (reserved names), and a pre-6.6.13 vendored copy still defines them (`reserved keyword`).
+      - ⛔ `tests/test_ccy_tls.tcyr` `_snap` (~585) stores `_xp_alloced`, which sigil deleted at 3.13.6 as dead
+        (folded from cyrius 6.6.13): the test stops compiling at any pin past 6.6.12. In the SAME commit as the
+        pin bump, drop that slot and renumber the stores after it (`SNAP_N` 36 → 35) — x509 parse scratch has had
+        no lazy init since 3.13.6. `_ecs256_inited` / `_ecs384_inited` stay valid: sigil 3.13.8 keeps those names
+        (set when its constant-time engine's init publishes). Recorded by cyrius 6.6.15 (2026-10-02).
