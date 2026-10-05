@@ -623,3 +623,14 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
         pin bump, drop that slot and renumber the stores after it (`SNAP_N` 36 → 35) — x509 parse scratch has had
         no lazy init since 3.13.6. `_ecs256_inited` / `_ecs384_inited` stay valid: sigil 3.13.8 keeps those names
         (set when its constant-time engine's init publishes). Recorded by cyrius 6.6.15 (2026-10-02).
+- [ ] **Upstream shipped — at the cyrius 6.6.16 pin** (recorded by cyrius 6.6.16, 2026-10-05; ⛔ nothing to do
+      until cyrius 6.6.16 is tagged and out):
+      - `_ccy_nodelay` (`src/ai.cyr:1813`) guards its `sys_setsockopt` with `#ifdef CYRIUS_TARGET_LINUX`, citing
+        "agnos has no setsockopt". cyrius 6.6.16 (its N8) defines `sys_setsockopt` on agnos as a -38 (-ENOSYS)
+        decline stub, so the agnos reason is gone. The guard also excludes **macOS**, where `TCP_NODELAY`
+        (6 / 1) is valid and the call works — so the Nagle win this fn measured on Linux (77 → 46 ms) is presumably lost there today (not measured on macOS). If
+        that exclusion was only for agnos, the call can run unguarded (Windows and agnos return -38, ignored as
+        best-effort). Update the comment either way.
+      - Information only: from 6.6.16 a plain `lib/net.cyr` socket write never raises SIGPIPE (Linux `sendto`
+        with `MSG_NOSIGNAL`, macOS `SO_NOSIGPIPE`; cyrius CVE-74), matching what 6.6.14 already did for TLS
+        record writes. No change needed.
