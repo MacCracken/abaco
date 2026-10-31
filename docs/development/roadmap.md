@@ -578,6 +578,38 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
 - [x] `_ccy_load_body` checks `bayan_json_parse` for 0 (bayan 1.5.10)
 - [x] 2300 → 2325 asserts, x86_64 and aarch64 (qemu)
 
+### 2.5.0 — Cyrius 6.7.9; the upstream-fixed workarounds removed ✅ (2026-10-31)
+
+- [x] Pin 6.6.20 → 6.7.9, stdlib re-vendored (bayan 1.5.13, ganita 1.2.15;
+      sigil 3.13.11); the same 33 files in `cyrius.lock`, the same 12 sidecar
+      leaves. The 6.7.0–6.7.9 CHANGELOG read in full: no new keyword or
+      reserved name collides, and no behaviour change reaches abaco
+- [x] 97,944-record differential: 0 differ 6.6.20 → 6.7.9, and 0 between the
+      2.4.13 and 2.5.0 sources
+- [x] `tan` → ganita's `f64_tan` (bit-identical on 1,569 records; the kernels
+      cost the same); `_eval_tan` / `_eval_k_tan` gone
+- [x] HTTPS deadline → `tls_set_deadline`, re-armed per step at min(10 s, the
+      fetch's 30 s); the connect through `net_connect_nb`. No watchdog thread,
+      and the bound now holds on macOS and Windows. The suite fails with the
+      deadline disarmed
+- [x] IP-literal SAN check → lib/tls.cyr's own (`_ccy_cert_ip_san`,
+      `_ccy_der_tlv`, `_ccy_ip_host_ok` gone; `test_ccy_tls` still refuses
+      `DNS:127.0.0.1` / `DNS:*.0.0.1`)
+- [x] Warm-up → `tls_init_main()`; `abaco_tls_init` also refuses the libssl
+      backend now
+- [x] `TCP_NODELAY` → `sock_set_nodelay` on every target
+- [x] CA-file cap → abaco's own `CCY_TLS_CA_MAX_CERTS` (lib/tls.cyr's
+      `TLS_CA_MAX_ROOTS` bounds nothing since 6.6.13 and may be retired)
+- [x] The stale comments 6.6.13–6.6.20 left (item below)
+- [x] `f64_parse` evaluated and **not** adopted: `f64_parse_n` is
+      bit-identical to `parse_number` on 200,012 literals but ~1.4× slower on
+      short ones (88 vs 63 ns), and would raise the bundle's floor to 6.7.9
+- [x] Floors checked by compiling the bundle in scratch consumers: ≥ 6.6.13
+      plain (6.6.12 fails on `f64_tan`), ≥ 6.7.9 with `-D ABACO_TLS` (6.7.8
+      fails on `sock_set_nodelay`)
+- [x] 2325 → 2288 asserts (the removed code's tests went with it), x86_64 and
+      aarch64 (qemu); benches neutral in an interleaved A/B (median 0.995)
+
 ### Still open
 
 > The two residuals the 2.3.5 fix audit left open were closed in 2.4.0.
@@ -588,8 +620,11 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
 > [`../guides/consuming-abaco.md`](../guides/consuming-abaco.md).
 
 - [ ] DSP expansion as consumer needs surface (filters, additional windows)
-- [ ] **Upstream (cyrius TLS)** — filed in cyrius's `docs/development/issues/`,
-      each with a repro; each fix lets abaco drop a guard it carries since 2.4.12:
+- [x] **Upstream (cyrius TLS)** — all five shipped in Cyrius 6.6.13–6.6.14; abaco
+      dropped the deadline, IP-check and warm-up guards in 2.5.0 and keeps the
+      libssl refusal (it drives the native backend only), the main-thread rule
+      (item below) and the strict `Content-Length` rule. Were filed in
+      cyrius's `docs/development/issues/`, each with a repro:
       `2026-09-30-tls-libssl-backend-no-hostname-verification.md` (High; the
       libssl refusal), `2026-09-30-tls-first-use-thread-race.md` (the
       main-thread `abaco_tls_init()` requirement),
@@ -598,9 +633,15 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
       `2026-09-30-tls-client-memory-and-alert-gaps.md` (per-fetch heap; a fatal
       alert reads as EOF, hence the strict `Content-Length` rule)
 - [ ] HTTPS residuals, if a consumer needs them: TLS 1.2-only servers (a 1.3
-      then 1.2 fallback), a deadline off Linux (no futex there), IPv6, and a
-      test for the IP check refusing a leaf it cannot read (> 16 KB; the code
-      refuses it, no fixture serves one)
+      then 1.2 fallback) and IPv6. (A deadline off Linux came with
+      `tls_set_deadline` in 2.5.0; the > 16 KB leaf test went with abaco's IP
+      check.)
+- [ ] **`abaco_tls_init()`'s main-thread rule could relax.** sigil 3.13.6
+      (Cyrius 6.6.13) made every lazy init race-free and `tls_init_main()` is
+      safe from any thread, so the rule (and the fetch's refusal until init) is
+      now policy, not a crash guard. Relaxing it only accepts calls that are
+      refused today; do it when a consumer asks, with a cold-process test of
+      concurrent first fetches and no init
 - [x] **Upstream (ganita)** — shipped in ganita 1.2.10–1.2.14 (Cyrius 6.6.13–6.6.20),
       re-pinned and retested at 2.4.13 (`test_ganita_accuracy`). Was: filed 2026-09-30 in ganita's
       `docs/development/issues/`, each with a self-proving repro and a tested fix:
@@ -620,13 +661,14 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
       14 ms under qemu) and `2026-09-30-json-parse-flat-misassociates-values.md`
       (flat parser hands keys the wrong values; abaco's `_ccy_load_body` guards
       stay either way)
-- [ ] **Upstream (ganita), `tan`** — filed 2026-09-30 as
+- [x] **Upstream (ganita), `tan`** — shipped in ganita 1.2.11 (Cyrius 6.6.13);
+      abaco's kernel dropped in 2.5.0. Was filed 2026-09-30 as
       `2026-09-30-f64-tan-missing.md` (fdlibm `s_tan` / `k_tan` on
       `_f64_rem_pio2`; repro exits 6). When it ships, abaco drops its kernel and
       its use of the private `_f64_rem_pio2`
-- [ ] **Upstream shipped — drop the consumer workarounds** (recorded by cyrius 6.6.13, 2026-10-02; the pin is
-      6.6.20 since 2.4.13, so each can go now — one change at a time, each with its own A/B. 2.4.13 did only
-      the ⛔ items):
+- [x] **Upstream shipped — drop the consumer workarounds** — ✅ 2.5.0, one change at a time, each with its own
+      A/B; `f64_parse` evaluated and kept as `parse_number` (2.5.0 above). (Recorded by cyrius 6.6.13,
+      2026-10-02; 2.4.13 did only the ⛔ items):
       - ganita 1.2.11 ships `ganita_f64_tan` / `f64_tan` (folded in cyrius 6.6.13): drop abaco's own tan
         kernel and its use of the private `_f64_rem_pio2` (the item above).
       - `tls_set_deadline(ctx, abs_ns)` (I8) replaces the per-fetch watchdog thread
@@ -644,8 +686,8 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
         pin bump, drop that slot and renumber the stores after it (`SNAP_N` 36 → 35) — x509 parse scratch has had
         no lazy init since 3.13.6. `_ecs256_inited` / `_ecs384_inited` stay valid: sigil 3.13.8 keeps those names
         (set when its constant-time engine's init publishes). Recorded by cyrius 6.6.15 (2026-10-02).
-- [ ] **Upstream shipped — at the cyrius 6.6.16 pin** (recorded by cyrius 6.6.16, 2026-10-05; actionable since
-      2.4.13 pinned 6.6.20):
+- [x] **Upstream shipped — at the cyrius 6.6.16 pin** — ✅ 2.5.0: `sock_set_nodelay` (Cyrius 6.7.9) replaces
+      `_ccy_nodelay`, unguarded, on every target (recorded by cyrius 6.6.16, 2026-10-05):
       - `_ccy_nodelay` (`src/ai.cyr:1818`) guards its `sys_setsockopt` with `#ifdef CYRIUS_TARGET_LINUX`, citing
         "agnos has no setsockopt". cyrius 6.6.16 (its N8) defines `sys_setsockopt` on agnos as a -38 (-ENOSYS)
         decline stub, so the agnos reason is gone. The guard also excludes **macOS**, where `TCP_NODELAY`
@@ -655,7 +697,14 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
       - Information only: from 6.6.16 a plain `lib/net.cyr` socket write never raises SIGPIPE (Linux `sendto`
         with `MSG_NOSIGNAL`, macOS `SO_NOSIGPIPE`; cyrius CVE-74), matching what 6.6.14 already did for TLS
         record writes. No change needed.
-- [ ] **Upstream (bayan), to file — `bayan_u64_powmod` is ~28 % slower since bayan 1.5.10.** To take
+- [ ] **At the next pin bump past 6.7.9, re-check two shapes upstream has filed but not fixed** (found
+      reading the 6.7.x CHANGELOG for 2.5.0; both compile and pass today): a `: stack` pair passed as a
+      plain argument keeps its tag (6.7.7) — `src/ai.cyr:297-298` call `is_ok(_nl_parse_f64(...))`, which is
+      correct only because `is_ok` takes the tag, so a repair that refuses the shape breaks the build; and a
+      multi-value receive that reads a register the callee never wrote, refused from 6.7.11 — abaco's
+      three-value fns (`: (f64, f64, i64)`, `src/eval.cyr`) return three values on every path.
+- [ ] **Upstream (bayan), to file — `bayan_u64_powmod` is ~28 % slower since bayan 1.5.10** (still so in
+      bayan 1.5.13, Cyrius 6.7.9). To take
       exponents ≥ 2^63 it shifts the exponent with a call (`_u128_lshr64(exp, 1)`) on every bit where it used
       `exp >> 1`. Measured on x86_64 in isolation: 300,000 × `powmod(b, 1e9+6, 1e9+7)` 104 → 133 ms; in the
       trail, `is_prime_*` / `next_prime` / `factor_large` +11–30 %. A non-negative exponent shifts the same
@@ -663,7 +712,7 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
       passes a negative exponent: it splits one itself, a split it keeps while consumers' pins predate 1.5.10.
       (`fibonacci` / `totient` / `sanitize_4096` also read slower in the 2.4.13 A/B; the same code timed in
       isolation is equal on both pins, so that is layout.)
-- [ ] **Comments that 6.6.13–6.6.20 made stale** (found reading the cyrius CHANGELOG for 2.4.13; none
+- [x] **Comments that 6.6.13–6.6.20 made stale** — ✅ 2.5.0 (found reading the cyrius CHANGELOG for 2.4.13; none
       changes behaviour): `src/ai.cyr` — the CA-file note that one malformed block fails the bundle (6.6.13
       installs the good roots), the 300-certificate cap credited to `TLS_CA_MAX_ROOTS` (no longer bounds a
       bundle in 6.6.20; the cap is abaco's own rule now), the per-fetch heap notes, the SIGPIPE rationale

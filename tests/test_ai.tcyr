@@ -1108,134 +1108,11 @@ fn test_https_without_tls() {
 }
 
 # ================================================================
-# 2.4.12 review: the IP-literal SAN check and the CA bundle count — pure, so
-# they run here; the fetches that use them are tests/test_ccy_tls.tcyr.
+# 2.4.12 review: the CA bundle count — pure, so it runs here; the fetches that
+# use it are tests/test_ccy_tls.tcyr. (The IP-literal SAN check that sat here
+# went in 2.5.0: lib/tls.cyr matches an IP literal against iPAddress entries
+# only since Cyrius 6.6.13, and test_ccy_tls pins that end to end.)
 # ================================================================
-
-# Hex digits (no separators) into out; returns the byte count.
-fn _unhex(hex, out) {
-    var n = 0;
-    var i = 0;
-    while (load8(hex + i) != 0) {
-        var v = 0;
-        var k = 0;
-        while (k < 2) {
-            var c = load8(hex + i + k);
-            if (c >= 97) { c = c - 87; }
-            elif (c >= 65) { c = c - 55; }
-            else { c = c - 48; }
-            v = v * 16 + c;
-            k = k + 1;
-        }
-        store8(out + n, v);
-        n = n + 1;
-        i = i + 2;
-    }
-    return n;
-}
-
-# _ccy_cert_ip_san against 127.0.0.1 on the DER spelled by hex `a` then `b`
-# (two parts so a long one fits on a line).
-fn _ipsan_hex(a, b) {
-    var d = alloc(256);
-    var n = _unhex(a, d);
-    n = n + _unhex(b, d + n);
-    var ip[8];
-    store64(&ip, 0x0100007F);
-    return _ccy_cert_ip_san(d, n, &ip);
-}
-
-# _ccy_cert_ip_san on a fixture certificate against a.b.c.d.
-fn _ipsan_file(path, a, b, c, d) {
-    var buf = alloc(4096);
-    var n = file_read_all(path, buf, 4096);
-    if (n <= 0) { return 0 - 1; }
-    var ip[8];
-    store64(&ip, a + b * 256 + c * 65536 + d * 16777216);
-    return _ccy_cert_ip_san(buf, n, &ip);
-}
-
-fn test_der_tlv() {
-    var b = alloc(300);
-    var t[16];
-    _unhex("0403616263", b);
-    assert_eq(_ccy_der_tlv(b, 5, 0, &t), 4, "short form: tag");
-    assert_eq(load64(&t), 2, "short form: content offset");
-    assert_eq(load64(&t + 8), 3, "short form: length");
-    assert_eq(_ccy_der_tlv(b, 4, 0, &t), 0 - 1, "content past end refused");
-    assert_eq(_ccy_der_tlv(b, 1, 0, &t), 0 - 1, "no length byte");
-    assert_eq(_ccy_der_tlv(b, 5, 5, &t), 0 - 1, "at end");
-    _unhex("308103616263", b);
-    assert_eq(_ccy_der_tlv(b, 6, 0, &t), 48, "0x81 long form");
-    assert_eq(load64(&t), 3, "0x81: content after 3 header bytes");
-    _unhex("30820003616263", b);
-    assert_eq(_ccy_der_tlv(b, 7, 0, &t), 48, "0x82 long form, not minimal: accepted");
-    assert_eq(load64(&t + 8), 3, "0x82: length");
-    _unhex("3083000003616263", b);
-    assert_eq(_ccy_der_tlv(b, 8, 0, &t), 48, "0x83 long form");
-    _unhex("308400000003616263", b);
-    assert_eq(_ccy_der_tlv(b, 9, 0, &t), 0 - 1, "0x84 refused");
-    _unhex("3080616263", b);
-    assert_eq(_ccy_der_tlv(b, 5, 0, &t), 0 - 1, "indefinite length refused");
-    _unhex("1F0100", b);
-    assert_eq(_ccy_der_tlv(b, 3, 0, &t), 0 - 1, "high tag number refused");
-    _unhex("3082FFFF00", b);
-    assert_eq(_ccy_der_tlv(b, 5, 0, &t), 0 - 1, "declared length past end refused");
-    return 0;
-}
-
-fn test_cert_ip_san() {
-    # Built in DER by hand: Certificate > tbsCertificate > [3] > SEQUENCE OF
-    # Extension > { 2.5.29.17, [critical,] OCTET STRING > GeneralNames }.
-    assert_eq(_ipsan_hex("301A3018A316301430120603551D11", "0101FF0408300687047F000001"), 1,
-      "critical SAN with the iPAddress");
-    assert_eq(_ipsan_hex("30173015A3133011300F0603551D11", "0408300687047F000001"), 1, "SAN, not critical");
-    assert_eq(_ipsan_hex("30173015A3133011300F0603551D11", "0408300687047F000002"), 0, "another address");
-    assert_eq(_ipsan_hex("30173015A3133011300F0603551D12", "0408300687047F000001"), 0,
-      "issuerAltName is not the subject's");
-    assert_eq(_ipsan_hex("30173015A3133011300F0603551D11", "0408300682047F000001"), 0,
-      "the same 4 bytes as a dNSName do not count");
-    assert_eq(_ipsan_hex("30173015A3133011300F0603551D11", "04083006A7047F000001"), 0,
-      "a constructed [7] is not an iPAddress");
-    assert_eq(_ipsan_hex("30173015A2133011300F0603551D11", "0408300687047F000001"), 0,
-      "extensions under [2], not [3]: none");
-    assert_eq(_ipsan_hex("302D302BA329302730140603551D11040D300B8209612E6578616D706C65",
-        "300F0603551D110408300687047F000001"), 0, "only the first SAN extension counts");
-    assert_eq(_ipsan_hex("3081173015A3133011300F0603551D11", "0408300687047F000001"), 1, "long-form outer length");
-    assert_eq(_ipsan_hex("302C302AA328302630240603551D11041D301B871000000000000000000000",
-        "00000000000082017887047F000001"), 1, "an IPv6 entry, a DNS entry, then the IPv4 one");
-    assert_eq(_ipsan_hex("302D302BA00302010202020102A320301E300B0603551D0F040403020780",
-        "300F0603551D110408300687047F000001"), 1, "version, serial and a key-usage extension first");
-    assert_eq(_ipsan_hex("30173015A3133011300F0603551D11", "0408300787047F000001"), 0,
-      "GeneralNames longer than its OCTET STRING: refused");
-    # The fixtures (scripts/gen-tls-fixtures.sh).
-    assert_eq(_ipsan_file("tests/fixtures/tls/server-cert.der", 127, 0, 0, 1), 1,
-      "server-cert: IP:127.0.0.1 listed");
-    assert_eq(_ipsan_file("tests/fixtures/tls/p384-cert.der", 127, 0, 0, 1), 1, "p384-cert: IP:127.0.0.1 listed");
-    assert_eq(_ipsan_file("tests/fixtures/tls/server-cert.der", 127, 0, 0, 2), 0, "server-cert: not 127.0.0.2");
-    assert_eq(_ipsan_file("tests/fixtures/tls/dns-ip-cert.der", 127, 0, 0, 1), 0,
-      "DNS:127.0.0.1 is not an iPAddress (RFC 9525 §6.3)");
-    assert_eq(_ipsan_file("tests/fixtures/tls/wild-ip-cert.der", 127, 0, 0, 1), 0, "DNS:*.0.0.1 is not either");
-    assert_eq(_ipsan_file("tests/fixtures/tls/wrong-name-cert.der", 127, 0, 0, 1), 0, "DNS:abaco.invalid: no");
-    # Every truncation of a matching certificate is refused, and bytes past
-    # its end never change the verdict.
-    var buf = alloc(4200);
-    var n = file_read_all("tests/fixtures/tls/server-cert.der", buf, 4096);
-    assert(n > 100, "server-cert read");
-    var ip[8];
-    store64(&ip, 0x0100007F);
-    var cut = 0;
-    var bad = 0;
-    while (cut < n) {
-        if (_ccy_cert_ip_san(buf, cut, &ip) != 0) { bad = bad + 1; }
-        cut = cut + 1;
-    }
-    assert_eq(bad, 0, "no truncation of server-cert matches");
-    memset(buf + n, 135, 64);
-    assert_eq(_ccy_cert_ip_san(buf, n, &ip), 1, "trailing bytes ignored");
-    assert_eq(_ccy_cert_ip_san(0, n, &ip), 0, "null DER");
-    return 0;
-}
 
 fn test_pem_cert_count() {
     var m = "-----BEGIN CERTIFICATE-----";
@@ -1304,8 +1181,6 @@ fn main() {
     test_https_request();
     test_http_split();
     test_https_without_tls();
-    test_der_tlv();
-    test_cert_ip_san();
     test_pem_cert_count();
     # Propagate failure to the process exit code. assert_summary() RETURNS
     # _assert_fail; discarding it and returning 0 made a red suite exit 0, and

@@ -375,7 +375,8 @@ source. No magic numbers.
     exact in f64, so a single multiplication is provably correctly rounded and
     no compensation is needed.
   - IEEE 754-2019 §3.3 (the exactly-representable decimal range).
-- **tan (`_eval_tan`, 2.4.10)** — fdlibm 5.3 `s_tan.c` + `k_tan.c` (FreeBSD
+- **tan (stdlib `f64_tan`, ganita 1.2.11; abaco's own `_eval_tan` 2.4.10–2.4.13)** —
+  fdlibm 5.3 `s_tan.c` + `k_tan.c` (FreeBSD
   msun): Cody–Waite / Payne–Hanek reduction by the stdlib's own fdlibm port
   `_f64_rem_pio2` (`lib/math.cyr`), then a 13-term odd minimax polynomial on
   [−π/4, π/4], folding |x| ≥ 0.6744 onto π/4 − x, and −1/tan for odd quadrants
@@ -472,36 +473,33 @@ source. No magic numbers.
   - RFC 9525 (2023), *Service Identity in TLS* (obsoletes RFC 6125) — the
     server's identity is the requested host, matched against the
     certificate's DNS-ID (dNSName) or IP-ID (iPAddress) subjectAltName;
-    the native backend enforces it, libssl's (Cyrius 6.6.12) does not, which
-    is why abaco refuses that backend. §6.3 (RFC 6125 §6.2.1 before it): an
-    IP-address reference identity matches an iPAddress entry only — never a
-    dNSName, and a wildcard never matches an IP. Cyrius 6.6.12's native
-    `_tn_cert_san_match` also tries an IP-literal host against every dNSName,
-    so `_ccy_cert_ip_san` re-checks the verified leaf for an IPv4 literal
-    (cyrius issue `2026-10-01-tls-ip-literal-dnsname.md`).
-  - RFC 5280 §4.1 (Certificate, TBSCertificate, `extensions [3]`) and
-    §4.2.1.6 (SubjectAltName: `GeneralNames`, `iPAddress [7] OCTET STRING`
-    of 4 octets for IPv4, in network byte order) — the path
-    `_ccy_cert_ip_san` walks.
-  - ITU-T X.690 (02/2021), *ASN.1 encoding rules: BER, CER and DER* — §8.1.2
-    (identifier octets; tag number 31 = the high-tag form, which the walk
-    refuses), §8.1.3 (definite length: short form, or 0x80 + N length
-    octets; 0x80 alone is BER's indefinite form), §10.1 (DER requires the
-    minimal length form; the walk, like sigil's `der_walk`, accepts a longer
-    one, since it reads a certificate the chain check has already accepted).
+    the native backend enforces it (libssl's did not through Cyrius 6.6.12,
+    which is why abaco first refused that backend). §6.3 (RFC 6125 §6.2.1
+    before it): an IP-address reference identity matches an iPAddress entry
+    only — never a dNSName, and a wildcard never matches an IP. Through
+    Cyrius 6.6.12 the native `_tn_cert_san_match` also tried an IP-literal
+    host against every dNSName, so abaco 2.4.12–2.4.13 re-checked the
+    verified leaf for an IPv4 literal itself (`_ccy_cert_ip_san`, a DER walk
+    of RFC 5280 §4.1 / §4.2.1.6 under X.690 §8.1); from 6.6.13 lib/tls.cyr
+    holds to §6.3 and 2.5.0 dropped the walk (cyrius issue
+    `2026-10-01-tls-ip-literal-dnsname.md`).
   - RFC 8446 §5: a TLS 1.3 peer may receive an unprotected
     ChangeCipherSpec only between the first ClientHello and the peer's
-    Finished; otherwise it MUST abort (`unexpected_message`). Cyrius 6.6.12's
-    `_tn_sock_read_record_skip_ccs` skips any number of them, in the
-    handshake and after it, and its reads have no deadline — so abaco bounds
-    the whole fetch (30 s; cyrius issue `2026-10-01-tls-native-no-deadline.md`).
-  - The deadline's mechanics. futex(2): `FUTEX_WAIT` with a relative timeout
-    (CLOCK_MONOTONIC), `FUTEX_WAKE`. shutdown(2) (POSIX.1-2017): `SHUT_RD`
-    wakes a blocked read, which then returns end of stream; Linux still
-    returns data already queued and discards what arrives after (measured on
-    7.2: ~128 KB of a flood read out, then 0), and a write after `SHUT_WR`
-    raises SIGPIPE — hence `SHUT_RD`, then dup2(2) over the descriptor with
-    `/dev/null`, so every later read is end of stream at once.
+    Finished; otherwise it MUST abort (`unexpected_message`). Through Cyrius
+    6.6.12 `_tn_sock_read_record_skip_ccs` skipped any number of them, in the
+    handshake and after it, and its reads had no deadline; from 6.6.13 one
+    out of place is `TLS_ERR_PROTOCOL`. abaco bounds every step at 10 s and
+    the whole fetch at 30 s (cyrius issue
+    `2026-10-01-tls-native-no-deadline.md`).
+  - The deadline's mechanics. From 2.5.0, lib/tls.cyr's `tls_set_deadline`
+    (Cyrius 6.6.13): an absolute deadline on CLOCK_MONOTONIC, honoured by
+    waiting for the socket with the time left — poll(2), WSAPoll on Windows
+    — before every read and write; abaco re-arms it before each step at
+    min(now + 10 s, the fetch's deadline). The connect is a non-blocking
+    connect(2) polled for writability (`net_connect_nb`). Through 2.4.13 a
+    watchdog thread per fetch waited on futex(2) and, at the deadline, shut
+    the socket's read side (shutdown(2) `SHUT_RD`) and dup2(2)'d `/dev/null`
+    over it.
   - RFC 6066 (2011), *TLS Extensions*, §3 (Server Name Indication, set from
     the host).
   - RFC 5280 (2008), *Internet X.509 PKI Certificate and CRL Profile*, §6
@@ -524,14 +522,16 @@ source. No magic numbers.
   - RFC 6761 (2013), *Special-Use Domain Names*, §6.3 (`.localhost` resolves
     to loopback — a test host name not in the fixture SAN) and §6.4
     (`.invalid` — the fixture certificate issued for the wrong name).
-  - Why Content-Length is required: lib/tls.cyr's native read returns 0 for
-    any alert, fatal or `close_notify` alike, so end-of-stream cannot vouch for
-    a complete body (cyrius issue
-    `2026-09-30-tls-client-memory-and-alert-gaps.md`, (c)).
+  - Why Content-Length is required: through Cyrius 6.6.12 lib/tls.cyr's
+    native read returned 0 for any alert, fatal or `close_notify` alike, so
+    end-of-stream could not vouch for a complete body (cyrius issue
+    `2026-09-30-tls-client-memory-and-alert-gaps.md`, (c); from 6.6.13 a
+    fatal alert is `TLS_ERR_ALERT`). The rule stays: it is what proves the
+    body whole.
   - Why `abaco_tls_init()`: cyrius issue
     `2026-09-30-tls-first-use-thread-race.md` (sigil's check-then-set table
-    builders, and sigil ADR 0007's main-thread prewarm contract for
-    `ecdsa_p256_warm` / `ecdsa_p384_warm`).
+    builders through 3.13.5, and sigil ADR 0007's main-thread prewarm
+    contract). From 2.5.0 the warm is lib/tls.cyr's `tls_init_main()`.
 
 ## Constants
 

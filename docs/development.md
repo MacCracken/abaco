@@ -44,7 +44,7 @@ top) forks its own TLS servers, and raw TCP servers that stall or misbehave
 mid-handshake, on ephemeral 127.0.0.1 ports — nothing leaves loopback, and
 each server exits on its own after 240 s idle (it is killed at the end of a
 normal run). The stall cases run in forked children under a 1.5–4 s deadline
-and the silent-server case waits out the 10 s read timeout, all alongside the
+and the silent-server case waits out the 10 s step bound, all alongside the
 rest, so the suite takes ~12 s (~3 min under qemu). Its certificates are
 committed under `tests/fixtures/tls/`; `scripts/gen-tls-fixtures.sh`
 regenerates them (OpenSSL ≥ 3.4). `tests/test_ccy_tls_libssl.tcyr` builds the

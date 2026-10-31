@@ -41,14 +41,9 @@
 #     CR/LF or control byte in the head), its body ends at len and starts at
 #     the head's end, every truncation and every extra byte is refused, and its
 #     verdict never depends on a byte past len.
-#   - 2.4.12 review: _ccy_cert_ip_san finds the address exactly when the
-#     generated certificate's FIRST subjectAltName lists it as a 4-byte
-#     primitive [7] iPAddress — never as a dNSName, a constructed [7], a
-#     16-byte entry, a second SAN or under [2] — whatever the length forms and
-#     the extensions around it; every truncation is refused; its verdict never
-#     depends on a byte past len; mutated and raw bytes never crash it.
-#     _ccy_pem_cert_count counts exactly the BEGIN CERTIFICATE markers placed,
-#     and on every prefix exactly those that end inside it.
+#   - 2.4.12 review: _ccy_pem_cert_count counts exactly the BEGIN
+#     CERTIFICATE markers placed, and on every prefix exactly those that end
+#     inside it.
 
 include "lib/args.cyr"
 
@@ -869,189 +864,10 @@ fn _fz_check_http_split() {
 }
 
 # ================================================================
-# 2.4.12 review: _ccy_cert_ip_san (the IP-literal SAN check) and
-# _ccy_pem_cert_count (the CA bundle bound). The generator builds DER whose
-# answer it knows by construction.
+# 2.4.12 review: _ccy_pem_cert_count (the CA bundle bound). (The IP-literal
+# SAN check fuzzed here went in 2.5.0, with the function: lib/tls.cyr matches
+# an IP literal against iPAddress entries only since Cyrius 6.6.13.)
 # ================================================================
-
-# Append the TLV (tag, c[0..n)) at buf+pos; the length in short form or, at
-# random, in a long one of 1..3 bytes (non-minimal ones too: the walker, like
-# sigil's der_walk, accepts them). Returns the new pos.
-fn _fz_tlv(buf, pos, tag, c, n) {
-    store8(buf + pos, tag);
-    var p = pos + 1;
-    var nb = 0;                         # long-form length bytes; 0 = short form
-    var k = _fz_v(10);
-    if (n < 128 && k >= 7) { nb = k - 6; }
-    if (n >= 128) { nb = 1 + _fz_v(3); }
-    if (n >= 256 && nb == 1) { nb = 2; }
-    if (nb == 0) {
-        store8(buf + p, n);
-        p = p + 1;
-    } else {
-        store8(buf + p, 128 + nb);
-        var i = nb;
-        while (i > 0) {
-            store8(buf + p + i, (n >> ((nb - i) * 8)) & 255);
-            i = i - 1;
-        }
-        p = p + 1 + nb;
-    }
-    memcpy(buf + p, c, n);
-    return p + n;
-}
-
-# n random bytes at buf.
-fn _fz_fill(buf, n) {
-    var i = 0;
-    while (i < n) { store8(buf + i, _fz_v(256)); i = i + 1; }
-    return n;
-}
-
-# One GeneralName at g+pos (returns the new pos); exp[0] |= 1 when it is the
-# target address as a primitive 4-byte [7].
-fn _fz_gn(g, pos, ip, exp) {
-    var t = alloc(64);
-    var k = _fz_v(8);
-    if (k == 0) { return _fz_tlv(g, pos, 130, "rates.example", 13); }       # dNSName
-    if (k == 1) { store64(exp, 1); return _fz_tlv(g, pos, 135, ip, 4); }    # the address
-    if (k == 2) {
-        _fz_fill(t, 4);
-        if (memeq(t, ip, 4) == 1) { store8(t, load8(t) ^ 1); }
-        return _fz_tlv(g, pos, 135, t, 4);                                  # another one
-    }
-    if (k == 3) {
-        _fz_fill(t, 16);
-        if (_fz_v(2) == 0) { memcpy(t, ip, 4); }
-        return _fz_tlv(g, pos, 135, t, 16);                                 # IPv6
-    }
-    if (k == 4) { return _fz_tlv(g, pos, 130, ip, 4); }                    # its bytes as a dNSName
-    if (k == 5) { return _fz_tlv(g, pos, 167, ip, 4); }                    # a constructed [7]
-    if (k == 6) { return _fz_tlv(g, pos, 129, "a@b.example", 11); }        # rfc822Name
-    var dn = alloc(64);
-    var dl = _fz_tlv(dn, 0, 48, ip, 4);
-    return _fz_tlv(g, pos, 164, dn, dl);                                    # directoryName
-}
-
-# An Extension at buf+pos: the SAN (san == 1) over a GeneralNames list built
-# by _fz_gn, or another extension. Returns the new pos.
-fn _fz_ext(buf, pos, san, ip, exp) {
-    var e = alloc(1600);
-    var g = alloc(1200);
-    var oid = alloc(8);
-    store8(oid, 85);
-    store8(oid + 1, 29);
-    store8(oid + 2, 17);
-    if (san == 0) {
-        var other = _fz_v(4);
-        store8(oid + 2, 15);                                                # keyUsage
-        if (other == 1) { store8(oid + 2, 18); }                            # issuerAltName
-        if (other == 2) { store8(oid + 2, 19); }                            # basicConstraints
-        if (other == 3) { store8(oid + 2, 37); }                            # extKeyUsage
-    }
-    var ep = _fz_tlv(e, 0, 6, oid, 3);
-    if (_fz_v(3) == 0) { ep = _fz_tlv(e, ep, 1, "\xFF", 1); }               # critical
-    var gp = 0;
-    if (san == 1) {
-        var ng = _fz_v(7);
-        var i = 0;
-        while (i < ng) { gp = _fz_gn(g, gp, ip, exp); i = i + 1; }
-        var seq = alloc(1300);
-        var sl = _fz_tlv(seq, 0, 48, g, gp);
-        ep = _fz_tlv(e, ep, 4, seq, sl);
-    } else {
-        var junk = alloc(16);
-        ep = _fz_tlv(e, ep, 4, junk, _fz_fill(junk, _fz_v(12)));
-    }
-    return _fz_tlv(buf, pos, 48, e, ep);
-}
-
-# A certificate into d; returns its length, with exp[0] = 1 exactly when its
-# first SAN lists `ip` as a 4-byte primitive [7] under [3].
-fn _fz_cert(d, ip, exp) {
-    store64(exp, 0);
-    var x = alloc(6000);
-    var xp = 0;
-    var next = _fz_v(5);
-    var sanat = _fz_v(next + 1);       # == next: no SAN at all
-    var i = 0;
-    var first = alloc(8);
-    var later = alloc(8);
-    store64(first, 0);
-    store64(later, 0);
-    while (i < next) {
-        if (i == sanat) { xp = _fz_ext(x, xp, 1, ip, first); }
-        elif (i > sanat && _fz_v(4) == 0) { xp = _fz_ext(x, xp, 1, ip, later); }   # a second SAN
-        else { xp = _fz_ext(x, xp, 0, ip, later); }
-        i = i + 1;
-    }
-    var xs = alloc(6100);
-    var xsl = _fz_tlv(xs, 0, 48, x, xp);
-    var tbs = alloc(6400);
-    var tp = 0;
-    var nf = _fz_v(5);
-    var f = 0;
-    var fc = alloc(32);
-    while (f < nf) {
-        var ft = 2;
-        var fk = _fz_v(6);
-        if (fk == 1) { ft = 48; }
-        if (fk == 2) { ft = 49; }
-        if (fk == 3) { ft = 160; }
-        if (fk == 4) { ft = 161; }
-        if (fk == 5) { ft = 12; }
-        tp = _fz_tlv(tbs, tp, ft, fc, _fz_fill(fc, _fz_v(20)));
-        f = f + 1;
-    }
-    var wrap = 163;
-    var wk = _fz_v(12);
-    if (wk == 0) { wrap = 162; }       # [2]: not the extensions
-    if (wk != 1) { tp = _fz_tlv(tbs, tp, wrap, xs, xsl); }   # wk == 1: no extensions
-    if (wrap == 163 && wk != 1 && sanat < next) { store64(exp, load64(first)); }
-    var body = alloc(6600);
-    var bp = _fz_tlv(body, 0, 48, tbs, tp);
-    bp = _fz_tlv(body, bp, 48, "\x06\x03\x2A\x03\x04", 5);
-    bp = _fz_tlv(body, bp, 3, fc, _fz_fill(fc, _fz_v(24)));
-    return _fz_tlv(d, 0, 48, body, bp);
-}
-
-fn _fz_check_cert_ip_san() {
-    var ip = alloc(8);
-    _fz_fill(ip, 4);
-    var d = alloc(7000);
-    var exp[8];
-    var dl = _fz_cert(d, ip, &exp);
-    var r = _ccy_cert_ip_san(d, dl, ip);
-    if (r != load64(&exp)) {
-        if (r == 1) { _fz_fail("cert_ip_san found an address the first SAN does not list as iPAddress"); }
-        _fz_fail("cert_ip_san missed an iPAddress the first SAN lists");
-    }
-    if (_ccy_cert_ip_san(d, _fz_v(dl), ip) != 0) { _fz_fail("cert_ip_san accepted a truncated certificate"); }
-    # The verdict on d[0..cut) never depends on what follows it.
-    var cut = _fz_v(dl + 1);
-    var a = alloc(cut + 64);
-    var b = alloc(cut + 64);
-    memcpy(a, d, cut);
-    memcpy(b, d, cut);
-    memset(a + cut, 0, 64);
-    var t = 0;
-    while (t < 64) {
-        store8(b + cut + t, load8(ip + t % 4));
-        if (t % 6 == 0) { store8(b + cut + t, 135); }
-        t = t + 1;
-    }
-    if (_ccy_cert_ip_san(a, cut, ip) != _ccy_cert_ip_san(b, cut, ip)) {
-        _fz_fail("cert_ip_san verdict depends on bytes past len");
-    }
-    # A mutated certificate and raw bytes: no crash, a 0/1 verdict.
-    store8(d + _fz_v(dl), _fz_v(256));
-    var rm = _ccy_cert_ip_san(d, dl, ip);
-    if (rm != 0 && rm != 1) { _fz_fail("cert_ip_san mutated: verdict not 0/1"); }
-    var raw = _fz_str(300);
-    var rr = _ccy_cert_ip_san(raw, strlen(raw), ip);
-    if (rr != 0 && rr != 1) { _fz_fail("cert_ip_san raw: verdict not 0/1"); }
-    return 0;
-}
 
 # A PEM-ish buffer of junk (never '-'), certificate markers and near-misses,
 # each piece followed by one junk byte; the count must be the markers placed,
@@ -1347,7 +1163,6 @@ fn main() {
         # --- HTTPS URL / request / response parsers (2.4.12) ------------
         _fz_check_https_split();
         _fz_check_http_split();
-        _fz_check_cert_ip_san();
         _fz_check_pem_count();
 
         pass = pass + 1;

@@ -542,11 +542,13 @@ fn test_literal_midpoints() {
     return 0;
 }
 
-# 2.4.10: tan is fdlibm's kernel on the stdlib reduction, within 1 ulp and
-# correctly rounded at 97.6% of 30,008 sampled points (was sin/cos: 69.7%, up
-# to 2 ulp). References: mpmath at 400 bits. The kernel is plain f64
-# arithmetic, so these bits hold on every target. The first four rows were 1
-# ulp off with sin/cos.
+# tan is fdlibm's kernel on the stdlib reduction, within 1 ulp and correctly
+# rounded at 97.6% of 30,008 sampled points (was sin/cos: 69.7%, up to 2 ulp).
+# abaco carried its own port from 2.4.10; since 2.5.0 it is ganita's f64_tan
+# (ganita 1.2.11, Cyrius 6.6.13), the same fdlibm kernel, and these rows held
+# bit for bit across the swap. References: mpmath at 400 bits. The kernel is
+# plain f64 arithmetic, so these bits hold on every target. The first four
+# rows were 1 ulp off with sin/cos.
 fn test_tan_kernel() {
     assert_eq(ev("tan(1)"), 0x3FF8EB245CBEE3A6, "tan(1) correctly rounded (sin/cos was 1 ulp low)");
     assert_eq(ev("tan(0.6744)"), 0x3FE995054EA00C37, "tan(0.6744), the fold point");

@@ -12,7 +12,7 @@ In your project's `cyrius.cyml`:
 ```toml
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.4.13"                 # pin to a released tag, never a branch
+tag = "2.5.0"                 # pin to a released tag, never a branch
 modules = ["dist/abaco.cyr"]  # the bundle is the only file you name
 ```
 
@@ -46,7 +46,10 @@ a binary that never fetches. `bayan` is needed regardless, for
 
 `tls` is never in the sidecar. Only a consumer that fetches currency rates over
 HTTPS adds it, together with `-D ABACO_TLS` — see the 2.4.12 note under
-[Upgrading](#upgrading).
+[Upgrading](#upgrading), and the 2.5.0 note for what has changed since.
+
+The bundle needs Cyrius ≥ 6.6.13 in your own pin, and a `-D ABACO_TLS` build
+needs ≥ 6.7.9 (2.5.0; the 2.5.0 note under [Upgrading](#upgrading)).
 
 > **Changed at 6.2.x** — the standalone `json` and `u128` modules were folded
 > into **`bayan`**, and the extended transcendentals abaco calls
@@ -98,6 +101,42 @@ fn main() {
 Bump the `tag` and run `cyrius deps`. abaco follows SemVer (post-1.0): patch and
 minor bumps are source-compatible; a major bump documents breaking changes in
 [`CHANGELOG.md`](../../CHANGELOG.md) with a migration section.
+
+### 2.5.0 — Cyrius 6.7.9: abaco uses the stdlib's tan, deadline and IP check
+
+No symbol, result or error code changed. 2.5.0 is a minor because it
+**raises the Cyrius version your own pin must have**:
+
+- **Cyrius ≥ 6.6.13 to compile the bundle.** `tan` is now the stdlib's
+  `f64_tan` (ganita 1.2.11). On an older pin the build fails naming
+  `f64_tan` (checked: 6.6.12 fails, 6.6.13 compiles). dhvani (pin 6.6.10) and
+  jalwa (6.6.3) bump their own pin to take 2.5.0.
+- **Cyrius ≥ 6.7.9 with `-D ABACO_TLS`.** The fetch calls `sock_set_nodelay`
+  (6.7.9), `tls_set_deadline` and `tls_init_main` (6.6.13). On an older pin the
+  build fails naming `sock_set_nodelay` (checked: 6.7.8 fails).
+- **Results:** none moved. A 97,944-record differential is identical to
+  2.4.13's, `tan` included: ganita's kernel is the same fdlibm port abaco
+  carried. `dist/abaco.deps` is the same 12 leaves.
+- **HTTPS (`-D ABACO_TLS`) — same bounds, same codes, less machinery:**
+  - The deadline is lib/tls.cyr's own (`tls_set_deadline`), not a watchdog
+    thread per fetch. A fetch now starts no thread, and the deadline holds on
+    macOS and Windows too: through 2.4.13 it was Linux only, and elsewhere a
+    fetch had only the 10 s per-operation timeouts. The bounds are unchanged
+    with one tightening. Each step must finish within 10 s: the connect, the
+    handshake, writing the request, and each response read. The whole fetch
+    must finish within 30 s. The tightening: the handshake must now finish
+    within 10 s *as a whole*, where through 2.4.13 each read inside it had 10 s.
+    A cut is `AI_ERR_HTTP`, as before.
+  - An IPv4-literal host is matched against the certificate's IP addresses only
+    by lib/tls.cyr itself (Cyrius 6.6.13). abaco's own re-check of the leaf is
+    gone, and the verdicts are the same.
+  - `abaco_tls_init()` warms through `tls_init_main()`. It is still required,
+    still main-thread only, and now also returns `AI_ERR_TLS` when the libssl
+    backend is selected, where warming would load libssl.
+  - `TCP_NODELAY` is set on macOS and Windows too; it was Linux only.
+  - The 2.4.12 notes on watchdog threads no longer apply: they took no crypto
+    lane, and the first one switched the allocator to its locked mode. abaco
+    calls no `thread_create` now.
 
 ### 2.4.13 — Cyrius 6.6.20: eight functions more accurate, a smaller sidecar
 

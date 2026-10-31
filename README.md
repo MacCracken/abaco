@@ -60,7 +60,7 @@ stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged",
 
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.4.13"
+tag = "2.5.0"
 modules = ["dist/abaco.cyr"]   # self-contained library bundle
 ```
 
@@ -69,7 +69,8 @@ stdlib modules the bundle needs — and vendors those too, so from 2.4.11 the
 `[deps] stdlib` line above is optional (repeating it is harmless: each module
 is vendored once). Keep it for a tag before 2.4.11, or if you include
 `dist/abaco.cyr` without `cyrius deps`. There is nothing to `include` from
-abaco's `src/`. Then call the public API directly:
+abaco's `src/`. Your own `cyrius` pin must be ≥ 6.6.13 to compile the 2.5.0
+bundle (≥ 6.7.9 with `-D ABACO_TLS`, below). Then call the public API directly:
 
 ```cyr
 fn main() {
@@ -95,7 +96,7 @@ fn main() {
 See [`programs/basic.cyr`](programs/basic.cyr) for a runnable end-to-end
 example.
 
-### HTTPS currency fetch (opt-in, 2.4.12)
+### HTTPS currency fetch (opt-in, 2.4.12; Cyrius ≥ 6.7.9 from 2.5.0)
 
 `CurrencyCache_fetch` over `https://` needs Cyrius's TLS stack, which is large,
 so abaco does not pull it in: without the define below an `https://` base URL is
@@ -107,10 +108,11 @@ no TLS code at all. To turn it on:
 2. Build every unit that includes the bundle with `-D ABACO_TLS`
    (`cyrius build -D ABACO_TLS …`, also for `test` / `bench`).
 3. Call `abaco_tls_init()` **once, on the main thread, before any thread
-   fetches** (or uses `lib/tls.cyr` itself). It warms the TLS stack's lazily built tables; a fetch refuses with
-   `AI_ERR_TLS` until it has run, and it refuses to run off the main thread
-   (Cyrius 6.6.12's TLS stack breaks, or crashes, when its first use happens on
-   two threads at once or on a worker first).
+   fetches** (or uses `lib/tls.cyr` itself). It warms the TLS stack's lazily
+   built tables (`tls_init_main()`); a fetch refuses with `AI_ERR_TLS` until
+   it has run, and it refuses to run off the main thread (through Cyrius
+   6.6.12 the TLS stack broke, or crashed, when its first use happened on two
+   threads at once or on a worker first; abaco keeps the rule).
 
 ```cyr
 fn main() {
@@ -130,30 +132,31 @@ fn main() {
   certificates) and the certificate must name the host — an IPv4 literal
   through an iPAddress entry only, never a DNS name that spells it; all fail
   closed. The libssl backend (`-D CYRIUS_TLS_LIBSSL`, or
-  `tls_set_backend(TLS_BACKEND_LIBSSL)` at runtime) is refused: in Cyrius
-  6.6.12 it never checks the host name.
+  `tls_set_backend(TLS_BACKEND_LIBSSL)` at runtime) is refused: abaco drives
+  the native backend only.
 - **TLS 1.3 only.** The native client offers TLS 1.3 alone and abaco does not
   pin it to 1.2, so a rates server that speaks only TLS 1.2 is refused with
   `AI_ERR_TLS`.
 - **The response** must carry a `Content-Length` matching its body; no
   redirects, no chunked encoding, 64 KB at most, IPv4 only.
-- **Time:** 10 s per socket operation, and **30 s for the whole fetch**
-  (connect, handshake and response; name resolution has lib/net.cyr's own
-  bound before it). On Linux a watchdog thread per fetch enforces the 30 s
-  against a peer that keeps each read just under the 10 s; elsewhere only the
-  per-operation timeouts apply. A fetch still blocks its thread for up to
-  that long, so do not fetch on a UI thread.
-- **Cost** (x86_64, Cyrius 6.6.12): listing `tls` grows a DSP-only consumer's
-  DCE binary from 93,656 B to ~557 KB even if it never fetches (sigil's static
-  tables; ~607 KB with `-D ABACO_TLS` too), adds ~0.85 s to every compile, and
-  makes every build print two warnings from `lib/sigil.cyr`; a consumer that
-  fetches is ~897 KB. `abaco_tls_init()` takes ~0.5 s and
-  ~2.6 MB once. Each fetch keeps ~0.5 MB of heap (Cyrius's allocator does not
-  free; worst case ~1.5 MB; a CA file adds ~1.5× its size) and takes ~30 ms
-  against OpenSSL's `s_server` on loopback.
+- **Time:** 10 s per step (the connect, the handshake, the request, each
+  read), and **30 s for the whole fetch** (name resolution has lib/net.cyr's
+  own bound before it), so a peer that keeps every step just under 10 s is
+  cut at 30 s. Both bounds are lib/tls.cyr's own deadline (`tls_set_deadline`)
+  on Linux, macOS and Windows; a fetch starts no thread. A fetch still blocks
+  its thread for up to that long, so do not fetch on a UI thread.
+- **Cost** (x86_64, Cyrius 6.7.9, abaco 2.5.0): listing `tls` grows a
+  DSP-only consumer's DCE binary from 95,976 B to ~571 KB even if it never
+  fetches (sigil's static tables; ~624 KB with `-D ABACO_TLS` too), adds ~1 s
+  to every compile (614 → 1,659 ms), and makes every build print a warning
+  from `lib/sigil.cyr`; a consumer that fetches is ~981 KB.
+  `abaco_tls_init()` takes ~0.5 s and ~4.5 MB of resident memory once. Each
+  fetch keeps ~231 KB of heap (Cyrius's allocator does not free); with a
+  300-certificate CA file, ~1 MB the first time through a cache and ~526 KB
+  after.
 
 Details and error codes: [`docs/guides/consuming-abaco.md`](docs/guides/consuming-abaco.md)
-(2.4.12 upgrade note).
+(the 2.4.12 and 2.5.0 upgrade notes).
 
 ## Supported functions (43+)
 

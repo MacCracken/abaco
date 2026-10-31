@@ -5,6 +5,119 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] — 2026-10-31
+
+Toolchain **Cyrius 6.6.20 → 6.7.9**, stdlib re-vendored (bayan 1.5.12 → 1.5.13,
+ganita 1.2.14 → 1.2.15; sigil 3.13.10 → 3.13.11 for `-D ABACO_TLS` builds). The
+bump changes nothing: a 97,944-record differential is identical on both pins.
+The release removes five workarounds abaco carried for stdlib gaps that
+Cyrius 6.6.13–6.7.9 closed: `tan` is the stdlib's, the HTTPS deadline is
+lib/tls.cyr's, and abaco no longer re-checks IP-literal certificates, hand-lists
+the TLS warm-up, or sets `TCP_NODELAY` on Linux only. **No result changed and no
+error code changed.** It is a minor because it raises the Cyrius pin a consumer
+needs: **≥ 6.6.13** for the bundle and **≥ 6.7.9** with `-D ABACO_TLS`.
+
+Suite 2325 → **2288** asserts: 37 tested the removed IP check and 4 the removed
+watchdog, and 4 are new. Fuzz 4/4 at 20,000 iterations; fmt / lint / vet clean;
+aarch64 (qemu) green. `dist/abaco.cyr` is 274,744 B / 6,618 lines (was 286,298 B
+/ 6,887), so consumers re-vendor.
+
+### Changed
+
+- **Toolchain `6.6.20` → `6.7.9`**, stdlib re-vendored with `cyrius deps`; the
+  same 33 files are locked. 6.7.x is a language minor: `trait`, `const`,
+  `true` / `false`, `do`, `dyn`, `!`, if-expressions, `loop`, compound
+  assignment, tuples and named arguments. None of these collides with an abaco
+  name. The 6.7.9 behaviour changes (pointer steps, unary `-` / `~` on a
+  constant, method-call result types, module-scope `}`) need shapes abaco does
+  not use. Bounds checking and checked `dyn` stay opt-in. Differential, as at
+  2.4.13: 97,944 records, every evaluator function over special and dense
+  arguments plus literals, number theory, units, NL, DSP and windows. **0
+  records differ** between 6.6.20 and 6.7.9, and 0 between 2.4.13 and 2.5.0.
+- **`tan` is the stdlib's `f64_tan`** (ganita 1.2.11, Cyrius 6.6.13). abaco's
+  own fdlibm port (`_eval_tan` / `_eval_k_tan`, 2.4.10) is gone. ganita's is the
+  same `s_tan.c` / `k_tan.c` kernel on the same `_f64_rem_pio2` reduction. All
+  1,569 `tan` records are bit-identical, and timed alone the two cost the same
+  (123–125 ns per call). This is what raises the bundle's floor to Cyrius
+  6.6.13: on 6.6.12 a consumer's build fails naming `f64_tan`.
+- **HTTPS (`-D ABACO_TLS`) now needs Cyrius ≥ 6.7.9**, and:
+  - **The deadline is lib/tls.cyr's** (`tls_set_deadline`, 6.6.13), not a
+    watchdog thread per fetch. Each step must finish within
+    `CCY_TLS_STEP_MS` (10 s): the connect (`net_connect_nb`), the handshake,
+    writing the request, and each response read. The whole fetch must finish
+    within `CCY_TLS_DEADLINE_MS` (30 s). abaco re-arms the TLS deadline before
+    each step at the sooner of the two.
+    - A fetch starts no thread. The bound holds on macOS and Windows as well:
+      lib/tls.cyr waits with `poll` / `WSAPoll` before every read and write.
+      Through 2.4.13 it was Linux only, and elsewhere a fetch had only the
+      socket timeouts.
+    - Gone with the watchdog: `_ccy_wd_*`, the `CcyWd` enum, and the
+      shutdown + `/dev/null` cut. Also gone: `SO_RCVTIMEO` / `SO_SNDTIMEO`
+      (`CCY_TLS_TIMEOUT_S` became `CCY_TLS_STEP_MS`).
+    - One tightening: the handshake must finish within 10 s as a whole, where
+      through 2.4.13 each read inside it had 10 s.
+    - Timings in the suite: a handshake drip is cut at 1,501 ms under a 1.5 s
+      deadline, a post-request drip at 4,000 ms under 4 s, and a silent server
+      at 10,011 ms. With the deadline disarmed, both drips hang until the
+      suite kills them at 100 s.
+  - **The IP-literal check is lib/tls.cyr's** (6.6.13 matches an IP literal
+    against iPAddress SANs only, RFC 9525 §6.3). `_ccy_ip_host_ok`,
+    `_ccy_cert_ip_san`, its DER walker `_ccy_der_tlv` and `CCY_TLS_LEAF_MAX`
+    are gone. With them removed, `test_ccy_tls` still refuses `DNS:127.0.0.1`
+    and `DNS:*.0.0.1` for `https://127.0.0.1`, so the library refuses them
+    itself.
+  - **`abaco_tls_init()` warms through `tls_init_main()`** (6.6.13), which
+    covers the same initialisers abaco listed by hand. The lazy-init snapshot
+    still shows no flag flipped by a later fetch. It is still required and still
+    main-thread only. It now also refuses (`AI_ERR_TLS`, nothing touched) while
+    the libssl backend is selected, since `tls_init_main` would then load
+    libssl.
+  - **`TCP_NODELAY` through `sock_set_nodelay`** (6.7.9), which sets it on
+    Linux, macOS and Windows; through 2.4.13 abaco called raw `setsockopt` on
+    Linux only. Read back with `getsockopt`: 0 → 1. This call is why a TLS
+    build needs 6.7.9 (on 6.7.8 a consumer's build fails naming it).
+  - **The CA-file cap is abaco's own `CCY_TLS_CA_MAX_CERTS` (300)**, not
+    lib/tls.cyr's `TLS_CA_MAX_ROOTS`, which bounds nothing since 6.6.13 and is
+    kept only as a name.
+- **Comments made stale by Cyrius 6.6.13–6.6.20 reworded**, behaviour
+  unchanged:
+  - lib/tls.cyr now installs the parseable roots of a mixed CA file.
+  - The libssl backend binds the host name since 6.6.13. abaco still refuses
+    it: it drives the native backend only, and libssl is main-thread only.
+  - A connection's record buffers are allocated once (the 32-read cap stays).
+  - A fatal alert is `TLS_ERR_ALERT`; the `Content-Length` rule stays.
+  - `fmt_int_buf` writes `len + 1` bytes since 6.6.18. The LaTeX buffer's
+    72-byte high-water now comes from `fmt_float_buf`'s 43-byte touch.
+  - `fmt_float_buf` handles |x| ≥ 2^63 since 6.6.20; the LaTeX switch to
+    m × 10^e stays.
+- **Kept: `parse_number`, not `f64_parse_n`.** The stdlib's parser has been
+  correctly rounded since 6.6.13, and 6.7.9 adds the length-bounded
+  `f64_parse_n`. Over 200,012 literals it is bit-identical to `parse_number`,
+  and as fast on long ones. On the short literals that dominate expressions,
+  `parse_number` is ~1.4× faster (63 vs 88 ns). Taking `f64_parse_n` would also
+  raise the bundle's floor to 6.7.9. `_nl_parse_f64` keeps using
+  `parse_number` too, so a literal means the same in both places.
+- **Benchmarks:** the pinned trail's median ratio is 0.98 against 2.4.13. An
+  interleaved A/B of the same benches, 4 rounds on one core, gives a median of
+  0.995. The trail's ntheory deltas, up to +29% on `factor_small`, are equal in
+  the A/B. `tan(1)` through the evaluator reads 718 → 758 ns, while the kernels
+  timed alone are equal, so that is layout. The units rows swing ±30% between
+  rounds of the same binary. The `ccy_cert_ip_san` row leaves the trail with
+  the function.
+
+### Added
+
+- `test_ccy_tls`: `abaco_tls_init` under the libssl backend is refused, and
+  touches neither sigil state nor the CA cache (4 asserts).
+
+### Removed
+
+- `_ccy_cert_ip_san`, `_ccy_der_tlv`, `_ccy_ip_host_ok`, `_ccy_nodelay`, the
+  `_ccy_wd_*` watchdog and `_eval_tan` / `_eval_k_tan`: all private. The suite
+  loses the tests and fuzz section that covered them: `test_der_tlv`,
+  `test_cert_ip_san`, the watchdog socketpair cuts, and `fuzz_ai`'s
+  generated-certificate SAN check.
+
 ## [2.4.13] — 2026-10-31
 
 Toolchain **Cyrius 6.6.12 → 6.6.20**, stdlib re-vendored (bayan 1.5.9 → 1.5.12,

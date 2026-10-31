@@ -138,10 +138,13 @@ fn Value_as_f64(self) {
 # 1e16 cutoff caps that path at 16 integer digits, which is why the scientific
 # path wins. 128 leaves better than 2x headroom.
 #
-# ⚠ The WRITE high-water is above the output length: fmt_int_buf renders
-# backward from a 23-byte scratch base, so a COMPLEX render touches ~72 bytes.
-# Still inside the allocation, but that 72 — not the 56 — is the figure to size
-# against if this buffer is ever shrunk.
+# ⚠ The WRITE high-water is above the output length: lib/fmt.cyr's
+# fmt_float_buf touches up to 43 bytes at its buf whatever it prints, so the
+# imaginary part's mantissa, written from byte 29, reaches byte 72. (Through
+# Cyrius 6.6.17 fmt_int_buf also wrote 24 bytes per call, built backward from
+# a 23-byte scratch base; from 6.6.18 it writes the digits and a NUL only.)
+# Still inside the allocation, but that 72 — not the 56 — is the figure to
+# size against if this buffer is ever shrunk.
 #
 # TEXT is bounded against this same allocation below; it is the only branch
 # whose output length the caller controls.
@@ -166,13 +169,15 @@ fn _val_is_nan(bits) {
 }
 
 # Fixed-decimal rendering has two blind spots, and LaTeX has a good answer for
-# both. lib/fmt.cyr's fmt_float_buf guards Inf/NaN but still does
-# f64_to(f64_floor(val)) for finite input, which leaves i64 range once
-# |x| >= 2^63 — so delegating to it unguarded would render 1e300 as
+# both. Through Cyrius 6.6.19, lib/fmt.cyr's fmt_float_buf guarded Inf/NaN but
+# did f64_to(f64_floor(val)) for finite input, which leaves i64 range once
+# |x| >= 2^63 — so delegating to it unguarded rendered 1e300 as
 # "-9223372036854775808.000000" on x86 through Cyrius 6.6.7 and as
 # "9223372036854775807.000000" from 6.6.8. (2.4.3 did not even reach
 # fmt_float_buf; its general path printed the bare integer
-# "-9223372036854775808".) At the other
+# "-9223372036854775808".) From 6.6.20 it prints them correctly — the exact
+# integer below 1e20, its own d.ddd…e+N form from there — but neither is the
+# LaTeX form, so the switch below stays. At the other
 # end, six decimals turn every |x| < 1e-6 into "0.000000", which reads as zero
 # for a value that is not.
 #
