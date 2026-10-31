@@ -668,6 +668,16 @@ fn test_ccy_body_shapes() {
     var cb = CurrencyCache_new("http://localhost:8088");
     assert_eq(_ccy_load_body(cb, inner, strlen(inner)), 0, "body with inner base loads");
     assert(streq(ccy_base(cb), "USD") == 1, "top-level base wins (was EUR)");
+    # A currency listed twice in the rates map refuses the body: bayan 1.11.1
+    # (Cyrius 6.7.18) refuses a duplicate object key, compared decoded. Through
+    # bayan 1.11.0 it kept the first and the body loaded. The rule is the
+    # consumer's bayan, so a consumer on an older pin still loads these.
+    var dup = "{\"base\":\"USD\",\"rates\":{\"EUR\":0.5,\"GBP\":0.8,\"EUR\":0.25}}";
+    var cd = CurrencyCache_new("http://localhost:8088");
+    assert_eq(_ccy_load_body(cd, dup, strlen(dup)), AI_ERR_CURRENCY, "a duplicate currency refuses the body");
+    assert_eq(CurrencyCache_convert(cd, f64_from(1), "USD", "GBP"), 0, "and loads no rate");
+    var esc = "{\"base\":\"USD\",\"rates\":{\"EUR\":0.5,\"\\u0045UR\":0.25}}";
+    assert_eq(_ccy_load_body(cd, esc, strlen(esc)), AI_ERR_CURRENCY, "an escaped spelling is the same key");
     return 0;
 }
 

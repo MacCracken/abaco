@@ -60,7 +60,7 @@ stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged",
 
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.5.0"
+tag = "2.5.1"
 modules = ["dist/abaco.cyr"]   # self-contained library bundle
 ```
 
@@ -96,7 +96,7 @@ fn main() {
 See [`programs/basic.cyr`](programs/basic.cyr) for a runnable end-to-end
 example.
 
-### HTTPS currency fetch (opt-in, 2.4.12; Cyrius ≥ 6.7.9 from 2.5.0)
+### HTTPS currency fetch (opt-in, 2.4.12; Cyrius ≥ 6.7.9 from 2.5.0, ≥ 6.7.18 recommended)
 
 `CurrencyCache_fetch` over `https://` needs Cyrius's TLS stack, which is large,
 so abaco does not pull it in: without the define below an `https://` base URL is
@@ -156,7 +156,8 @@ fn main() {
   after.
 
 Details and error codes: [`docs/guides/consuming-abaco.md`](docs/guides/consuming-abaco.md)
-(the 2.4.12 and 2.5.0 upgrade notes).
+(the 2.4.12, 2.5.0 and 2.5.1 upgrade notes; 2.5.1 lists the Cyrius 6.7.18 TLS
+advisories behind the ≥ 6.7.18 recommendation).
 
 ## Supported functions (43+)
 

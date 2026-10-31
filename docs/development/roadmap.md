@@ -610,6 +610,22 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
 - [x] 2325 → 2288 asserts (the removed code's tests went with it), x86_64 and
       aarch64 (qemu); benches neutral in an interleaved A/B (median 0.995)
 
+### 2.5.1 — Cyrius 6.7.18 ✅ (2026-10-31)
+
+- [x] Pin 6.7.9 → 6.7.18, stdlib re-vendored (bayan 1.11.1, ganita 1.2.15,
+      sigil 3.13.15); `cyrius.lock` 33 → 41 files (`slice`, seven `unicode/`)
+- [x] The 6.7.10–6.7.18 CHANGELOG (~4.4 MB) read in four parts: no refusal
+      reaches abaco's source; 6.7.11 settles both 2.5.0 watch items (below)
+- [x] 97,944-record differential: 0 differ, no crash or hang
+- [x] `benches/bench.bcyr`: three bodies discarded a builtin's value, which
+      6.7.17 refuses; they return it now
+- [x] bayan 1.11.1 refuses a duplicate JSON key: a rates body that lists a
+      currency twice is `AI_ERR_CURRENCY`, pinned in `test_ai`
+- [x] Measured and documented: bayan's Unicode tables add ~340 KB to every
+      binary from 6.7.13 (the consumer guide's 2.5.1 note)
+- [x] 2288 → 2291 asserts, x86_64 and aarch64 (qemu); consumer floors
+      unchanged (≥ 6.6.13, ≥ 6.7.9 with TLS)
+
 ### Still open
 
 > The two residuals the 2.3.5 fix audit left open were closed in 2.4.0.
@@ -697,14 +713,24 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
       - Information only: from 6.6.16 a plain `lib/net.cyr` socket write never raises SIGPIPE (Linux `sendto`
         with `MSG_NOSIGNAL`, macOS `SO_NOSIGPIPE`; cyrius CVE-74), matching what 6.6.14 already did for TLS
         record writes. No change needed.
-- [ ] **At the next pin bump past 6.7.9, re-check two shapes upstream has filed but not fixed** (found
+- [x] **At the next pin bump past 6.7.9, re-check two shapes upstream has filed but not fixed** — ✅ 2.5.1:
+      6.7.11 settled both. Its RET-1/2/3 refuse a multi-value receive of the wrong arity, and abaco's 18
+      three-value fns comply; its RET-7 (D22) makes a pair passed as a plain argument keep its tag by rule,
+      so `is_ok(_nl_parse_f64(..))` is the documented shape. (Found
       reading the 6.7.x CHANGELOG for 2.5.0; both compile and pass today): a `: stack` pair passed as a
       plain argument keeps its tag (6.7.7) — `src/ai.cyr:297-298` call `is_ok(_nl_parse_f64(...))`, which is
       correct only because `is_ok` takes the tag, so a repair that refuses the shape breaks the build; and a
       multi-value receive that reads a register the callee never wrote, refused from 6.7.11 — abaco's
       three-value fns (`: (f64, f64, i64)`, `src/eval.cyr`) return three values on every path.
+- [ ] **Upstream (bayan), to file — the Unicode tables cost every consumer ~340 KB.** From bayan 1.9.0
+      (Cyrius 6.7.13) `lib/bayan.cyr` includes `lib/unicode/` (case-fold, categories, normalisation: ~318 KB
+      of string data) for its Markdown reader, unconditionally, and DCE removes no data. abaco calls only
+      `bayan_u64_powmod` / `bayan_u64_mulmod` and the flat JSON parser, yet the smoke binary is 83,704 →
+      425,152 B and a DSP + evaluator consumer 164,864 → 510,096 B. A per-part include (a `bayan-json` /
+      `bayan-u128` sublib, as the bundle's own header describes for base64) or an `#ifdef` around the
+      Markdown reader would let a consumer leave them out.
 - [ ] **Upstream (bayan), to file — `bayan_u64_powmod` is ~28 % slower since bayan 1.5.10** (still so in
-      bayan 1.5.13, Cyrius 6.7.9). To take
+      bayan 1.5.13, Cyrius 6.7.9, and in bayan 1.11.1, Cyrius 6.7.18). To take
       exponents ≥ 2^63 it shifts the exponent with a call (`_u128_lshr64(exp, 1)`) on every bit where it used
       `exp >> 1`. Measured on x86_64 in isolation: 300,000 × `powmod(b, 1e9+6, 1e9+7)` 104 → 133 ms; in the
       trail, `is_prime_*` / `next_prime` / `factor_large` +11–30 %. A non-negative exponent shifts the same

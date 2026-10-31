@@ -129,14 +129,14 @@ fn _bench_round_half_away() {
     return 0;
 }
 
+# The builtins' values are returned, not dropped: from Cyrius 6.7.17 a statement
+# that discards a value builtin's result (`f64_sqrt(x);`) is a compile error.
 fn _bench_sqrt() {
-    f64_sqrt(f64_from(2));
-    return 0;
+    return f64_sqrt(f64_from(2));
 }
 
 fn _bench_abs() {
-    f64_abs(f64_neg(f64_from(42)));
-    return 0;
+    return f64_abs(f64_neg(f64_from(42)));
 }
 
 fn _bench_amp_to_db() {
@@ -450,12 +450,13 @@ fn _bench_batch_hypot() {
 }
 
 fn _bench_batch_sqrt() {
+    var r = 0;
     var i = 0;
     while (i < BATCH_SIZE) {
-        f64_sqrt(f64_abs(load64(_batch_buf + i * 8)));
+        r = f64_sqrt(f64_abs(load64(_batch_buf + i * 8)));
         i = i + 1;
     }
-    return 0;
+    return r;
 }
 
 fn _bench_batch_round() {

@@ -306,7 +306,9 @@ fn _fz_planted_count(key) {
 # property: a poisoned response must not smuggle NaN / Inf / zero / absurd
 # magnitudes past the loader. With `loaded` (the load returned 0), every
 # planted key of a must-keep class is present and every must-drop one is
-# absent; keys planted twice are skipped (the later value decides).
+# absent; keys planted twice are skipped. Through bayan 1.11.0 the body
+# loaded and the later value decided; from bayan 1.11.1 (Cyrius 6.7.18) a
+# duplicate key refuses the body, so `loaded` is 0 and nothing is checked.
 fn _check_rates_plausible(c, loaded) {
     var rates = ccy_rates(c);
     if (rates == 0) { return 0; }

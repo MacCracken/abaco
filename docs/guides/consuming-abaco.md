@@ -12,7 +12,7 @@ In your project's `cyrius.cyml`:
 ```toml
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.5.0"                 # pin to a released tag, never a branch
+tag = "2.5.1"                 # pin to a released tag, never a branch
 modules = ["dist/abaco.cyr"]  # the bundle is the only file you name
 ```
 
@@ -101,6 +101,49 @@ fn main() {
 Bump the `tag` and run `cyrius deps`. abaco follows SemVer (post-1.0): patch and
 minor bumps are source-compatible; a major bump documents breaking changes in
 [`CHANGELOG.md`](../../CHANGELOG.md) with a migration section.
+
+### 2.5.1 — Cyrius 6.7.18: what changes is your own pin's bayan
+
+abaco's source is unchanged: the bundle differs from 2.5.0 only in its version
+header, and the floors stay ≥ 6.6.13 (≥ 6.7.9 with `-D ABACO_TLS`). The changes
+below come with **your own** Cyrius pin, because the bundle compiles against
+your vendored stdlib. They apply with 2.5.0 too, or any tag:
+
+- **From Cyrius 6.7.13 every binary that includes abaco is ~340 KB larger.**
+  bayan 1.9.0 and later (one bundle: base64, CSV, u128, bigint, TOML, CYML,
+  YAML, JSON, PDF, Markdown) includes Unicode case-fold, category and
+  normalisation tables for its Markdown reader, whether you use them or not,
+  and dead-code elimination does not remove data. abaco needs bayan
+  (`bayan_u64_powmod`, the rates JSON), so it cannot leave them out. Measured
+  on a consumer calling `amplitude_to_db`, `window_hann` and the evaluator:
+  164,864 B on 6.7.12, 510,096 B on 6.7.13, 507,064 B on 6.7.18.
+- **From Cyrius 6.7.18 a rates body that lists a currency twice is
+  `AI_ERR_CURRENCY`.** bayan 1.11.1 refuses a duplicate JSON object key,
+  compared decoded (`"\u0045UR"` is `"EUR"`); through bayan 1.11.0 such a
+  body loaded. A repeated top-level `base` or `rates` still loads, first one
+  wins, because abaco reads those two itself.
+- **From Cyrius 6.7.17 a statement that drops a value builtin's result
+  (`f64_sqrt(x);`, `load8(p);`) no longer compiles.** abaco's bundle has none;
+  check your own code.
+- **`-D ABACO_TLS`: pin Cyrius ≥ 6.7.18.** It fixes two TLS advisories that
+  reach the fetch. **CYRIUS-2026-0040:** once a process had used more than 63
+  crypto threads, they shared lanes, and an on-path attacker could get a
+  forged ChaCha20-Poly1305 record accepted. The 2.4.12 note said shared lanes
+  only made fetches fail; that was wrong. From 6.7.18 lanes are a pool held
+  only while in use, and a 65th concurrent operation is refused, not aliased.
+  **CYRIUS-2026-0042:** chain verification ignored nameConstraints, so a
+  name-constrained intermediate could vouch for any host.
+- **The plaintext loopback fetch is bounded from Cyrius 6.7.18**
+  (CYRIUS-2026-0049): `http_get` gives up after 5 s with no progress or 30 s
+  for the exchange, and abaco reports that as `AI_ERR_HTTP`. Before, a stalled
+  local rates server held the fetching thread forever.
+- **`CalcHistory_save_to_file` from Cyrius 6.7.18** (CYRIUS-2026-0047):
+  `file_write_atomic` creates its temp file with the destination's mode; before,
+  it was briefly readable at 0644 before taking a 0600 file's mode.
+- **`-D ABACO_TLS`: from Cyrius 6.7.12–6.7.14 the native client is stricter
+  with a rates server that breaks the handshake rules** (a duplicate or
+  unsolicited extension, trailing bytes, an ALPN it did not offer). Such a
+  server is `AI_ERR_TLS`. A conformant server is unaffected.
 
 ### 2.5.0 — Cyrius 6.7.9: abaco uses the stdlib's tan, deadline and IP check
 
@@ -252,7 +295,10 @@ behind), and `dist/abaco.deps` is the same 15 leaves.
   `ai_last_err()`: that slot is one process-wide global. The TLS stack gives
   each thread that ever uses it a crypto lane, and after 63 such threads in a
   process's lifetime lanes are shared and concurrent fetches can fail (closed,
-  never accepting a bad certificate): fetch from a reused thread or pool. The
+  never accepting a bad certificate): fetch from a reused thread or pool.
+  (⚠ Corrected at 2.5.1: shared lanes could also let a forged
+  ChaCha20-Poly1305 record through, CYRIUS-2026-0040, fixed in Cyrius 6.7.18
+  — see the 2.5.1 note.) The
   watchdog threads never touch TLS, so they take no lane; each lives as long
   as its fetch (2 MiB of stack address space, unmapped as it exits, nothing
   kept on the heap). The first one switches Cyrius's allocator to its locked,
