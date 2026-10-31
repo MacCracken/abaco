@@ -12,7 +12,7 @@ In your project's `cyrius.cyml`:
 ```toml
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.4.12"                 # pin to a released tag, never a branch
+tag = "2.4.13"                 # pin to a released tag, never a branch
 modules = ["dist/abaco.cyr"]  # the bundle is the only file you name
 ```
 
@@ -20,17 +20,24 @@ modules = ["dist/abaco.cyr"]  # the bundle is the only file you name
 
 ## 2. Provide the stdlib surface
 
-The bundle carries **no** `include "lib/…"` lines. From 2.4.11 each tag also
-ships `dist/abaco.deps`, the stdlib modules the bundle needs; your `cyrius deps`
-reads it beside the bundle and vendors them, so you need not list them. For a
-tag before 2.4.11, or if you include `dist/abaco.cyr` without `cyrius deps`,
-list them in your own `[deps]` — repeating them on 2.4.11 is harmless:
+From 2.4.11 each tag ships `dist/abaco.deps`, the stdlib modules the bundle
+needs; your `cyrius deps` reads it beside the bundle and vendors them, so you
+need not list them. From 2.4.13 the bundle also opens with a `# Requires` block
+of one `include "lib/<leaf>.cyr"` per sidecar leaf (Cyrius 6.6.18), so it
+compiles when included alone; through 2.4.12 it carried no `include` lines. For
+a tag before 2.4.11, or if you include `dist/abaco.cyr` without `cyrius deps`
+(and before 2.4.13), list the modules in your own `[deps]`. Repeating them on a
+later tag is harmless:
 
 ```toml
 [deps]
 stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged",
           "hashmap", "fnptr", "math", "ganita", "io", "net", "http", "bayan"]
 ```
+
+That is the 2.4.12 list. The 2.4.13 sidecar is the 12 leaves a compile proves
+the bundle needs — `math string result alloc ganita fmt bayan vec hashmap str
+io http` — and they reach `syscalls`, `fnptr` and `net` themselves.
 
 (Before 2.4.11 you could drop `net` / `http` if you never touch the
 currency-cache path; the sidecar always lists them, and DCE removes them from
@@ -91,6 +98,38 @@ fn main() {
 Bump the `tag` and run `cyrius deps`. abaco follows SemVer (post-1.0): patch and
 minor bumps are source-compatible; a major bump documents breaking changes in
 [`CHANGELOG.md`](../../CHANGELOG.md) with a migration section.
+
+### 2.4.13 — Cyrius 6.6.20: eight functions more accurate, a smaller sidecar
+
+No symbol changed and no error code changed outside the opt-in HTTPS path.
+Re-vendor (`cyrius deps`) and check the rows that apply to you:
+
+- **Results move in eight evaluator functions:** `asin`, `sinh`, `cosh`,
+  `tanh`, `asinh`, `acosh`, `atanh`, `atan2` (ganita 1.2.14, compiled with
+  abaco's pin — your own pin's ganita decides what *your* build computes).
+  Every result is now within 2 ulp. The worst old errors were ~1e-8 relative
+  just above each function's small-argument cutoff (`asinh(1.47e-8)` was
+  99,566,017 ulp off), and up to 495 ulp for `sinh` / `cosh` between 709 and
+  710.48. `atan2` follows C99 for signed zeros: `atan2(-0, -1)` is now −π (was
+  +π), `atan2(0, -0)` π (was 0), `atan2(-0, 0)` −0 (was +0). Nothing else in
+  a 97,944-record differential moved. If you snapshot calculator output or
+  compare it bit for bit, expect these rows to change.
+- **`dist/abaco.deps` lists 12 leaves, not 15.** `syscalls`, `tagged`, `fnptr`
+  and `net` left it and `result` joined (Cyrius 6.6.18 derives the sidecar from
+  what the bundle needs to compile). Followed transitively, abaco no longer
+  brings you `tagged` or `boxed`. If your code uses `Option` / `tagged_*` /
+  `boxed_*` and you never declared `tagged`, add it to your `[deps] stdlib`.
+  dhvani and jalwa declare `tagged`, `fnptr` and `syscalls` already (jalwa
+  also `net`).
+- **The bundle includes its own stdlib** (a `# Requires` block, above). If you
+  include those files too, nothing changes: include-once is keyed on the path.
+- **`-D ABACO_TLS` builds:** need Cyrius ≥ 6.6.13 (`abaco_tls_init` no longer
+  calls `_xp_init`, which sigil 3.13.6 removed). A peer that sends
+  ChangeCipherSpec records out of place, a fatal alert after the handshake, or
+  an oversized record now gives **`AI_ERR_TLS`** at once. The CCS flood
+  was `AI_ERR_HTTP` at the fetch deadline, and the other two `AI_ERR_HTTP`.
+- **Fixed:** a refused allocation while parsing a currency response took
+  SIGSEGV with bayan ≥ 1.5.10; it is `AI_ERR_CURRENCY`.
 
 ### 2.4.12 — HTTPS currency fetch (opt-in), and one error code for `https://`
 

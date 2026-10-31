@@ -4,7 +4,9 @@
 > [`../../CLAUDE.md`](../../CLAUDE.md); forward plan in [`roadmap.md`](roadmap.md);
 > per-tag history in [`../../CHANGELOG.md`](../../CHANGELOG.md).
 
-**Last updated:** 2026-10-01 (2.4.12 — **HTTPS currency fetch, opt-in** behind `-D ABACO_TLS` (consumers add `tls` themselves; a build without the define compiles no TLS code and `dist/abaco.deps` is unchanged). Native backend only, chain + host verified fail closed, IPv4 literals against iPAddress SANs only, TLS 1.3, strict `Content-Length` framing, 30 s per fetch (a watchdog thread on Linux), `abaco_tls_init()` required on the main thread first. New `AI_ERR_TLS` (5): an `https://` URL without the define is now `AI_ERR_TLS`, was `AI_ERR_HTTP`. Two more cyrius TLS issues filed. Suite 2062 → **2300** in 9 files. `dist/abaco.cyr` **not** byte-identical to 2.4.11)
+**Last updated:** 2026-10-31 (2.4.13 — **Cyrius 6.6.12 → 6.6.20**, stdlib re-vendored (bayan 1.5.12, ganita 1.2.14; sigil 3.13.10 for TLS builds). ganita moves **eight evaluator functions** (`asin`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `atan2`): a 97,944-record differential found 9,163 differing results, all in those eight, worst error 99,566,017 ulp → ≤ 1.81 ulp, and `atan2` now C99 on signed zeros. `dist/abaco.deps` **15 → 12** compile-verified leaves and the bundle carries a `# Requires` block (6.6.18). Over HTTPS a misplaced ChangeCipherSpec is `AI_ERR_TLS` at once (6.6.13). Fixed: a refused allocation in the currency parser took SIGSEGV; a TLS test helper could pass a failing stall case. Suite 2300 → **2325**. `dist/abaco.cyr` **not** byte-identical to 2.4.12)
+
+**Previous:** 2026-10-01 (2.4.12 — **HTTPS currency fetch, opt-in** behind `-D ABACO_TLS` (consumers add `tls` themselves; a build without the define compiles no TLS code and `dist/abaco.deps` is unchanged). Native backend only, chain + host verified fail closed, IPv4 literals against iPAddress SANs only, TLS 1.3, strict `Content-Length` framing, 30 s per fetch (a watchdog thread on Linux), `abaco_tls_init()` required on the main thread first. New `AI_ERR_TLS` (5): an `https://` URL without the define is now `AI_ERR_TLS`, was `AI_ERR_HTTP`. Two more cyrius TLS issues filed. Suite 2062 → **2300** in 9 files. `dist/abaco.cyr` **not** byte-identical to 2.4.11)
 
 **Previous:** 2026-09-30 (2.4.11 — **every literal is correctly rounded**, at any length: a certified double-double estimate falls back to an exact comparison against the midpoint (Clinger / Gay) when it cannot decide. 0 wrong of ~242,000 literals and 400,000+ more from two reviewers' generators; 2.4.10 got ~25% of adversarial midpoints wrong by 1 ulp. **Periodic (DFT-even) windows** for FFT / STFT. **`dist/abaco.deps` committed** (15 leaves, test-only modules out of `[deps].stdlib`), CI and release on `distlib --check`. The test and fuzz files are lint-clean and CI lints them. Suite 1801 → **2062**. `dist/abaco.cyr` **not** byte-identical to 2.4.10)
 
@@ -24,11 +26,11 @@
 
 | What | Value |
 |------|-------|
-| abaco | **2.4.12** |
-| Cyrius toolchain pin | **6.6.12** |
+| abaco | **2.4.13** |
+| Cyrius toolchain pin | **6.6.20** |
 | License | GPL-3.0-only |
 
-## Stdlib (6.2.x batching — unchanged through 6.6.12)
+## Stdlib (6.2.x batching — unchanged through 6.6.20)
 
 The 6.2.x stdlib re-batched several modules; abaco's `[deps].stdlib` list
 adjusted accordingly at 2.2.5, and no toolchain since has re-batched: every
@@ -36,9 +38,12 @@ declared module still exists and the bundles only grow internally (18 declared
 through 2.4.10; 15 since 2.4.11, which moved `assert`, `bench` and `args` into
 the test, bench and fuzz files that use them). At 6.6.12
 against 6.6.2 no public symbol left any of them; bayan 1.5.5 → 1.5.9 and ganita
-1.2.4 → 1.2.9 (both current — ganita 1.2.10 changes no source), and `chrono` and
-`alloc_cx` join the vendored set transitively. The 32 vendored files are pinned
-in `cyrius.lock` (36 through 2.4.10). As of 2.3.0 abaco calls the **canonical `bayan_*` API
+1.2.4 → 1.2.9, and `chrono` and `alloc_cx` join the vendored set transitively.
+At 6.6.20 (2.4.13): bayan 1.5.12, ganita 1.2.14, and `poison` joins
+transitively (included by `alloc` only under `CYRIUS_POISON`). The 33 vendored
+files are pinned in `cyrius.lock` (32 at 2.4.11–2.4.12, 36 through 2.4.10).
+Since 6.6.18 `[deps].stdlib` no longer feeds the published sidecar: distlib
+derives `dist/abaco.deps` from what the bundle needs to compile. As of 2.3.0 abaco calls the **canonical `bayan_*` API
 directly**, not the deprecated back-compat aliases:
 
 | Was (6.0.x) | Now (6.2.x) | Canonical symbols abaco uses |
@@ -49,6 +54,9 @@ directly**, not the deprecated back-compat aliases:
 
 **Toolchain semantics abaco depends on** (the first four pinned by tests; the network one is not exercised):
 
+- `f64_le` / `f64_ge` / `f64_trunc` are compiler builtins (reserved names)
+  from 6.6.13, like `f64_lt` / `f64_gt` / `f64_eq`; through 6.6.12 they were
+  `lib/math.cyr` calls.
 - `f64_round` is a reserved builtin (6.5.x) that ties to **even**; abaco's
   ties-away-from-zero rounding is `f64_round_half_away`. Call arity is enforced.
 - `f64_to` saturates out of range from 6.6.8 (NaN → 0, ≥ 2^63 → `i64_MAX`,
@@ -61,31 +69,38 @@ directly**, not the deprecated back-compat aliases:
   `fsin` / `fcos` (which returned |x| ≥ 2^63 unchanged).
 - `http_get` resolves names and connects from 6.6.9 (before, it reached no host);
   it has no TLS. Since 2.4.12 abaco's `https://` path is its own, over
-  `lib/tls.cyr`, only with `-D ABACO_TLS`; that native client has no deadline
-  and lets an IP literal match a dNSName, so abaco adds both (cyrius issues
-  2026-10-01-tls-*).
+  `lib/tls.cyr`, only with `-D ABACO_TLS`. At 6.6.12 that native client had no
+  deadline and let an IP literal match a dNSName, so abaco adds both (cyrius
+  issues 2026-10-01-tls-*). 6.6.13 shipped both upstream (`tls_set_deadline`,
+  iPAddress-only IP literals) and refuses a misplaced ChangeCipherSpec
+  (`TLS_ERR_PROTOCOL`), which abaco reports as `AI_ERR_TLS`; abaco still runs
+  its own watchdog and IP check (roadmap). `-D ABACO_TLS` needs ≥ 6.6.13 from
+  2.4.13 (sigil 3.13.6 removed `_xp_init`).
+- `sys_exit` is Linux's thread-only `exit`; a forked test child that may still
+  hold a thread ends with `sys_exit_group`, or its status can be another
+  thread's (2.4.13).
 
 ## Artifacts
 
 | Artifact | Size | Notes |
 |----------|------|-------|
-| `build/abaco` | ~81 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF. **81,184 B** at 2.4.12/6.6.12 (81,048 B at 2.4.11; 81,936 B at 2.4.10; 81,480 B at 2.4.9; 77,000 B at 2.4.8; 76,992 B at 2.4.7; 79,032 B at 2.4.6/6.6.2; 619,576 B at 2.4.4/6.5.35 — 6.6.x DCE drops dead code instead of NOP-filling it) |
-| `dist/abaco.cyr` | ~285 KB (~6.9k lines) | Committed consumer bundle, regenerated by a bare `cyrius distlib` (flat `[lib]` since 2.4.6). **2.4.12: 285,301 B / 6,864 lines** (the `#ifdef ABACO_TLS` arms ship verbatim), not byte-identical to 2.4.11 (248,432 B / 6,047 lines; 2.4.10: 236,882 B / 5,779 lines) — most of the growth is comments recording what each fix replaced |
-| `dist/abaco.deps` | 15 leaves | Committed since 2.4.11: the stdlib modules the bundle needs, which a consumer's `cyrius deps` reads beside it and vendors. `string fmt alloc vec str syscalls tagged hashmap fnptr math ganita io net http bayan`; CI fails if `assert` / `bench` / `args` reappear |
-| `cyrius.lock` | 33 lines | Committed. Hashes of the 32 vendored stdlib files plus the `cyrius 6.6.12` trailer (36 until 2.4.11 dropped `args`, `args_win`, `assert`, `bench`); `cyrius deps --verify` checks `lib/` against it |
+| `build/abaco` | ~84 KB | DCE smoke binary (`src/main.cyr`) — x86_64 ELF. **83,720 B** at 2.4.13/6.6.20 (81,184 B at 2.4.12/6.6.12; 81,048 B at 2.4.11; 81,936 B at 2.4.10; 81,480 B at 2.4.9; 77,000 B at 2.4.8; 76,992 B at 2.4.7; 79,032 B at 2.4.6/6.6.2; 619,576 B at 2.4.4/6.5.35 — 6.6.x DCE drops dead code instead of NOP-filling it) |
+| `dist/abaco.cyr` | ~286 KB (~6.9k lines) | Committed consumer bundle, regenerated by a bare `cyrius distlib` (flat `[lib]` since 2.4.6). **2.4.13: 286,298 B / 6,887 lines**, opening with a 12-line `# Requires` block (6.6.18), not byte-identical to 2.4.12 (285,301 B / 6,864 lines; the `#ifdef ABACO_TLS` arms ship verbatim) or 2.4.11 (248,432 B / 6,047 lines; 2.4.10: 236,882 B / 5,779 lines) — most of the growth is comments recording what each fix replaced |
+| `dist/abaco.deps` | 12 leaves | Committed since 2.4.11: the stdlib modules the bundle needs, which a consumer's `cyrius deps` reads beside it and vendors. Since 2.4.13 (Cyrius 6.6.18) compile-verified: `math string result alloc ganita fmt bayan vec hashmap str io http` (2.4.11–2.4.12: 15, from `[deps].stdlib`, with `syscalls tagged fnptr net` and no `result`); CI fails if `assert` / `bench` / `args` reappear |
+| `cyrius.lock` | 34 lines | Committed. Hashes of the 33 vendored stdlib files plus the `cyrius 6.6.20` trailer (32 at 2.4.11–2.4.12; 36 until 2.4.11 dropped `args`, `args_win`, `assert`, `bench`; `poison` joined at 2.4.13); `cyrius deps --verify` checks `lib/` against it |
 
 ## Tests
 
-**2300 asserts, 0 failures** across 9 `.tcyr` files, on x86_64 and on aarch64
+**2325 asserts, 0 failures** across 9 `.tcyr` files, on x86_64 and on aarch64
 (`cyrius test --aarch64`, qemu — a CI lane since 2.4.10):
 
 | Suite | Asserts |
 |-------|---------|
 | `test_ai` | 435 |
-| `test_ccy_tls` | 85 |
+| `test_ccy_tls` | 86 |
 | `test_ccy_tls_libssl` | 7 |
 | `test_dsp` | 249 |
-| `test_eval` | 898 |
+| `test_eval` | 922 |
 | `test_integration` | 63 |
 | `test_ntheory` | 171 |
 | `test_simd` | 27 |
@@ -514,10 +529,19 @@ geometry, calculus, numerical methods) — distinct domain, no abaco dependency.
   `dist/abaco.deps` sidecar, and makes the test tree lint-clean under a widened
   gate. Studied, not shipped: currency TLS (ready behind `-D ABACO_TLS`, see the
   roadmap). Filed upstream: a ganita `tan`, and cyrius TLS findings.
-- **2.4.12** (this release) ships the HTTPS currency fetch, opt-in behind
+- **2.4.12** ships the HTTPS currency fetch, opt-in behind
   `-D ABACO_TLS`, with guards for each cyrius TLS defect it found (libssl
   refused, main-thread init, a per-fetch deadline, abaco's own iPAddress
   check), and files two more of them.
+- **2.4.13** (this release) pins **Cyrius 6.6.20**. The source barely changes
+  (a null check after `bayan_json_parse`, `_xp_init` gone from
+  `abaco_tls_init`); the stdlib does: ganita 1.2.14 moves eight evaluator
+  functions — measured by a 97,944-record differential and scored against
+  mpmath, every change but 442 tie-level ones an improvement — and 6.6.18's
+  compile-verified sidecar drops to 12 leaves. The TLS suite was re-aimed at
+  6.6.13's ChangeCipherSpec refusal, and a test helper that could pass a
+  failing stall case (`sys_exit` ends one thread) fixed. The 6.6.13–6.6.16
+  "drop the workaround" items stay open on the roadmap.
 
 - **Still open**: see [`roadmap.md`](roadmap.md). Consumers move onto a
   release on their own schedule; abaco's part is the upgrade notes in

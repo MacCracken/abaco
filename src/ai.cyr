@@ -1253,6 +1253,9 @@ fn _ccy_load_body(c, body, len) {
     # so a nested value would silently drop every pair after it.
     if (_ccy_rates_flat(rates_obj) == 0) { return AI_ERR_CURRENCY; }
     var pairs = bayan_json_parse(rates_obj);
+    # bayan 1.5.10 (Cyrius 6.6.13): 0 when an allocation is refused, never a
+    # partial vec — and vec_len(0) would load from address 0.
+    if (pairs == 0) { return AI_ERR_CURRENCY; }
     var rates = map_new();
     var i = 0;
     var kept = 0;
@@ -1264,8 +1267,10 @@ fn _ccy_load_body(c, body, len) {
         var kbuf = alloc(str_len(kstr) + 1);
         memcpy(kbuf, str_data(kstr), str_len(kstr));
         store8(kbuf + str_len(kstr), 0);
-        # Trim JSON whitespace: bayan_json_parse ends a bare value only at
-        # ',', '}', ' ' or LF, so a CRLF body hands over "0.79\r".
+        # Trim JSON whitespace: through bayan 1.5.9 bayan_json_parse ended a
+        # bare value only at ',', '}', ' ' or LF, so a CRLF body handed over
+        # "0.79\r" (1.5.12 ends one at TAB and CR too; a consumer's own pin
+        # may be older).
         var vd = str_data(vstr);
         var vn = str_len(vstr);
         var vs = _jf_skip_ws(vd, vn, 0);
@@ -1749,9 +1754,10 @@ fn _abaco_on_main_thread() {
 #     handshake pays for them on a worker
 #   - the system CA bundle cache, through tls_native_set_ca_system on a
 #     throwaway ctx, which parses every root: PEM, X.509 and RSA / EC keys
-#   - _pem_init, _xp_init, _x509_oids_init, _x509_init_mdays directly too:
-#     a host with no system bundle reaches them first through the cache's CA
-#     file, and no public verb reaches them without a certificate in hand
+#   - _pem_init, _x509_oids_init, _x509_init_mdays directly too: a host with
+#     no system bundle reaches them first through the cache's CA file, and no
+#     public verb reaches them without a certificate in hand. (_xp_init went
+#     with sigil 3.13.6, Cyrius 6.6.13: X.509 parse scratch has no lazy init.)
 # RSA verification and the bignum engine keep no lazy state (stack-local since
 # sigil 3.12.9), nor do X25519 and ChaCha20-Poly1305. tests/test_ccy_tls.tcyr
 # checks that fetches over an ECDSA and an RSA-signed chain flip no lazy-init
@@ -1772,7 +1778,6 @@ fn abaco_tls_init() {
     aes_gcm_global_init();
     ed25519_init();
     _pem_init();
-    _xp_init();
     _x509_oids_init();
     _x509_init_mdays();
     var wc = tls_native_new_client("localhost", 9);
@@ -1824,9 +1829,12 @@ fn _ccy_nodelay(fd) {
 # deadline, at any stage of the handshake or the exchange — is a network
 # failure, AI_ERR_HTTP; every other code (a certificate or name refused, a
 # malformed or undecryptable record, an alert in place of a handshake message)
-# is the TLS layer refusing, AI_ERR_TLS. lib/tls.cyr reports a record it could
-# not read as TLS_ERR_IO whatever the cause, so a record longer than TLS allows
-# lands on the network side too.
+# is the TLS layer refusing, AI_ERR_TLS. Through Cyrius 6.6.12 lib/tls.cyr
+# reported a record it could not read as TLS_ERR_IO whatever the cause, so a
+# record longer than TLS allows landed on the network side, and a fatal alert
+# after the handshake read as end of stream. From 6.6.13 they are
+# TLS_ERR_BAD_RECORD and TLS_ERR_ALERT, and a ChangeCipherSpec out of place is
+# TLS_ERR_PROTOCOL: all AI_ERR_TLS.
 fn _ccy_tls_err(code) {
     if (code == TLS_ERR_IO) { return AI_ERR_HTTP; }
     return AI_ERR_TLS;
@@ -1834,11 +1842,12 @@ fn _ccy_tls_err(code) {
 
 # ---------------------------------------------------------------- deadline
 # SO_RCVTIMEO / SO_SNDTIMEO bound each socket operation, not the fetch: a peer
-# that sends one byte every few seconds, or a plaintext ChangeCipherSpec record
-# every second (lib/tls.cyr skips those without a limit, during the handshake
-# and after it — cyrius issue 2026-10-01-tls-native-no-deadline.md), keeps
-# every read under the timeout forever, and neither needs a key or a
-# certificate: any on-path box can do it. So each fetch runs under a watchdog:
+# that sends one byte every few seconds keeps every read under the timeout
+# forever, and needs no key or certificate: any on-path box can do it. Through
+# Cyrius 6.6.12 so did a plaintext ChangeCipherSpec record every second, which
+# lib/tls.cyr skipped without a limit (cyrius issue
+# 2026-10-01-tls-native-no-deadline.md); from 6.6.13 a CCS outside TLS 1.3's
+# one-CCS window is TLS_ERR_PROTOCOL at once. So each fetch runs under a watchdog:
 # a detached thread that, at the deadline, cuts the socket (below) unless the
 # fetch has finished first. Its state is one heap block per fetch, { state,
 # fd, ms } — nothing global, so fetches on many threads do not interact. Linux
@@ -1976,7 +1985,7 @@ fn _ccy_tls_exchange(tc, req, out) {
         var n = tls_read(tc, buf + total, CCY_TLS_RESP_CAP - total);
         reads = reads + 1;
         if (n < 0) { return _ccy_tls_err(n); }
-        if (n == 0) { break; }       # end of stream: close_notify — or any alert
+        if (n == 0) { break; }       # end of stream: close_notify (through 6.6.12, any alert)
         total = total + n;
         if (need == 0) {
             need = _ccy_http_head(buf, total, &h);

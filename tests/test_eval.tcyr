@@ -1623,6 +1623,45 @@ fn test_transcendental_coverage() {
     return 0;
 }
 
+# 1 when `actual` is within k ulps of `ref` (bit patterns of the same sign,
+# neither of them ±0).
+fn within_ulps(actual, ref, k) {
+    if (actual >= ref - k && actual <= ref + k) { return 1; }
+    return 0;
+}
+
+# ganita 1.2.10-1.2.14 (Cyrius 6.6.13-6.6.20) rewrote asin, sinh, cosh, tanh,
+# asinh, acosh, atanh and atan2. Each row is the worst case a 98,000-record
+# differential found on the 6.6.12 pin (the old error in ulps on the right),
+# against mpmath at 400 bits; near_tight's 1e-9 window saw none of them. A
+# 2-ulp window: ganita's stated bound is 2.2 ulp and the aarch64 exp / log
+# polyfills are within 1 ulp but not bit-identical to x86.
+fn test_ganita_accuracy() {
+    assert(within_ulps(ev("sinh(2.9061825742632295e-08)"), 0x3E5F34742E574540, 2) == 1,
+      "sinh just above its small-argument cutoff (was 39,273,792 ulp off)");
+    assert(within_ulps(ev("tanh(2.7144580120743476e-08)"), 0x3E5D257203AAEA28, 2) == 1,
+      "tanh just above its small-argument cutoff (was 22,353,364 ulp off)");
+    assert(within_ulps(ev("asinh(1.4722811692840365e-08)"), 0x3E4F9DF38A079F52, 2) == 1,
+      "asinh just above its small-argument cutoff (was 99,566,017 ulp off)");
+    assert(within_ulps(ev("atanh(2.7810959421352758e-08)"), 0x3E5DDC9E49F28105, 2) == 1,
+      "atanh just above its small-argument cutoff (was 31,549,692 ulp off)");
+    assert(within_ulps(ev("acosh(1.000000312776238)"), 0x3F49EAB50C344120, 2) == 1,
+      "acosh just above 1 (was 540,576 ulp off)");
+    assert(within_ulps(ev("cosh(-709.0886849252643)"), 0x7FCFF8C9AAF78F74, 2) == 1,
+      "cosh near the overflow edge (was 495 ulp off)");
+    assert(within_ulps(ev("sinh(710.3)"), 0x7FEAD6EB7CCB4488, 2) == 1,
+      "sinh between 709 and its overflow at 710.48 (was 415 ulp off)");
+    assert(within_ulps(ev("asin(0.9999999)"), 0x3FF920266447A7FA, 2) == 1,
+      "asin near 1 (was 40 ulp off)");
+    # atan2's signed zeros (C99 F.9.1.4); -0 is negative zero since 6.6.8's
+    # f64_neg. Through ganita 1.2.9 every row here answered +0 or +pi.
+    assert(within_ulps(ev("atan2(0, -0)"), 0x400921FB54442D18, 1) == 1, "atan2(+0, -0) = +pi (was 0)");
+    assert(within_ulps(ev("atan2(-0, -1)"), 0xC00921FB54442D18, 1) == 1, "atan2(-0, -1) = -pi (was +pi)");
+    assert(within_ulps(ev("atan2(-0, -0)"), 0xC00921FB54442D18, 1) == 1, "atan2(-0, -0) = -pi (was 0)");
+    assert_eq(ev("atan2(-0, 0)"), 0x8000000000000000, "atan2(-0, +0) = -0 (was +0)");
+    return 0;
+}
+
 # Cyrius 6.6.8 made f64_to saturate — NaN -> 0, x >= 2^63 -> i64_MAX,
 # x < -2^63 -> i64_MIN — where x86 had answered i64_MIN for all of them, and
 # the evaluator used that i64_MIN as its integer-domain check. Against the
@@ -2121,6 +2160,7 @@ fn main() {
     test_pow_zero_base();
     test_pow_huge_integer_exponent();
     test_transcendental_coverage();
+    test_ganita_accuracy();
     test_zero_mantissa_and_range();
     test_top_of_range_literals();
     test_two_product_exact();

@@ -5,6 +5,129 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.13] — 2026-10-31
+
+Toolchain **Cyrius 6.6.12 → 6.6.20**, stdlib re-vendored (bayan 1.5.9 → 1.5.12,
+ganita 1.2.9 → 1.2.14; sigil 3.13.5 → 3.13.10 for `-D ABACO_TLS` builds).
+abaco's own source changes are small: one null check, two TLS-path lines and
+comments. The bump still changes what users see. **Eight transcendentals
+return different, far more accurate results.** The sidecar shrinks to 12
+leaves and the bundle now includes its own stdlib. Over HTTPS, a
+ChangeCipherSpec flood is refused at once instead of being cut at the
+deadline.
+
+Suite 2300 → **2325** asserts; fuzz 4/4 at 20,000 iterations; fmt / lint / vet
+clean; aarch64 (qemu) green. `dist/abaco.cyr` is **not** byte-identical to
+2.4.12, so consumers re-vendor.
+
+### Changed
+
+- **Toolchain `6.6.12` → `6.6.20`**, stdlib re-vendored with `cyrius deps`. All
+  15 declared modules still exist. `lib/poison.cyr` joins the vendored set:
+  `lib/alloc.cyr` includes it only under `CYRIUS_POISON`, so nothing compiled
+  changes. `cyrius.lock` now pins 33 files. The re-vendor also retires the
+  pre-6.6.13 `lib/math.cyr`, which still defined `f64_le` / `f64_ge` /
+  `f64_trunc`. 6.6.13 made those three compiler builtins (reserved names).
+  abaco only calls them.
+- **Eight functions return different results: ganita 1.2.10–1.2.14.** These are
+  `asin`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh` and `atan2`, through
+  the evaluator. A 97,944-record differential corpus was run on both pins. It
+  covered every evaluator function over ~70 special arguments (NaN, ±Inf, ±0,
+  2^63 edges, subnormals, the overflow edges), dense random arguments where
+  ganita changed bodies, operators, 10,000 literals, number theory, every unit
+  pair, NL, DSP and windows. **9,163 records differ, every one in these eight
+  functions.** No error code changed and nothing crashed or hung, on either pin.
+  Scored against mpmath at 400 bits:
+
+  | Function | Records that differ | Worst error, 6.6.12 | Worst, 6.6.20 | Worst case, 6.6.12 |
+  |----------|--------------------:|--------------------:|--------------:|--------------|
+  | `asinh` | 1,273 | 99,566,017 ulp | 1.47 ulp | `asinh(1.4722811692840365e-08)` |
+  | `sinh` | 2,250 | 39,273,792 ulp | 1.48 ulp | `sinh(2.9061825742632295e-08)` |
+  | `atanh` | 1,295 | 31,549,692 ulp | 1.14 ulp | `atanh(2.7810959421352758e-08)` |
+  | `tanh` | 1,610 | 22,353,364 ulp | 1.81 ulp | `tanh(2.7144580120743476e-08)` |
+  | `acosh` | 660 | 540,576 ulp | 1.28 ulp | `acosh(1.000000312776238)` |
+  | `cosh` | 1,102 | 495 ulp | 0.98 ulp | `cosh(-709.0886849252643)` |
+  | `asin` | 201 | 40 ulp | 1.26 ulp | `asin(0.9999999)` |
+  | `atan2` | 772 | wrong value | 0 ulp | `atan2(-0, -1)` = +π |
+
+  - 8,721 of the differing results moved closer to the true value. The other
+    442 moved away, all by under 2 ulp, inside ganita's stated 2.2-ulp bound.
+  - The worst of the old errors were cancellation just above each function's
+    small-argument cutoff (around 1e-8, a relative error of ~1e-8), plus
+    `sinh` / `cosh` between 709 and their overflow at 710.48.
+  - `atan2` now follows C99 F.9.1.4 for signed zeros and infinities:
+    `atan2(0, -0)` = π (was 0), `atan2(-0, -x)` = −π (was +π) and
+    `atan2(-0, 0)` = −0 (was +0). `-0` in an expression is negative zero
+    (Cyrius 6.6.8's `f64_neg`).
+  - The suite's 1e-9 tolerance saw none of these changes. `test_ganita_accuracy`
+    now pins each worst case within 2 ulp, and every row fails on the 6.6.12 pin.
+- **`dist/abaco.deps`: 15 → 12 leaves**, now compile-verified.
+  - Cyrius 6.6.18 derives a sidecar from what the bundle needs to compile, no
+    longer from `[deps].stdlib`.
+  - The new list is `math string result alloc ganita fmt bayan vec hashmap str
+    io http`. `syscalls`, `tagged`, `fnptr` and `net` are gone, still reached
+    through these. `result` is new: it is where `Ok` / `Err` live.
+  - Followed transitively, a consumer's `cyrius deps` no longer receives
+    `tagged` or `boxed`. A consumer that used those without declaring them must
+    now declare `tagged`. dhvani and jalwa already declare it.
+- **`dist/abaco.cyr` carries a `# Requires` block** (Cyrius 6.6.18): twelve
+  `include "lib/<leaf>.cyr"` lines, the sidecar's leaves, ahead of the first
+  module. So `include "dist/abaco.cyr"` compiles alone. A consumer that also
+  includes those files is unaffected, because include-once is keyed on the path.
+  A bundle from before 6.6.18 reads STALE under `distlib --check`, which
+  suggests `cyrius distlib --all`. abaco has no profiles, so a bare
+  `cyrius distlib` writes the same two files.
+
+### Changed — HTTPS (`-D ABACO_TLS` builds only)
+
+- **`-D ABACO_TLS` now needs Cyrius ≥ 6.6.13** (sigil ≥ 3.13.6).
+  `abaco_tls_init` no longer calls `_xp_init`, which sigil 3.13.6 deleted along
+  with the lazy initialisation of X.509 parse scratch. On older toolchains the
+  call still exists, but the warm-up would miss that table.
+- **A ChangeCipherSpec out of place is now `AI_ERR_TLS` at once.** Through 6.6.12,
+  lib/tls.cyr skipped plaintext CCS records without limit, during the handshake
+  and after it. Only abaco's per-fetch deadline ended a CCS flood, as
+  `AI_ERR_HTTP`. From 6.6.13 (CYRIUS-2026-0017, found by the 2.4.12 review) a
+  second CCS in a TLS 1.3 handshake, or any CCS after it, is
+  `TLS_ERR_PROTOCOL`. Measured: a flood is refused in 8 ms (was 1.5 s at the
+  deadline), and a CCS after the request in 63 ms (was 4 s).
+- **A fatal alert after the handshake, and a record longer than TLS allows, are
+  now `AI_ERR_TLS`.** Before, lib/tls.cyr read the first as end of stream and
+  the second as `TLS_ERR_IO` (`AI_ERR_HTTP`). They are now `TLS_ERR_ALERT` and
+  `TLS_ERR_BAD_RECORD`. `_ccy_tls_err` already sent every non-IO code to
+  `AI_ERR_TLS`, so only its comment changed.
+
+### Fixed
+
+- **`_ccy_load_body`: a refused allocation took SIGSEGV.** bayan 1.5.10
+  (Cyrius 6.6.13) made `bayan_json_parse` return 0 when an allocation is
+  refused, where it used to return a partial vec. abaco passed that straight to
+  `vec_len`, which loads from address 0. Now `AI_ERR_CURRENCY`.
+- **`tests/test_ccy_tls.tcyr` could pass a failing stall case.**
+  - `_timed_child` ended with `sys_exit`, which is Linux's thread-only `exit`.
+    The fetch's watchdog thread could still be alive, so the status the parent
+    read was sometimes that thread's 0.
+  - On the 6.6.12 pin, three children that printed a wrong code showed as one
+    or two failures, varying run to run.
+  - The timed children and the threaded child now end with `sys_exit_group`.
+    The same three now fail every time on 6.6.12.
+
+### Tests
+
+- **`test_ccy_tls`, updated for the new pin (85 → 86).**
+  - The three CCS stall cases now expect `AI_ERR_TLS` before the deadline. The
+    slow case is refused at its *second* CCS, 200 ms in, because TLS 1.3 allows
+    one.
+  - A new `/drip` case stalls *after the request*: an application-data record
+    header, then 1 byte every 250 ms. The deadline must still cut a stalled
+    response, and the old CCS case no longer exercises that.
+  - The fd-leak loop now takes its "cut by the deadline" fetch from the drip
+    server, and adds a CCS refusal (alert + close).
+  - The lazy-init snapshot drops `_xp_alloced`, which sigil deleted
+    (`SNAP_N` 36 → 35). `_ecs256_inited` / `_ecs384_inited` stay: sigil 3.13.8
+    keeps them as mirrors of its constant-time engine's flags.
+- **`test_eval` +24:** `test_ganita_accuracy`, above.
+
 ## [2.4.12] — 2026-10-01
 
 The roadmap's currency-TLS item: `CurrencyCache_fetch` over `https://`,

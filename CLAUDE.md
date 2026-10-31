@@ -94,9 +94,12 @@ lives in the modules under `[lib]` and is shipped as `dist/abaco.cyr`:
   reads) and `cyrius.lock`, which `cyrius deps` writes: the vendored stdlib's
   hashes plus the pin, so a snapshot that changes under an unchanged pin is
   refused.
-- `[deps].stdlib` lists only what the library needs — it is what the sidecar
-  ships to consumers. A test-, bench- or fuzz-only module (`assert`, `bench`,
-  `args`) is included from the file that uses it, never declared there.
+- `[deps].stdlib` lists only what the library needs — it drives abaco's own
+  builds and `cyrius deps`. The published sidecar (`dist/abaco.deps`) is not
+  copied from it: since Cyrius 6.6.18 `cyrius distlib` derives the sidecar
+  from what the bundle needs to compile. A test-, bench- or fuzz-only module
+  (`assert`, `bench`, `args`) is included from the file that uses it, never
+  declared there.
 - `cyrius.cyml` is data — not a ledger, not a changelog. No history or
   rationale comments in it: rules about the manifest live here, history in
   `CHANGELOG.md`, design in `docs/`.

@@ -561,6 +561,23 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
 - [x] Hermetic TLS suite (forked native servers, fixture CAs), a libssl-only
       build suite, parsers and DER walker fuzzed; 2062 → 2300 asserts
 
+### 2.4.13 — Cyrius 6.6.20 ✅ (2026-10-31)
+
+- [x] Pin 6.6.12 → 6.6.20, stdlib re-vendored (bayan 1.5.12, ganita 1.2.14;
+      sigil 3.13.10), `cyrius.lock` 33 files; `dist/abaco.deps` 15 → 12
+      compile-verified leaves and a `# Requires` block in the bundle (6.6.18)
+- [x] The ⛔ pin-bump items recorded below: `_xp_alloced` out of the TLS
+      snapshot (`SNAP_N` 35), `_xp_init` out of `abaco_tls_init`, `lib/math.cyr`
+      re-vendored
+- [x] 97,944-record differential, 6.6.12 vs 6.6.20, scored against mpmath:
+      9,163 differ, all in the eight ganita functions it rewrote; pinned by
+      `test_ganita_accuracy` (fails on 6.6.12)
+- [x] TLS suite re-aimed at 6.6.13's ChangeCipherSpec refusal, a post-request
+      drip keeps the deadline covered, and the timed children exit with
+      `sys_exit_group` (a still-running watchdog thread could pass a failing case)
+- [x] `_ccy_load_body` checks `bayan_json_parse` for 0 (bayan 1.5.10)
+- [x] 2300 → 2325 asserts, x86_64 and aarch64 (qemu)
+
 ### Still open
 
 > The two residuals the 2.3.5 fix audit left open were closed in 2.4.0.
@@ -584,7 +601,8 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
       then 1.2 fallback), a deadline off Linux (no futex there), IPv6, and a
       test for the IP check refusing a leaf it cannot read (> 16 KB; the code
       refuses it, no fixture serves one)
-- [ ] **Upstream (ganita)** — filed 2026-09-30 in ganita's
+- [x] **Upstream (ganita)** — shipped in ganita 1.2.10–1.2.14 (Cyrius 6.6.13–6.6.20),
+      re-pinned and retested at 2.4.13 (`test_ganita_accuracy`). Was: filed 2026-09-30 in ganita's
       `docs/development/issues/`, each with a self-proving repro and a tested fix:
       `2026-09-30-f64-hyperbolic-and-asin-cancellation-band.md` (`sinh` / `tanh` /
       `asinh` / `atanh` up to ~1.3e8 ulp just above their small-|x| cutoffs,
@@ -595,7 +613,8 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
       `2026-09-30-binomial-refuses-representable-values.md` (moot for abaco since
       `abaco_binomial`). When ganita ships them and cyrius re-vendors it, re-pin and
       retest; abaco's NaN guard on `atan2` can stay
-- [ ] **Upstream (bayan)** — filed 2026-09-30 in bayan's `docs/development/issues/`:
+- [x] **Upstream (bayan)** — both shipped in bayan 1.5.10 (Cyrius 6.6.13; archived
+      upstream); in abaco from 2.4.13. Was: filed 2026-09-30 in bayan's `docs/development/issues/`:
       `2026-09-30-u64-mulmod-aarch64-always-wide.md` (aarch64 mulmod ~2,000× x86
       under qemu, ~300× on hardware by estimate; tested asm fix, `is_prime` 4.3 s →
       14 ms under qemu) and `2026-09-30-json-parse-flat-misassociates-values.md`
@@ -605,27 +624,29 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
       `2026-09-30-f64-tan-missing.md` (fdlibm `s_tan` / `k_tan` on
       `_f64_rem_pio2`; repro exits 6). When it ships, abaco drops its kernel and
       its use of the private `_f64_rem_pio2`
-- [ ] **Upstream shipped — drop the consumer workarounds at the cyrius 6.6.13 pin** (recorded by cyrius
-      6.6.13, 2026-10-02):
+- [ ] **Upstream shipped — drop the consumer workarounds** (recorded by cyrius 6.6.13, 2026-10-02; the pin is
+      6.6.20 since 2.4.13, so each can go now — one change at a time, each with its own A/B. 2.4.13 did only
+      the ⛔ items):
       - ganita 1.2.11 ships `ganita_f64_tan` / `f64_tan` (folded in cyrius 6.6.13): drop abaco's own tan
         kernel and its use of the private `_f64_rem_pio2` (the item above).
       - `tls_set_deadline(ctx, abs_ns)` (I8) replaces the per-fetch watchdog thread
-        (`shutdown(SHUT_RD)` + `dup2`), and a CCS flood now fails fast.
-      - An IP-literal host matches iPAddress SANs only (I7): `_ccy_cert_ip_san` can go.
+        (`shutdown(SHUT_RD)` + `dup2`). The CCS half is done: a CCS flood fails fast, and 2.4.13's suite
+        pins it (`AI_ERR_TLS` before the deadline); the drips still need the deadline.
+      - An IP-literal host matches iPAddress SANs only (I7): `_ccy_cert_ip_san` / `_ccy_ip_host_ok` can go.
       - `tls_init_main()` (I3) replaces the `crypto_tls_main_init(); ecdsa_p256_warm(); ecdsa_p384_warm();`
         pre-warm.
       - `f64_parse` is correctly rounded (I4): abaco can return to it.
-      - A fatal alert is `TLS_ERR_ALERT`, not EOF (I2 c): `_ccy_tls_err`'s "close_notify — or any alert"
-        comment is now wrong in the good direction.
-      - re-vendor `lib/math.cyr` with `cyrius deps` in the same commit — 6.6.13 made `f64_le` / `f64_ge` / `f64_trunc` compiler builtins (reserved names), and a pre-6.6.13 vendored copy still defines them (`reserved keyword`).
-      - ⛔ `tests/test_ccy_tls.tcyr` `_snap` (~585) stores `_xp_alloced`, which sigil deleted at 3.13.6 as dead
+      - ✅ 2.4.13: a fatal alert is `TLS_ERR_ALERT`, not EOF (I2 c) — the comments in `_ccy_tls_err` and the
+        response loop say so now. No test sends an alert after the handshake yet.
+      - ✅ 2.4.13: re-vendor `lib/math.cyr` with `cyrius deps` in the same commit — 6.6.13 made `f64_le` / `f64_ge` / `f64_trunc` compiler builtins (reserved names), and a pre-6.6.13 vendored copy still defines them (`reserved keyword`).
+      - ✅ 2.4.13 (and `abaco_tls_init`'s `_xp_init` call, removed for the same reason): `tests/test_ccy_tls.tcyr` `_snap` (~585) stored `_xp_alloced`, which sigil deleted at 3.13.6 as dead
         (folded from cyrius 6.6.13): the test stops compiling at any pin past 6.6.12. In the SAME commit as the
         pin bump, drop that slot and renumber the stores after it (`SNAP_N` 36 → 35) — x509 parse scratch has had
         no lazy init since 3.13.6. `_ecs256_inited` / `_ecs384_inited` stay valid: sigil 3.13.8 keeps those names
         (set when its constant-time engine's init publishes). Recorded by cyrius 6.6.15 (2026-10-02).
-- [ ] **Upstream shipped — at the cyrius 6.6.16 pin** (recorded by cyrius 6.6.16, 2026-10-05; ⛔ nothing to do
-      until cyrius 6.6.16 is tagged and out):
-      - `_ccy_nodelay` (`src/ai.cyr:1813`) guards its `sys_setsockopt` with `#ifdef CYRIUS_TARGET_LINUX`, citing
+- [ ] **Upstream shipped — at the cyrius 6.6.16 pin** (recorded by cyrius 6.6.16, 2026-10-05; actionable since
+      2.4.13 pinned 6.6.20):
+      - `_ccy_nodelay` (`src/ai.cyr:1818`) guards its `sys_setsockopt` with `#ifdef CYRIUS_TARGET_LINUX`, citing
         "agnos has no setsockopt". cyrius 6.6.16 (its N8) defines `sys_setsockopt` on agnos as a -38 (-ENOSYS)
         decline stub, so the agnos reason is gone. The guard also excludes **macOS**, where `TCP_NODELAY`
         (6 / 1) is valid and the call works — so the Nagle win this fn measured on Linux (77 → 46 ms) is presumably lost there today (not measured on macOS). If
@@ -634,3 +655,19 @@ more (two introduced by the fixes), all fixed. Report and every disposition:
       - Information only: from 6.6.16 a plain `lib/net.cyr` socket write never raises SIGPIPE (Linux `sendto`
         with `MSG_NOSIGNAL`, macOS `SO_NOSIGPIPE`; cyrius CVE-74), matching what 6.6.14 already did for TLS
         record writes. No change needed.
+- [ ] **Upstream (bayan), to file — `bayan_u64_powmod` is ~28 % slower since bayan 1.5.10.** To take
+      exponents ≥ 2^63 it shifts the exponent with a call (`_u128_lshr64(exp, 1)`) on every bit where it used
+      `exp >> 1`. Measured on x86_64 in isolation: 300,000 × `powmod(b, 1e9+6, 1e9+7)` 104 → 133 ms; in the
+      trail, `is_prime_*` / `next_prime` / `factor_large` +11–30 %. A non-negative exponent shifts the same
+      either way, so `>>` while `exp >= 0` (or a logical-shift builtin) restores it. abaco's `mod_pow` never
+      passes a negative exponent: it splits one itself, a split it keeps while consumers' pins predate 1.5.10.
+      (`fibonacci` / `totient` / `sanitize_4096` also read slower in the 2.4.13 A/B; the same code timed in
+      isolation is equal on both pins, so that is layout.)
+- [ ] **Comments that 6.6.13–6.6.20 made stale** (found reading the cyrius CHANGELOG for 2.4.13; none
+      changes behaviour): `src/ai.cyr` — the CA-file note that one malformed block fails the bundle (6.6.13
+      installs the good roots), the 300-certificate cap credited to `TLS_CA_MAX_ROOTS` (no longer bounds a
+      bundle in 6.6.20; the cap is abaco's own rule now), the per-fetch heap notes, the SIGPIPE rationale
+      (socket writes use `MSG_NOSIGNAL` since 6.6.16), the libssl refusal's "never checks the host name"
+      (6.6.13 binds it); `src/core.cyr` — the `fmt_int_buf` high-water note (it writes `len + 1` bytes since
+      6.6.18) and the 1e16 switch to scientific, which `fmt_float_buf` no longer needs for |x| ≥ 2^63.
+      Reword the comments; keep every guard, since a consumer's pin may predate the upstream fix

@@ -15,6 +15,9 @@
 # flood ChangeCipherSpec records, stay silent, hang up or send an alert — for
 # the deadline and the error-code cases; the stalls run in forked children
 # under a short deadline, so a regression fails the suite instead of hanging.
+# From Cyrius 6.6.13 lib/tls.cyr refuses a CCS outside TLS 1.3's one-CCS window
+# (TLS_ERR_PROTOCOL), so the CCS cases pin that refusal and the drips the
+# deadline.
 #define ABACO_TLS
 
 include "lib/syscalls.cyr"
@@ -53,7 +56,8 @@ enum TlsTest {
     MT_ROUNDS = 2;          # rounds, each with fresh threads
     MT_WAIT_S = 120;        # the threaded child is killed past this (qemu is slow)
     FD_LOOPS = 2;           # error-path loop count for the fd-leak check
-    SNAP_N = 36;            # lazy-init flags in the snapshot
+    SNAP_N = 35;            # lazy-init flags in the snapshot
+    STALL_KIDS = 5;         # timed children: 2 drips (deadline), 3 CCS (refused)
     STALL_MS = 1500;        # the deadline the stall cases run under
     STALL_WAIT_S = 60;      # a stall child is killed past this
 }
@@ -285,9 +289,10 @@ fn _srv_respond(tc, cfd, path) {
     }
     if (streq(path, "/ccs/rates") == 1) {
         # No response: plaintext ChangeCipherSpec records on the raw socket,
-        # one per 200 ms. They need no key — any on-path box can send them —
-        # and lib/tls.cyr skips them after the handshake too, so only the
-        # fetch's deadline ends this.
+        # one per 200 ms. They need no key — any on-path box can send them.
+        # Through Cyrius 6.6.12 lib/tls.cyr skipped them after the handshake
+        # too, so only the fetch's deadline ended this; from 6.6.13 the first
+        # one is TLS_ERR_PROTOCOL.
         var ccs = alloc(8);
         _ccs_rec(ccs);
         var k = 0;
@@ -295,6 +300,25 @@ fn _srv_respond(tc, cfd, path) {
             if (sys_write(cfd, ccs, 6) != 6) { return 0; }
             sleep_ms(200);
             k = k + 1;
+        }
+        return 0;
+    }
+    if (streq(path, "/drip/rates") == 1) {
+        # No response: on the raw socket, an application-data record header for
+        # 16000 bytes, then one byte per 250 ms. Each byte keeps the client's
+        # read under its socket timeout, so only the fetch's deadline ends this.
+        var dr = alloc(8);
+        store8(dr, 23);                         # application data, TLS 1.2,
+        store8(dr + 1, 3);                      # 0x3E80 = 16000 bytes long
+        store8(dr + 2, 3);
+        store8(dr + 3, 62);
+        store8(dr + 4, 128);
+        if (sys_write(cfd, dr, 5) != 5) { return 0; }
+        var dk = 0;
+        while (dk < 400) {
+            sleep_ms(250);
+            if (sys_write(cfd, dr, 1) != 1) { return 0; }
+            dk = dk + 1;
         }
         return 0;
     }
@@ -470,6 +494,9 @@ fn _raw_start(mode, out) {
 # the default), print the code and the time, and exit 0 when the code is
 # `want` and the time is in [lo, hi) ms, else 1. Returns the child's pid. The
 # child warms TLS itself when it starts cold (it is its process's main thread).
+# It exits with sys_exit_group: the fetch's watchdog thread can still be alive,
+# and sys_exit ends only the calling thread, so through 2.4.12 the status the
+# parent read was sometimes that thread's 0 — a wrong code or time could pass.
 fn _timed_child(name, url, ca, ms, want, lo, hi) {
     var pid = sys_fork();
     if (pid != 0) { return pid; }
@@ -486,8 +513,8 @@ fn _timed_child(name, url, ca, ms, want, lo, hi) {
     print(" after ", 7);
     print_num(dt);
     println(" ms");
-    if (e == want && dt >= lo && dt < hi) { sys_exit(0); }
-    sys_exit(1);
+    if (e == want && dt >= lo && dt < hi) { sys_exit_group(0); }
+    sys_exit_group(1);
     return 0;
 }
 
@@ -544,9 +571,11 @@ fn _srv_start(certf, keyf, out) {
 }
 
 # ================================================================
-# Lazy-init flags of the native TLS client (Cyrius 6.6.12 sigil and
+# Lazy-init flags of the native TLS client (Cyrius 6.6.20: sigil 3.13.10 and
 # tls_native). After abaco_tls_init() a fetch must flip none of them: one that
-# flips is an initialiser a worker thread would run first.
+# flips is an initialiser a worker thread would run first. _ecs256_inited /
+# _ecs384_inited are sigil's kept names (3.13.8), set when its constant-time
+# engine's init publishes; _xp_alloced went with sigil 3.13.6.
 # ================================================================
 fn _snap(out) {
     store64(out, _crypto_tls_inited);
@@ -582,9 +611,8 @@ fn _snap(out) {
     store64(out + 240, _ecs384_inited);
     store64(out + 248, _x509_oids_inited);
     store64(out + 256, _x509_mdays_inited);
-    store64(out + 264, _xp_alloced);
-    store64(out + 272, _pem_inited);
-    store64(out + 280, _tn_ca_len);
+    store64(out + 264, _pem_inited);
+    store64(out + 272, _tn_ca_len);
     return 0;
 }
 
@@ -706,7 +734,7 @@ fn main() {
 
     # --- threaded, in a cold child (before this process touches TLS) --------
     var mp = sys_fork();
-    if (mp == 0) { sys_exit(_mt_child(pg, pr)); }
+    if (mp == 0) { sys_exit_group(_mt_child(pg, pr)); }   # watchdogs may outlive it
     var mst = _wait_child(mp, MT_WAIT_S);
     assert_eq(mst, 0, "threads: init on main, then concurrent fetches over ECDSA + RSA chains all ok");
 
@@ -727,18 +755,23 @@ fn main() {
     # --- stalls cut by the deadline, each in its own child, all at once and
     # alongside the cases below (collected at the end). A peer that keeps
     # every read under the 10 s timeout — no key needed — held a fetch forever
-    # through the first 2.4.12 cut. ------------------------------------------
-    var kids = alloc(4 * 8);
+    # through the first 2.4.12 cut. Then the ChangeCipherSpec peers, which a
+    # deadline cut through Cyrius 6.6.12 (AI_ERR_HTTP) and lib/tls.cyr refuses
+    # from 6.6.13 (TLS_ERR_PROTOCOL, AI_ERR_TLS) well before it: TLS 1.3 drops
+    # one CCS before the server's Finished, so the slow one fails at the second,
+    # 200 ms in. Each runs under the deadline it had, so a regression to the
+    # old skip shows as AI_ERR_HTTP at the deadline. --------------------------
+    var kids = alloc(STALL_KIDS * 8);
     store64(kids, _timed_child("drip, 1 byte / 250 ms in the handshake",
         _url("localhost", load64(raw + RAW_DRIP * 16 + 8), ""), FX_CA, STALL_MS, AI_ERR_HTTP, STALL_MS - 100, 12000));
-    store64(kids + 8, _timed_child("ChangeCipherSpec / 200 ms in the handshake",
-        _url("localhost", load64(raw + RAW_CCS_SLOW * 16 + 8), ""), FX_CA, STALL_MS, AI_ERR_HTTP, STALL_MS - 100,
-        12000));
-    store64(kids + 16, _timed_child("ChangeCipherSpec flood in the handshake",
-        _url("localhost", load64(raw + RAW_CCS_FAST * 16 + 8), ""), FX_CA, STALL_MS, AI_ERR_HTTP, STALL_MS - 100,
-        12000));
-    store64(kids + 24, _timed_child("ChangeCipherSpec / 200 ms after the request",
-        _url("localhost", pg, "/ccs"), FX_CA, 4000, AI_ERR_HTTP, 3900, 15000));
+    store64(kids + 8, _timed_child("drip, 1 byte / 250 ms after the request",
+        _url("localhost", pg, "/drip"), FX_CA, 4000, AI_ERR_HTTP, 3900, 15000));
+    store64(kids + 16, _timed_child("ChangeCipherSpec / 200 ms in the handshake",
+        _url("localhost", load64(raw + RAW_CCS_SLOW * 16 + 8), ""), FX_CA, STALL_MS, AI_ERR_TLS, 150, STALL_MS - 100));
+    store64(kids + 24, _timed_child("ChangeCipherSpec flood in the handshake",
+        _url("localhost", load64(raw + RAW_CCS_FAST * 16 + 8), ""), FX_CA, STALL_MS, AI_ERR_TLS, 0, STALL_MS - 100));
+    store64(kids + 32, _timed_child("ChangeCipherSpec / 200 ms after the request",
+        _url("localhost", pg, "/ccs"), FX_CA, 4000, AI_ERR_TLS, 0, 3900));
 
     # --- trusted round trips; init covered every lazy initialiser -----------
     var s0 = alloc(SNAP_N * 8);
@@ -917,7 +950,8 @@ fn main() {
         _fetch("localhost", pg, "", "tests/fixtures/tls/missing.crt");
         _fetch("localhost", 1, "", FX_CA);
         _fetch("localhost", load64(raw + RAW_CLOSE * 16 + 8), "", FX_CA);
-        var cc = _cache(_url("localhost", load64(raw + RAW_CCS_SLOW * 16 + 8), ""), FX_CA);
+        _fetch("localhost", load64(raw + RAW_CCS_FAST * 16 + 8), "", FX_CA);   # CCS refused: alert + close
+        var cc = _cache(_url("localhost", load64(raw + RAW_DRIP * 16 + 8), ""), FX_CA);
         _ccy_set_deadline_ms(cc, 300);
         CurrencyCache_fetch(cc);                 # cut by the deadline: dup2 + close
         li = li + 1;
@@ -931,9 +965,14 @@ fn main() {
     assert_eq(_task_count(), tasks0, "no watchdog thread outlives its fetch");
 
     var ki = 0;
-    while (ki < 4) {
+    while (ki < 2) {
         assert_eq(_wait_child(load64(kids + ki * 8), STALL_WAIT_S), 0,
           "a stalling peer is cut at the deadline: AI_ERR_HTTP, on time");
+        ki = ki + 1;
+    }
+    while (ki < STALL_KIDS) {
+        assert_eq(_wait_child(load64(kids + ki * 8), STALL_WAIT_S), 0,
+          "a ChangeCipherSpec outside the one-CCS window is refused before the deadline: AI_ERR_TLS");
         ki = ki + 1;
     }
     assert_eq(_wait_child(silent, STALL_WAIT_S), 0, "a silent server: the read timeout, AI_ERR_HTTP");
