@@ -5,17 +5,86 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.2] — 2026-10-31
+
+**`factor` and `totient` by Pollard–Brent rho.** Both trial-divided to √n
+through 2.5.1: `factor(2147483647 · 2147483629)`, a 62-bit semiprime, took
+2.1 s. Now it takes ~1 ms, and the evaluator's `totient` takes any i64. No
+other answer changed, and every number under the old path is as fast as
+before.
+
+Suite 2291 → **2308** asserts; fuzz 4/4 at 20,000 iterations; fmt / lint / vet
+clean; aarch64 (qemu) green.
+
+### Changed
+
+- **Factorization is trial division to 8191, then Pollard's rho in Brent's
+  form** (`src/ntheory.cyr`; Pollard 1975, Brent 1980, in `docs/sources.md`).
+  - What trial division leaves has every prime factor above 8191, so at most
+    four. Rho splits it with f(y) = y² + c over `bayan_u64_mulmod`,
+    multiplying 128 differences before each gcd, until the deterministic
+    Miller–Rabin test (ADR 0003) accepts each part.
+  - c runs 1 to 32. Should every polynomial fail, trial division past 8191
+    finds the smallest factor, so `factor` always returns.
+  - Results are the same as before: sorted, with repetition, and `totient`
+    exact.
+  - Any n below 8193² (≈ 6.7e7) still takes the trial-division path alone,
+    and no allocation was added: the at most four rho primes sit in a 32-byte
+    stack buffer.
+- **The evaluator's `totient` takes any i64.** Through 2.5.1 it refused
+  n > 10¹² with `ABACO_ERR_MATH` (`ABACO_TOTIENT_MAX`, removed), a cap that
+  existed only because trial division to √n was slow. `totient(999999999999999)`
+  is now 610154104320000. A result past 2^53 is rounded by `f64_from`, like any
+  evaluator value.
+- **Timings** (x86_64, one core):
+
+  | Input | 2.5.1 | 2.5.2 |
+  |---|---:|---:|
+  | `factor(2147483647 · 2147483629)` | 2,061 ms | ~1.02 ms |
+  | `totient` of the same | 2,059 ms | ~1.02 ms |
+  | `factor(3037000493²)`, the largest prime square in i64 | 2,948 ms | ~4 ms |
+  | `test_ntheory` (`test_top_of_i64`'s prime near 2^63) | ~10 s | 0.5 s |
+
+  The worst case in an 814-number oracle run is 7.5 ms for `factor` and
+  `totient` together. An interleaved A/B (6 rounds, one core) puts every
+  existing ntheory row within 2 % of 2.5.1: `factor_small` and `totient` at
+  1.000, `factor_large` at 1.018, `is_prime_*` and `next_prime` at 0.997–1.011.
+  Two new rows track the rho path: `factor_semiprime62` and
+  `totient_semiprime62`, 200 iterations each.
+
+### Added
+
+- `test_factor_rho` (15 asserts): two 31-bit primes, 3037000493², two and
+  four primes just past the trial bound, the base-2..31 strong pseudoprime
+  3825123056546413051, a semiprime below 2^53, 2^62, and 8191² on the
+  trial-division path. Every case is exact for both `factor` and `totient`.
+  With the sort removed, 3 of them fail.
+- `fuzz_ntheory`: n built from 2–4 known primes (via `next_prime`, from
+  below the trial bound up to ~2^31.5), so `factor(n)` must be exactly those
+  primes and `totient(n)` their product formula. The oracle never calls
+  `factor`. With the sort removed it fails within 2,000 iterations.
+- `test_eval`: `totient(999999999999999)` and the totient of a semiprime below
+  2^53, in place of the cap test.
+- Verified against an independent Python factoriser over 814 numbers
+  (semiprimes of two 31-bit primes, prime squares and cubes, products just
+  past 8191, Carmichael numbers, edges, random 20–63-bit). There were 0
+  mismatches on x86_64 and on aarch64 under qemu.
+
+### Fixed
+
+- `fuzz_eval`'s domain-cap oracle no longer expects the `totient` cap. It
+  expects `ABACO_ERR_MATH` exactly when the literal parses to 2^63 or more:
+  every 19-digit value from 2^63 − 512 up rounds there.
+
 ## [2.5.1] — 2026-10-31
 
 Toolchain **Cyrius 6.7.9 → 6.7.18**, stdlib re-vendored (bayan 1.5.13 →
 **1.11.1**, ganita 1.2.15 unchanged; sigil 3.13.11 → 3.13.15 for `-D ABACO_TLS`
 builds). **abaco's source is unchanged**: `dist/abaco.cyr` differs from 2.5.0
-only in its version header, the sidecar is the same 12 leaves, and the floors
-stay Cyrius ≥ 6.6.13 (≥ 6.7.9 with `-D ABACO_TLS`). A 97,944-record differential
-is identical on both pins. Two things change through bayan, and they reach a
-consumer through its **own** pin, whatever abaco tag it uses: binaries grow
-~340 KB from 6.7.13, and from 6.7.18 a rates body that lists a currency twice
-is refused.
+only in its version header, and the sidecar is the same 12 leaves. A
+97,944-record differential is identical on both pins. Two things change
+through bayan: binaries grow ~340 KB, and a rates body that lists a currency
+twice is refused.
 
 Suite 2288 → **2291** asserts; fuzz 4/4 at 20,000 iterations; fmt / lint / vet
 clean; aarch64 (qemu) green.
@@ -39,7 +108,7 @@ clean; aarch64 (qemu) green.
   bayan (`bayan_u64_powmod`, the rates JSON), so it cannot leave the tables out.
   - The smoke binary `build/abaco` is 83,704 → 425,152 B; its data segment
     grows 38 KB → 379 KB.
-  - A consumer calling `amplitude_to_db`, `window_hann` and the evaluator is
+  - A program calling `amplitude_to_db`, `window_hann` and the evaluator is
     164,864 B on 6.7.12, 510,096 B on 6.7.13 and 507,064 B on 6.7.18.
 - **A rates body that lists a currency twice is `AI_ERR_CURRENCY` from Cyrius
   6.7.18.** bayan 1.11.1 refuses a duplicate JSON object key, compared decoded,
@@ -58,14 +127,21 @@ clean; aarch64 (qemu) green.
   duplicate extension, trailing bytes, or an ALPN it did not offer is
   `AI_ERR_TLS`. A conformant server is unaffected, and `test_ccy_tls` passes
   unchanged (its servers are the stdlib's own `tls_accept`).
+- **Benchmarks: no change from the toolchain.** An interleaved A/B of the same
+  bench sources built on 6.7.9 and 6.7.18 (4 rounds, one core) has a median
+  of 0.999 over 101 rows. `addition` is 410–417 → 431–440 ns, and `pow`,
+  `tan`, `is_prime_large` and `lit_tie_1e23` are equal. The pinned trail
+  agrees with the A/B to a 1.010 median, but reads ~8 % slower than 2.5.0's
+  trail. That is machine state after a reboot: the 6.7.9 build itself now runs
+  `addition` at 412 ns against the 385 ns it recorded. The trail's
+  `mixed_ops` row (1,003 ns, against ~628 ns in the A/B) is noise.
 - **bayan's `powmod` slowdown is unchanged in 1.11.1**: `bayan_u64_powmod`
   still shifts the exponent with a `_u128_lshr64` call per bit. Still on the
   roadmap, not yet reported upstream.
 
 ### Security (through the toolchain)
 
-Four Cyrius 6.7.18 advisories reach abaco users. Each is fixed by the
-consumer's own pin, not by abaco's tag:
+Four Cyrius 6.7.18 advisories fix code paths that abaco uses:
 
 - **CYRIUS-2026-0040 (P2), `-D ABACO_TLS`.** Once a process had used more than
   63 crypto threads, threads shared crypto lanes. An on-path attacker with no
@@ -81,7 +157,6 @@ consumer's own pin, not by abaco's tag:
   temp file was briefly `0644 & ~umask` before taking a 0600 destination's mode.
 
 `SECURITY.md` and the upgrade guide now recommend Cyrius ≥ 6.7.18 for HTTPS.
-abaco's build floor stays 6.7.9, because no abaco symbol needs 6.7.18.
 
 ## [2.5.0] — 2026-10-31
 

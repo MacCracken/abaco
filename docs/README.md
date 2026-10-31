@@ -15,7 +15,7 @@
 
 ## Project state
 
-- [Roadmap](development/roadmap.md) — forward plan (2.2.x arc + beyond)
+- [Roadmap](development/roadmap.md) — forward plan: open work, pinned to releases
 - [State](development/state.md) — live snapshot (versions, sizes, test counts, consumers)
 - [Doc health](doc-health.md) — ledger of doc currency
 - [Changelog](../CHANGELOG.md) — release history

@@ -306,10 +306,70 @@ fn test_is_prime_pseudoprimes() {
     return 0;
 }
 
+# 1 when factor(n) is exactly the expected list exp[0..k).
+fn _factor_is(n, exp, k) {
+    var fs = factor(n);
+    if (vec_len(fs) != k) { return 0; }
+    var i = 0;
+    while (i < k) {
+        if (vec_get(fs, i) != load64(exp + i * 8)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# 2.5.2: past trial division to ABACO_FACTOR_TRIAL (8191), Pollard-Brent rho.
+# Each case's answer was built from known primes (and checked by an
+# independent Python factoriser). Through 2.5.1 the first took 2.1 s.
+fn test_factor_rho() {
+    var e[64];
+    store64(&e, 2147483629);
+    store64(&e + 8, 2147483647);
+    assert_eq(_factor_is(4611685975477714963, &e, 2), 1, "factor(2147483647 * 2147483629), sorted");
+    assert_eq(totient(4611685975477714963), 4611685971182747688, "totient of that semiprime = (p-1)(q-1)");
+    store64(&e, 3037000493);
+    store64(&e + 8, 3037000493);
+    assert_eq(_factor_is(9223371994482243049, &e, 2), 1, "factor(3037000493^2), the largest prime square in i64");
+    assert_eq(totient(9223371994482243049), 9223371991445242556, "totient(p^2) = p(p-1)");
+    store64(&e, 8209);
+    store64(&e + 8, 8219);
+    assert_eq(_factor_is(67469771, &e, 2), 1, "factor(8209 * 8219): both primes just past the trial bound");
+    assert_eq(totient(67469771), 67453344, "totient(8209 * 8219)");
+    store64(&e + 16, 8221);
+    store64(&e + 24, 8231);
+    assert_eq(_factor_is(4565480435215321, &e, 4), 1, "factor of four primes past the trial bound");
+    assert_eq(totient(4565480435215321), 4563259193606400, "totient of those four");
+    store64(&e, 149491);
+    store64(&e + 8, 747451);
+    store64(&e + 16, 34233211);
+    assert_eq(_factor_is(3825123056546413051, &e, 3), 1,
+      "factor(3825123056546413051), the base-2..31 strong pseudoprime");
+    assert_eq(totient(3825123056546413051), 3825092239639605000, "totient(3825123056546413051)");
+    store64(&e, 67108837);
+    store64(&e + 8, 67108859);
+    assert_eq(_factor_is(4503597479886983, &e, 2), 1, "factor of a semiprime below 2^53");
+    var fs = factor(4611686018427387904);
+    var twos = 0;
+    var i = 0;
+    while (i < vec_len(fs)) {
+        if (vec_get(fs, i) == 2) { twos = twos + 1; }
+        i = i + 1;
+    }
+    assert_eq(vec_len(fs), 62, "factor(2^62) has 62 factors");
+    assert_eq(twos, 62, "all of them 2");
+    assert_eq(totient(4611686018427387904), 2305843009213693952, "totient(2^62) = 2^61");
+    # Just under (ABACO_FACTOR_TRIAL + 2)^2 is still trial division alone.
+    store64(&e, 8191);
+    store64(&e + 8, 8191);
+    assert_eq(_factor_is(67092481, &e, 2), 1, "factor(8191^2) on the trial-division path");
+    return 0;
+}
+
 # The top of i64. d * d <= n overflows once d passes 3037000499, so through
 # 2.4.8 factor and totient of a prime this close to 2^63 never returned, and
 # next_prime stepped past i64_MAX into negative candidates (~2^62 steps).
-# ~10 s together: the honest trial-division bound is ~1.5e9 odd divisors.
+# Through 2.5.1 these took ~10 s together (~1.5e9 odd trial divisors); from
+# 2.5.2 is_prime answers after trial division to ABACO_FACTOR_TRIAL.
 fn test_top_of_i64() {
     var p = 9223372036854775783;
     var fs = factor(p);
@@ -367,6 +427,7 @@ fn main() {
     test_abaco_binomial();
     test_is_prime_pseudoprimes();
     test_top_of_i64();
+    test_factor_rho();
     test_isqrt();
     test_mod_pow_boundaries();
     # Propagate failure to the process exit code. assert_summary() RETURNS

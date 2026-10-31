@@ -155,7 +155,7 @@ lives in the modules under `[lib]` and is shipped as `dist/abaco.cyr`:
 ## Docs
 
 - [`CHANGELOG.md`](CHANGELOG.md) — per-tag chronology (source of truth for changes).
-- [`docs/development/roadmap.md`](docs/development/roadmap.md) — forward plan (2.2.x arc, future).
+- [`docs/development/roadmap.md`](docs/development/roadmap.md) — forward plan: open work only, pinned to releases.
 - [`docs/development/state.md`](docs/development/state.md) — live state, refreshed every release.
 - [`docs/sources.md`](docs/sources.md) — academic/domain citations (required for this crate).
 - [`docs/audit/`](docs/audit/) — security audit reports (`YYYY-MM-DD-audit.md`).

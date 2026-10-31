@@ -133,8 +133,8 @@ git push origin main --tags
 
 The release workflow checks VERSION == cyrius.cyml == tag, runs the CI gate,
 and attaches the source tarball, `dist/abaco.cyr`, the x86_64 Linux smoke
-binary and `SHA256SUMS`. There is no aarch64 artifact (no aarch64 CI lane
-either; see the roadmap).
+binary and `SHA256SUMS`. There is no aarch64 artifact; CI tests aarch64 under
+qemu (since 2.4.10) but releases ship x86_64 only.
 
 ## Project structure
 

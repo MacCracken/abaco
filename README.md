@@ -60,7 +60,7 @@ stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged",
 
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.5.1"
+tag = "2.5.2"
 modules = ["dist/abaco.cyr"]   # self-contained library bundle
 ```
 
@@ -69,8 +69,8 @@ stdlib modules the bundle needs — and vendors those too, so from 2.4.11 the
 `[deps] stdlib` line above is optional (repeating it is harmless: each module
 is vendored once). Keep it for a tag before 2.4.11, or if you include
 `dist/abaco.cyr` without `cyrius deps`. There is nothing to `include` from
-abaco's `src/`. Your own `cyrius` pin must be ≥ 6.6.13 to compile the 2.5.0
-bundle (≥ 6.7.9 with `-D ABACO_TLS`, below). Then call the public API directly:
+abaco's `src/`. The bundle needs Cyrius ≥ 6.6.13 (≥ 6.7.9 with
+`-D ABACO_TLS`, below). Then call the public API directly:
 
 ```cyr
 fn main() {

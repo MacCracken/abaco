@@ -136,16 +136,145 @@ fn _isqrt(n) {
     return r;
 }
 
-# -- Prime factorization via trial division --
-# Returns a vec of prime factors (sorted, with repetition)
+# -- Prime factorization --
 #
-# The bound is d <= isqrt(n), recomputed only when n shrinks. Through 2.4.8 it
-# was d * d <= n, which overflows i64 once d passes 3037000499 = isqrt(i64_MAX):
-# for a prime in the top ~5.9e9 values below 2^63 the square wrapped negative,
-# the test stayed true, and factor never returned (CHANGELOG 2.4.9). A fixed
-# bound is one compare per step, where `d <= n / d` paid a divide (2x slower)
-# and a guarded `d <= 3037000499 && d * d <= n` still cost ~40%. Same in
-# totient below.
+# Trial division by 2 and the odd d <= min(isqrt(n), ABACO_FACTOR_TRIAL), then
+# Pollard's rho in Brent's form on whatever is left. Through 2.5.1 it was trial
+# division all the way to isqrt(n): ~1.5e9 odd divisors for a 62-bit
+# semiprime, 2.1 s for factor(2147483647 * 2147483629) (CHANGELOG 2.5.2). Any n
+# below (ABACO_FACTOR_TRIAL + 2)^2 still takes the trial-division path alone, at
+# the same cost as before. The bound is d <= isqrt(n), recomputed only when n
+# shrinks: through 2.4.8 it was d * d <= n, which overflows i64 once d passes
+# 3037000499 = isqrt(i64_MAX) (CHANGELOG 2.4.9).
+#
+# Rho: Pollard 1975, BIT 15; the cycle search and the batched gcd are Brent
+# 1980, BIT 20 (docs/sources.md). A cofactor left after trial division has every
+# prime factor above ABACO_FACTOR_TRIAL, so at most four of them below 2^63:
+# each one is split until is_prime (deterministic, ADR 0003) accepts its parts.
+enum NtheoryRho {
+    ABACO_FACTOR_TRIAL = 8191;    # trial division covers every odd d up to here
+    ABACO_RHO_BATCH = 128;        # |x - y| products per gcd (Brent's m)
+    ABACO_RHO_TRIES = 32;         # polynomials x^2 + c, c = 1..32, before trial division
+}
+
+# y^2 + c mod n, for y in [0, n) and a small c > 0. The sum can pass i64_MAX
+# when n is near 2^63; it wraps, and subtracting n wraps back to the residue.
+fn _rho_f(y, c, n) {
+    var t = bayan_u64_mulmod(y, y, n) + c;
+    if (t < 0 || t >= n) { t = t - n; }
+    return t;
+}
+
+# One Pollard-Brent run on the composite n with f(y) = y^2 + c from y = 2.
+# Returns a divisor 1 < g < n, or 0 when this c fails (the factors' cycles
+# closed together and the gcd came back n). Brent doubles the stretch r it
+# compares against x and multiplies ABACO_RHO_BATCH differences together
+# before one gcd; a batch that overshoots to n is replayed one step at a time.
+fn _rho_brent(n, c) {
+    var y = 2;
+    var x = 2;
+    var ys = 2;
+    var q = 1;
+    var g = 1;
+    var r = 1;
+    while (g == 1) {
+        x = y;
+        var i = 0;
+        while (i < r) {
+            y = _rho_f(y, c, n);
+            i = i + 1;
+        }
+        var k = 0;
+        while (k < r && g == 1) {
+            ys = y;
+            var lim = r - k;
+            if (lim > ABACO_RHO_BATCH) { lim = ABACO_RHO_BATCH; }
+            i = 0;
+            while (i < lim) {
+                y = _rho_f(y, c, n);
+                var dif = x - y;
+                if (dif < 0) { dif = 0 - dif; }
+                q = bayan_u64_mulmod(q, dif, n);
+                i = i + 1;
+            }
+            g = gcd(q, n);
+            k = k + ABACO_RHO_BATCH;
+        }
+        r = r * 2;
+    }
+    if (g == n) {
+        g = 1;
+        while (g == 1) {
+            ys = _rho_f(ys, c, n);
+            var dif2 = x - ys;
+            if (dif2 < 0) { dif2 = 0 - dif2; }
+            g = gcd(dif2, n);
+        }
+    }
+    if (g == n) { return 0; }
+    return g;
+}
+
+# A divisor 1 < d < m of the composite m, whose prime factors all exceed
+# ABACO_FACTOR_TRIAL. Rho with c = 1, 2, ..., ABACO_RHO_TRIES; should every
+# polynomial fail, trial division past the bound finds the smallest factor,
+# which lies at or below isqrt(m), so this always returns.
+fn _rho_split(m) {
+    var c = 1;
+    while (c <= ABACO_RHO_TRIES) {
+        var g = _rho_brent(m, c);
+        if (g > 1) { return g; }
+        c = c + 1;
+    }
+    var d = ABACO_FACTOR_TRIAL + 2;
+    while (m % d != 0) { d = d + 2; }
+    return d;
+}
+
+# Sort buf[0..cnt) ascending, in place (insertion sort; cnt <= 4 here).
+fn _sort_i64(buf, cnt) {
+    var i = 1;
+    while (i < cnt) {
+        var v = load64(buf + i * 8);
+        var j = i - 1;
+        while (j >= 0 && load64(buf + j * 8) > v) {
+            store64(buf + j * 8 + 8, load64(buf + j * 8));
+            j = j - 1;
+        }
+        store64(buf + j * 8 + 8, v);
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Append the prime factors of m (with repetition, unsorted) to out[cnt..) and
+# return the new count. m > 1 has every prime factor above ABACO_FACTOR_TRIAL,
+# so it has at most four of them below 2^63, and so does every pending part:
+# split until is_prime (deterministic, ADR 0003) accepts each one.
+fn _rho_factor_into(m, out, cnt) {
+    var pend[64];
+    var np = 1;
+    store64(&pend, m);
+    while (np > 0) {
+        np = np - 1;
+        var x = load64(&pend + np * 8);
+        if (is_prime(x) == 1) {
+            store64(out + cnt * 8, x);
+            cnt = cnt + 1;
+            continue;
+        }
+        var f = _rho_split(x);
+        store64(&pend + np * 8, f);
+        store64(&pend + np * 8 + 8, x / f);
+        np = np + 2;
+    }
+    return cnt;
+}
+
+# Returns a vec of prime factors (sorted, with repetition); empty for n < 2.
+# Trial division pushes its primes in order; a cofactor past the bound goes to
+# rho, whose primes all exceed every trial-division prime, so sorting just
+# those (at most four) keeps the whole list sorted.
 fn factor(n) {
     var factors = vec_new();
     if (n < 2) { return factors; }
@@ -154,26 +283,44 @@ fn factor(n) {
         n = n / 2;
     }
     var d = 3;
-    var lim = _isqrt(n);
+    var root = _isqrt(n);
+    var lim = root;
+    if (lim > ABACO_FACTOR_TRIAL) { lim = ABACO_FACTOR_TRIAL; }
     while (d <= lim) {
         if (n % d == 0) {
             while (n % d == 0) {
                 vec_push(factors, d);
                 n = n / d;
             }
-            lim = _isqrt(n);
+            root = _isqrt(n);
+            lim = root;
+            if (lim > ABACO_FACTOR_TRIAL) { lim = ABACO_FACTOR_TRIAL; }
         }
         d = d + 2;
     }
-    if (n > 1) {
+    if (n == 1) { return factors; }
+    if (root <= ABACO_FACTOR_TRIAL) {
+        # Every d up to isqrt(n) was tried: n is prime.
         vec_push(factors, n);
+        return factors;
+    }
+    var big[32];
+    var cnt = _rho_factor_into(n, &big, 0);
+    _sort_i64(&big, cnt);
+    var i = 0;
+    while (i < cnt) {
+        vec_push(factors, load64(&big + i * 8));
+        i = i + 1;
     }
     return factors;
 }
 
 # -- Euler's totient function --
 # phi(n) for n >= 1; 0 for n <= 0 (through 2.4.8 a negative n came back as
-# itself). Trial division by 2, then odd p only, with the overflow-free bound.
+# itself). Trial division by 2, then odd p up to min(isqrt(n), the trial bound),
+# applying result - result / p as each prime turns up (exact: result keeps
+# every prime factor still to come). A cofactor past the bound goes to rho; it
+# has at most four prime factors, so a 4-slot buffer holds them.
 fn totient(n) {
     if (n <= 0) { return 0; }
     var result = n;
@@ -182,19 +329,35 @@ fn totient(n) {
         result = result - result / 2;
     }
     var p = 3;
-    var lim = _isqrt(n);
+    var root = _isqrt(n);
+    var lim = root;
+    if (lim > ABACO_FACTOR_TRIAL) { lim = ABACO_FACTOR_TRIAL; }
     while (p <= lim) {
         if (n % p == 0) {
             while (n % p == 0) {
                 n = n / p;
             }
             result = result - result / p;
-            lim = _isqrt(n);
+            root = _isqrt(n);
+            lim = root;
+            if (lim > ABACO_FACTOR_TRIAL) { lim = ABACO_FACTOR_TRIAL; }
         }
         p = p + 2;
     }
-    if (n > 1) {
-        result = result - result / n;
+    if (n == 1) { return result; }
+    if (root <= ABACO_FACTOR_TRIAL) { return result - result / n; }   # n is prime
+    var big[32];
+    var cnt = _rho_factor_into(n, &big, 0);
+    _sort_i64(&big, cnt);
+    var prev = 0;
+    var i = 0;
+    while (i < cnt) {
+        var q = load64(&big + i * 8);
+        if (q != prev) {
+            result = result - result / q;
+            prev = q;
+        }
+        i = i + 1;
     }
     return result;
 }

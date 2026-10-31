@@ -1,6 +1,6 @@
 # Abaco Roadmap
 
-> **Forward plan** (2.2.x modernization arc and beyond) lives in
+> **Forward plan** (open work, pinned to releases) lives in
 > [`docs/development/roadmap.md`](docs/development/roadmap.md); live metrics in
 > [`docs/development/state.md`](docs/development/state.md). This file is the
 > completed-work record below.
@@ -41,15 +41,6 @@
 - ~~**sinh/cosh/tanh**~~ — stdlib `lib/math.cyr` since 2026-04-14.
 - ~~**u128 / is_prime perf**~~ — `mod_pow` delegates to the stdlib powmod (hardware 128-bit multiply on x86_64): `u64_powmod` since the Cyrius 4.8.5 collapse, `bayan_u64_powmod` since 2.3.0. aarch64 is still bit-serial in bayan; tracked in `docs/development/roadmap.md`.
 - ~~**256 function limit**~~ — Cyrius raised it to 1024 in v1.9; no longer a constraint.
-
-## Ecosystem Rollout
-
-- [ ] Audit shruti for duplicated math that should use `abaco::dsp`
-- [ ] Audit jalwa for duplicated math
-- [ ] Audit tarang for duplicated math
-- [ ] Audit aethersafta for duplicated math
-- [ ] Audit dhvani for duplicated math (first target — was the source of most ported DSP)
-- [ ] Standardize all Agnos projects on abaco for shared math
 
 ## Hardening — Completed 2026-04-14
 

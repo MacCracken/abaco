@@ -71,10 +71,6 @@ var ABACO_DEC_EXP_MAX = 1000000000;
 # inside the subnormal range.
 var ABACO_POW10_MAX = 340;
 
-# Domain cap for the evaluator's `totient(n)`. The ntheory implementation
-# trial-divides to sqrt(n), so this bounds that loop at ~10^6 iterations.
-var ABACO_TOTIENT_MAX = 1000000000000;
-
 # i64 minimum. Written as a subtraction because Cyrius has no negative literals
 # and `0 - 9223372036854775808` would not parse. eval_pow needs it to recognise
 # the one magnitude that cannot be negated without overflowing.
@@ -2178,12 +2174,10 @@ fn call_function(e, name, args, nargs) {
         if (fid == EVF_TOTIENT) {
             var nt, n = _int_arg(a);
             if (is_ok(nt) == 0 || n < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
-            # totient() trial-divides to sqrt(n), so an unbounded n is an
-            # attacker-controlled O(sqrt(n)) loop. Cap the domain the way
-            # `factorial` (n > 170) and `fibonacci` (n > 92) already do; 10^12
-            # keeps the loop under ~10^6 iterations and covers any realistic
-            # calculator input.
-            if (n > ABACO_TOTIENT_MAX) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
+            # Any n in i64: totient() factors by Pollard-Brent rho past trial
+            # division to 8191, a few ms at worst. Through 2.5.1 it trial-
+            # divided to sqrt(n), and this arm capped n at 10^12 (~10^6 steps;
+            # CHANGELOG 2.5.2). The result is exact; f64_from rounds it.
             return f64_from(totient(n));
         }
         var is_fib = 0;
@@ -2204,7 +2198,7 @@ fn call_function(e, name, args, nargs) {
         # NaN in either argument is NaN out. The stdlib min/max drop or keep a
         # NaN depending on argument order, and atan2 turned NaN into -pi/2
         # (2.4.9 audit); the signed-zero and (Inf, Inf) rows of C99 atan2 are
-        # ganita's (roadmap).
+        # ganita's (F.9.1.4 since ganita 1.2.14, Cyrius 6.6.20; CHANGELOG 2.4.13).
         if (f64_eq(a, a) == 0) {
             if (fid == EVF_MIN || fid == EVF_MAX || fid == EVF_ATAN2) { return a; }
         }

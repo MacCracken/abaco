@@ -974,8 +974,13 @@ fn test_totient_cap() {
     var e = Evaluator_new();
     assert_eq(f64_to(Evaluator_eval(e, "totient(36)")), 12, "totient(36) = 12");
     assert_eq(f64_to(Evaluator_eval(e, "totient(1000000)")), 400000, "totient(1e6)");
-    Evaluator_eval(e, "totient(999999999999999)");
-    assert_eq(eval_err(e), ABACO_ERR_MATH, "totient over cap rejected");
+    # Through 2.5.1 the evaluator refused n > 10^12 (trial division to sqrt(n));
+    # from 2.5.2 totient factors by Pollard-Brent rho and takes any i64.
+    assert_eq(f64_to(Evaluator_eval(e, "totient(999999999999999)")), 610154104320000,
+      "totient(10^15 - 1) = 610154104320000 (was the 10^12 cap's MATH error)");
+    assert_eq(eval_err(e), ABACO_ERR_NONE, "and no error");
+    assert_eq(f64_to(Evaluator_eval(e, "totient(4503597479886983)")), 4503597345669288,
+      "totient of a semiprime below 2^53, (p-1)(q-1)");
     return 0;
 }
 
@@ -1946,7 +1951,7 @@ fn test_eval_partial() {
     ev_partial_err("2 3", ABACO_ERR_PARSE, "2 3 is a parse error (was 2)");
     ev_partial_err("1e3)", ABACO_ERR_PARSE, "1e3) is a parse error (was 1000)");
     ev_partial_err("+", ABACO_ERR_INVALID, "a lone operator is INVALID");
-    # 100 capped totient() calls then 500 unclosed '(' — 1000 tokens. Through
+    # 100 totient() calls then 500 unclosed '(' — 1000 tokens. Through
     # 2.4.8 every shorter prefix was re-evaluated: 92 s. Now one re-parse.
     var buf = alloc(4096);
     var pos = 0;

@@ -37,11 +37,27 @@ source. No magic numbers.
 - **Euler's totient φ(n)** via prime-factor product form.
   - Hardy, G. H. & Wright, E. M. *An Introduction to the Theory of Numbers*
     (6th ed.), Theorem 62.
-- **Trial-division factorization** — classical; trial divisors 2 then odd
-  *d* up to ⌊√n⌋, computed once by `_isqrt` (an f64 estimate corrected by at
-  most a step each way, never squaring past ⌊√(2⁶³−1)⌋ = 3037000499) and again
-  only when n shrinks. Through 2.4.8 the test was `d·d ≤ n`, which wraps once
-  d passes 3037000499, so factor and totient of a prime near 2⁶³ never returned.
+- **Factorization: trial division, then Pollard–Brent rho (2.5.2)** — trial
+  divisors 2 then odd *d* up to min(⌊√n⌋, 8191), the bound computed by `_isqrt`
+  (an f64 estimate corrected by at most a step each way, never squaring past
+  ⌊√(2⁶³−1)⌋ = 3037000499) and again only when n shrinks. Through 2.4.8 the test
+  was `d·d ≤ n`, which wraps once d passes 3037000499, so factor and totient of
+  a prime near 2⁶³ never returned. A cofactor left past 8191 has every prime
+  factor above it, so at most four below 2⁶³. It is split by Pollard's rho with
+  f(y) = y² + c (c = 1, 2, …, 32) in Brent's form, until the deterministic
+  Miller–Rabin test accepts every part. Brent's form doubles the stretch
+  compared against a fixed point, and multiplies 128 differences mod n before
+  each gcd, replaying a batch one step at a time when it overshoots to n. If
+  every polynomial fails, trial division past the bound finds the smallest
+  factor, so the split always ends. Expected cost is O(p^½) mulmods for the
+  second-largest prime p, ≈ 2¹⁶ for two 31-bit primes: `factor(2147483647 ·
+  2147483629)` takes ~1 ms, against 2.1 s by trial division through 2.5.1.
+  - Pollard, J. M. (1975). "A Monte Carlo method for factorization." *BIT* 15,
+    331–334. doi:10.1007/BF01933667
+  - Brent, R. P. (1980). "An improved Monte Carlo factorization algorithm."
+    *BIT* 20, 176–184. doi:10.1007/BF01933190
+  - Cohen, H. (1993). *A Course in Computational Algebraic Number Theory*,
+    §8.5 (Pollard's ρ method).
 - **Binomial coefficient (`abaco_binomial`)** — the multiplicative recurrence
   C(n, i+1) = C(n, i) · (n − i) / (i + 1) after folding k to min(k, n − k),
   with the division done first: with g = gcd(C(n, i), i + 1), the cofactor
@@ -418,9 +434,11 @@ source. No magic numbers.
   `gcd`, `lcm`, `binomial`) take an argument only when it is an integer inside
   i64; a fraction, NaN or ±∞ is `ABACO_ERR_MATH` (`isprime` answers 0).
   Through 2.4.8 a fraction was truncated silently: `3.9!` was 6.
-- **Totient domain cap (`ABACO_TOTIENT_MAX = 10¹²`)** — φ(n) is computed by
-  trial division to √n, so the evaluator bounds n the way it already bounds
-  `factorial` (170) and `fibonacci` (92); 10¹² keeps the loop under ~10⁶ steps.
+- **No totient domain cap (2.5.2)** — through 2.5.1 the evaluator refused
+  `totient(n)` past 10¹² (`ABACO_TOTIENT_MAX`), because φ(n) trial-divided to
+  √n. With Pollard–Brent rho any i64 takes a few milliseconds at most, so the
+  cap is gone; `factorial` (170) and `fibonacci` (92) keep theirs, which are
+  where the result stops fitting.
 - **Checked f64 → i64 conversion (`abaco_f64_to_i64`, `src/core.cyr`)** — an
   integer domain is decided by range, `-2^63 ≤ x < 2^63`, using two ordered
   comparisons (both false for NaN), never by what an out-of-range conversion

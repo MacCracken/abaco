@@ -28,6 +28,11 @@ fn _bench_next_prime() { next_prime(1000000); return 0; }
 fn _bench_factor_small() { factor(360); return 0; }
 fn _bench_factor_large() { factor(1234567890); return 0; }
 fn _bench_totient() { totient(1000000); return 0; }
+# 2.5.2: past trial division, Pollard-Brent rho. 2147483647 * 2147483629, two
+# 31-bit primes: the worst shape for rho in i64, and 2.1 s per call under the
+# trial division of 2.5.1. ~1 ms per call, so 200 iterations a row.
+fn _bench_factor_semiprime62() { factor(4611685975477714963); return 0; }
+fn _bench_totient_semiprime62() { totient(4611685975477714963); return 0; }
 fn _bench_fibonacci() { fibonacci(92); return 0; }
 # abaco_binomial, the evaluator's binomial since 2.4.9. A new row name, so the
 # trail does not splice it onto the `binomial` row, which measured ganita's
@@ -59,6 +64,14 @@ fn run_ntheory_benches() {
 
     b = bench_new("totient");
     bench_run(b, &_bench_totient, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("factor_semiprime62");
+    bench_run(b, &_bench_factor_semiprime62, 200);
+    bench_report(b);
+
+    b = bench_new("totient_semiprime62");
+    bench_run(b, &_bench_totient_semiprime62, 200);
     bench_report(b);
 
     b = bench_new("fibonacci");

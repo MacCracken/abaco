@@ -12,7 +12,7 @@ In your project's `cyrius.cyml`:
 ```toml
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.5.1"                 # pin to a released tag, never a branch
+tag = "2.5.2"                 # pin to a released tag, never a branch
 modules = ["dist/abaco.cyr"]  # the bundle is the only file you name
 ```
 
@@ -48,8 +48,8 @@ a binary that never fetches. `bayan` is needed regardless, for
 HTTPS adds it, together with `-D ABACO_TLS` — see the 2.4.12 note under
 [Upgrading](#upgrading), and the 2.5.0 note for what has changed since.
 
-The bundle needs Cyrius ≥ 6.6.13 in your own pin, and a `-D ABACO_TLS` build
-needs ≥ 6.7.9 (2.5.0; the 2.5.0 note under [Upgrading](#upgrading)).
+The bundle needs Cyrius ≥ 6.6.13, and a `-D ABACO_TLS` build ≥ 6.7.9 (2.5.0
+note under [Upgrading](#upgrading)).
 
 > **Changed at 6.2.x** — the standalone `json` and `u128` modules were folded
 > into **`bayan`**, and the extended transcendentals abaco calls
@@ -102,58 +102,53 @@ Bump the `tag` and run `cyrius deps`. abaco follows SemVer (post-1.0): patch and
 minor bumps are source-compatible; a major bump documents breaking changes in
 [`CHANGELOG.md`](../../CHANGELOG.md) with a migration section.
 
-### 2.5.1 — Cyrius 6.7.18: what changes is your own pin's bayan
+### 2.5.2 — fast factorisation
 
-abaco's source is unchanged: the bundle differs from 2.5.0 only in its version
-header, and the floors stay ≥ 6.6.13 (≥ 6.7.9 with `-D ABACO_TLS`). The changes
-below come with **your own** Cyrius pin, because the bundle compiles against
-your vendored stdlib. They apply with 2.5.0 too, or any tag:
+- **`factor` and `totient` factor by Pollard–Brent rho** past trial division
+  to 8191. Two 31-bit primes took 2.1 s through 2.5.1 and now take ~1 ms; any
+  i64 takes a few ms at most. Results are unchanged, and small n run as fast
+  as before.
+- **The evaluator's `totient` takes any i64.** Through 2.5.1, n > 10¹² was
+  `ABACO_ERR_MATH`. The cap and its global `ABACO_TOTIENT_MAX` are gone.
 
-- **From Cyrius 6.7.13 every binary that includes abaco is ~340 KB larger.**
-  bayan 1.9.0 and later (one bundle: base64, CSV, u128, bigint, TOML, CYML,
-  YAML, JSON, PDF, Markdown) includes Unicode case-fold, category and
-  normalisation tables for its Markdown reader, whether you use them or not,
-  and dead-code elimination does not remove data. abaco needs bayan
-  (`bayan_u64_powmod`, the rates JSON), so it cannot leave them out. Measured
-  on a consumer calling `amplitude_to_db`, `window_hann` and the evaluator:
-  164,864 B on 6.7.12, 510,096 B on 6.7.13, 507,064 B on 6.7.18.
-- **From Cyrius 6.7.18 a rates body that lists a currency twice is
-  `AI_ERR_CURRENCY`.** bayan 1.11.1 refuses a duplicate JSON object key,
-  compared decoded (`"\u0045UR"` is `"EUR"`); through bayan 1.11.0 such a
-  body loaded. A repeated top-level `base` or `rates` still loads, first one
-  wins, because abaco reads those two itself.
-- **From Cyrius 6.7.17 a statement that drops a value builtin's result
-  (`f64_sqrt(x);`, `load8(p);`) no longer compiles.** abaco's bundle has none;
-  check your own code.
-- **`-D ABACO_TLS`: pin Cyrius ≥ 6.7.18.** It fixes two TLS advisories that
-  reach the fetch. **CYRIUS-2026-0040:** once a process had used more than 63
-  crypto threads, they shared lanes, and an on-path attacker could get a
-  forged ChaCha20-Poly1305 record accepted. The 2.4.12 note said shared lanes
-  only made fetches fail; that was wrong. From 6.7.18 lanes are a pool held
-  only while in use, and a 65th concurrent operation is refused, not aliased.
-  **CYRIUS-2026-0042:** chain verification ignored nameConstraints, so a
-  name-constrained intermediate could vouch for any host.
-- **The plaintext loopback fetch is bounded from Cyrius 6.7.18**
-  (CYRIUS-2026-0049): `http_get` gives up after 5 s with no progress or 30 s
-  for the exchange, and abaco reports that as `AI_ERR_HTTP`. Before, a stalled
-  local rates server held the fetching thread forever.
-- **`CalcHistory_save_to_file` from Cyrius 6.7.18** (CYRIUS-2026-0047):
-  `file_write_atomic` creates its temp file with the destination's mode; before,
-  it was briefly readable at 0644 before taking a 0600 file's mode.
-- **`-D ABACO_TLS`: from Cyrius 6.7.12–6.7.14 the native client is stricter
-  with a rates server that breaks the handshake rules** (a duplicate or
-  unsolicited extension, trailing bytes, an ALPN it did not offer). Such a
-  server is `AI_ERR_TLS`. A conformant server is unaffected.
+### 2.5.1 — Cyrius 6.7.18
+
+abaco's source is unchanged; the bundle differs from 2.5.0 only in its version
+header. What changes comes from the 6.7.18 stdlib:
+
+- **Binaries are ~340 KB larger.** bayan 1.9.0 and later (Cyrius 6.7.13+)
+  includes Unicode case-fold, category and normalisation tables for its
+  Markdown reader, and dead-code elimination does not remove data. abaco needs
+  bayan (`bayan_u64_powmod`, the rates JSON). A program calling
+  `amplitude_to_db`, `window_hann` and the evaluator is 164,864 B on 6.7.12,
+  510,096 B on 6.7.13 and 507,064 B on 6.7.18.
+- **A rates body that lists a currency twice is `AI_ERR_CURRENCY`.** bayan
+  1.11.1 refuses a duplicate JSON object key, compared decoded
+  (`"\u0045UR"` is `"EUR"`). A repeated top-level `base` or `rates` still loads,
+  and the first one wins, because abaco reads those two itself.
+- **HTTPS is stricter with servers that break the handshake rules**: a
+  duplicate or unsolicited extension, trailing bytes, or an ALPN the client did
+  not offer is `AI_ERR_TLS`. A conformant server is unaffected.
+- **Security fixes under abaco's fetch and history paths:**
+  - **CYRIUS-2026-0040:** once a process had used more than 63 crypto threads,
+    they shared lanes, and an on-path attacker could get a forged
+    ChaCha20-Poly1305 record accepted. The 2.4.12 note said shared lanes only
+    made fetches fail; that was wrong.
+  - **CYRIUS-2026-0042:** chain verification ignored nameConstraints.
+  - **CYRIUS-2026-0049:** `http_get` had no deadline. The plaintext loopback
+    fetch now gives up after 5 s without progress or 30 s per exchange, as
+    `AI_ERR_HTTP`.
+  - **CYRIUS-2026-0047:** `CalcHistory_save_to_file`'s temp file was briefly
+    0644 before taking a 0600 file's mode.
 
 ### 2.5.0 — Cyrius 6.7.9: abaco uses the stdlib's tan, deadline and IP check
 
 No symbol, result or error code changed. 2.5.0 is a minor because it
-**raises the Cyrius version your own pin must have**:
+**raises the minimum Cyrius version**:
 
 - **Cyrius ≥ 6.6.13 to compile the bundle.** `tan` is now the stdlib's
   `f64_tan` (ganita 1.2.11). On an older pin the build fails naming
-  `f64_tan` (checked: 6.6.12 fails, 6.6.13 compiles). dhvani (pin 6.6.10) and
-  jalwa (6.6.3) bump their own pin to take 2.5.0.
+  `f64_tan` (checked: 6.6.12 fails, 6.6.13 compiles).
 - **Cyrius ≥ 6.7.9 with `-D ABACO_TLS`.** The fetch calls `sock_set_nodelay`
   (6.7.9), `tls_set_deadline` and `tls_init_main` (6.6.13). On an older pin the
   build fails naming `sock_set_nodelay` (checked: 6.7.8 fails).
@@ -527,7 +522,8 @@ Two user-visible changes, both improvements — nothing to migrate:
   reference (worst case 1 ulp). If you were compensating for the old parser's
   error, stop. (Corrected at 2.4.9: not every subnormal is bit-exact — a few are
   rounded twice, and digits past the 18th are dropped without a sticky bit, so
-  the residual goes both ways. It stays within 1 ulp; see the roadmap.)
+  the residual goes both ways. It stayed within 1 ulp until 2.4.11, which
+  rounds every literal correctly; see its note.)
 
 ### 2.3.4 — one rename you may need to act on
 

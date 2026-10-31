@@ -11,6 +11,11 @@
 #   - near 2^63, next_prime(n) returns: 0 exactly when n >= 2^63 - 25,
 #     otherwise the smallest prime above n.
 #   - abaco_binomial obeys Pascal's rule whenever all three terms fit.
+#   - 2.5.2: n built from 2-4 known primes (next_prime of random seeds, small,
+#     just past ABACO_FACTOR_TRIAL, and up to ~2^31.5, so most products go
+#     through Pollard-Brent rho): factor(n) is exactly those primes, sorted,
+#     and totient(n) equals the product formula over them. The answer is known
+#     by construction, so the oracle never calls factor().
 
 include "lib/args.cyr"
 
@@ -59,6 +64,68 @@ fn trial_prime(n) {
         d = d + 2;
     }
     return 1;
+}
+
+# A prime of a random size class: small (below the trial bound), just past
+# it, or large (~2^24 to ~2^31.5).
+fn _fz_prime() {
+    var k = _fz_u(3);
+    if (k == 0) { return next_prime(_fz_u(8191)); }
+    if (k == 1) { return next_prime(8191 + _fz_u(2097152)); }
+    return next_prime(16777216 + _fz_u(3020000000));
+}
+
+# n from 2-4 known primes (while the product fits in i64): factor(n) must be
+# exactly those primes sorted, and totient(n) the product formula over them.
+fn _fz_check_constructed() {
+    var ps[32];
+    var k = 2 + _fz_u(3);
+    var n = 1;
+    var cnt = 0;
+    while (cnt < k) {
+        var p = _fz_prime();
+        if (p > 9223372036854775807 / n) { break; }
+        n = n * p;
+        store64(&ps + cnt * 8, p);
+        cnt = cnt + 1;
+    }
+    var i = 1;
+    while (i < cnt) {
+        var v = load64(&ps + i * 8);
+        var j = i - 1;
+        while (j >= 0 && load64(&ps + j * 8) > v) {
+            store64(&ps + j * 8 + 8, load64(&ps + j * 8));
+            j = j - 1;
+        }
+        store64(&ps + j * 8 + 8, v);
+        i = i + 1;
+    }
+    var fs = factor(n);
+    var same = 1;
+    if (vec_len(fs) != cnt) { same = 0; }
+    i = 0;
+    while (same == 1 && i < cnt) {
+        if (vec_get(fs, i) != load64(&ps + i * 8)) { same = 0; }
+        i = i + 1;
+    }
+    if (same == 0) {
+        _fz_puts("FAIL: factor("); print_num(n); _fz_puts(") is not the primes it was built from");
+        println(""); sys_exit(1);
+    }
+    var phi = n;
+    var prev = 0;
+    i = 0;
+    while (i < cnt) {
+        var q = load64(&ps + i * 8);
+        if (q != prev) { phi = phi / q * (q - 1); }
+        prev = q;
+        i = i + 1;
+    }
+    if (totient(n) != phi) {
+        _fz_puts("FAIL: totient("); print_num(n); _fz_puts(") = "); print_num(totient(n));
+        _fz_puts(" but its primes give "); print_num(phi); println(""); sys_exit(1);
+    }
+    return 0;
 }
 
 fn main() {
@@ -215,6 +282,9 @@ fn main() {
                 }
             }
         }
+
+        # Factorisation past the trial bound, against a known answer (2.5.2).
+        _fz_check_constructed();
 
         pass = pass + 1;
         iter = iter + 1;

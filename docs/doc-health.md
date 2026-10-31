@@ -117,7 +117,7 @@ Numbers roll up from the per-tier tables below.
 
 | File | Last touched | Status | Action |
 |---|---|---|---|
-| `roadmap.md` | 2026-05-26 | ✅ Fresh | 2.2.x arc (2.2.2 in progress); 2.3.x ecosystem rollout. |
+| `roadmap.md` | 2026-10-31 | ✅ Fresh | Open work only, pinned 2.5.2 → 2.8.0; shipped work lives in CHANGELOG.md. |
 | `state.md` | 2026-05-26 | ✅ Fresh | **Rotates every release.** Bump assert count + sizes at 2.2.2 close. |
 
 ---

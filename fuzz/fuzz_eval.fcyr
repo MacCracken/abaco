@@ -184,7 +184,8 @@ fn _fz_pathological(which, e) {
         return 0;
     }
     # Function calls with adversarial arguments — the only shape that reaches
-    # the evaluator's domain caps (totient, factorial, fibonacci). The random
+    # the evaluator's domain caps (factorial, fibonacci; totient's went in 2.5.2,
+    # when Pollard-Brent rho made any i64 cheap). The random
     # byte stream cannot produce a 7-letter function name, so M-1 had no fuzz
     # coverage at all before 2.3.5.
     n = _fz_u(4);
@@ -213,7 +214,10 @@ fn _fz_pathological(which, e) {
         di = di + 1;
     }
     var want = ABACO_ERR_NONE;
-    if (n == 0) { if (big == 1 || val > 1000000000000) { want = ABACO_ERR_MATH; } }
+    # totient takes any i64 since 2.5.2 (its 10^12 cap went with trial
+    # division). The literal parses to the nearest double, and every value
+    # from 2^63 - 512 up rounds to 2^63 (ties to even), which is out of i64.
+    if (n == 0) { if (big == 1 || val >= 9223372036854775296) { want = ABACO_ERR_MATH; } }
     if (n == 1) { if (big == 1 || val > 170) { want = ABACO_ERR_MATH; } }
     if (n == 2) { if (big == 1 || val > 92) { want = ABACO_ERR_MATH; } }
     if (eval_err(e) != want) { _fz_puts(buf); _fz_fail(" domain cap answered the wrong error"); }
