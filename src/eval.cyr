@@ -1614,6 +1614,16 @@ fn _eval_mean(args, n) {
 # stddev(1e200, -1e200) was +Inf and stddev(1e-200, 2e-200) was 0 (2.4.9
 # audit).
 fn _eval_stddev(args, n) {
+    # A non-finite argument makes the spread NaN (Inf - Inf, or NaN itself).
+    # Answered first: summed, it would leave the expansion at length -1, and
+    # through 2.7.0 _mean_rem then read 16 bytes below ps (2.8.0 P(-1)
+    # review). The canonical quiet NaN, the same bits on every target.
+    var i = 0;
+    while (i < n) {
+        var a = load64(args + i * 8);
+        if (f64_eq(f64_sub(a, a), f64_from(0)) == 0) { return 0x7FF8_0000_0000_0000; }
+        i = i + 1;
+    }
     var k = _stat_exp(args, n);
     var nf = f64_from(n);
     # The mean as mh + ml, from the exact sum (_xp_add) and its exact
@@ -1624,7 +1634,7 @@ fn _eval_stddev(args, n) {
     # 3.8e9 gave a stddev 57 ulp off (2.7.0 P(-1) review).
     var ps[528];
     var m = 0;
-    var i = 0;
+    i = 0;
     while (i < n) {
         m = _xp_add(&ps, m, _pow_scale(load64(args + i * 8), 0 - k));
         i = i + 1;
@@ -2137,7 +2147,14 @@ fn parse_primary(e) {
             }
             eval_advance(e);
             if (over == 1) {
-                eval_set_err(e, ABACO_ERR_ARITY);
+                # An unknown name is UNKNOWN_FN at any count, as call_function
+                # reports it below the cap; through 2.7.0 past the cap it was
+                # ARITY (2.8.0 P(-1) review).
+                if (_fn_id(name) == EVF_NONE) {
+                    eval_set_err(e, ABACO_ERR_UNKNOWN_FN);
+                } else {
+                    eval_set_err(e, ABACO_ERR_ARITY);
+                }
                 return f64_from(0);
             }
             return call_function(e, name, args, nargs);

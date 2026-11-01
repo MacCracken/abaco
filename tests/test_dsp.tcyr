@@ -1029,6 +1029,55 @@ fn test_window_metrics() {
     return 0;
 }
 
+# 2.8.0: the metrics at any scale. Each runs on w 2^-e with max |w| in
+# [1, 2), so scaling w by a power of two changes no bit of ENBW or scalloping
+# loss and scales the gain exactly. At 2.7.0 the squares overflowed or
+# flushed: ENBW of 8 x 1e154 was NaN, of 8 x 1e-160 0.99999228, of 4 x 5e-324
+# NaN, and the gain of [DBL_MAX, DBL_MAX] +Inf (2.8.0 P(-1) review).
+fn _fill_const(n, v) {
+    var w = alloc(n * 8);
+    var i = 0;
+    while (i < n) { store64(w + i * 8, v); i = i + 1; }
+    return w;
+}
+
+fn test_window_metrics_scale() {
+    var h = _fill_win(1, 64);
+    var g = alloc(64 * 8);
+    var bad = 0;
+    var ks = 0;
+    while (ks < 5) {
+        var k = 0 - 900;
+        if (ks == 1) { k = 0 - 300; }
+        if (ks == 2) { k = 300; }
+        if (ks == 3) { k = 960; }
+        if (ks == 4) { k = 1000; }
+        var p2 = f64_from(1);
+        var j = 0;
+        if (k > 0) { while (j < k) { p2 = f64_mul(p2, DSP_TWO); j = j + 1; } }
+        if (k < 0) { while (j < 0 - k) { p2 = f64_mul(p2, DSP_HALF); j = j + 1; } }
+        var i = 0;
+        while (i < 64) { store64(g + i * 8, f64_mul(load64(h + i * 8), p2)); i = i + 1; }
+        if (window_enbw(g, 64) != window_enbw(h, 64)) { bad = bad + 1; }
+        if (window_scalloping_loss(g, 64) != window_scalloping_loss(h, 64)) { bad = bad + 1; }
+        if (window_coherent_gain(g, 64) != f64_mul(window_coherent_gain(h, 64), p2)) { bad = bad + 1; }
+        ks = ks + 1;
+    }
+    assert_eq(bad, 0, "metrics of hann_p(64) * 2^k, k = -900..1000, bit for bit");
+    assert_eq(window_enbw(_fill_const(8, 0x5FE7_DDDF_6B09_5FF1), 8), DSP_ONE, "ENBW of 8 x 1e154 = 1 (was NaN)");
+    var tiny = _fill_const(8, 0x1EB6_7E9C_127B_6E74);
+    assert_eq(window_enbw(tiny, 8), DSP_ONE, "ENBW of 8 x 1e-160 = 1 (was 0.99999228)");
+    var sub = _fill_const(4, 1);
+    assert_eq(window_enbw(sub, 4), DSP_ONE, "ENBW of 4 x 5e-324 = 1 (was NaN)");
+    assert_eq(window_scalloping_loss(sub, 4), window_scalloping_loss(_fill_const(4, DSP_ONE), 4),
+      "scalloping of 4 x 5e-324 = of 4 x 1 (was 2.5 dB, not 3.7)");
+    var mx = _fill_const(2, 0x7FEF_FFFF_FFFF_FFFF);
+    assert_eq(window_coherent_gain(mx, 2), 0x7FEF_FFFF_FFFF_FFFF, "gain of [DBL_MAX, DBL_MAX] = DBL_MAX (was +Inf)");
+    assert_eq(window_enbw(mx, 2), DSP_ONE, "ENBW of [DBL_MAX, DBL_MAX] = 1 (was NaN)");
+    assert(f64_eq(window_enbw(_fill_const(4, 0), 4), window_enbw(_fill_const(4, 0), 4)) == 0, "ENBW of zeros is NaN");
+    return 0;
+}
+
 # The biquad's magnitude and phase at f.
 fn _bq_mag(c, f, fs) {
     var m, p = biquad_response(c, f, fs);
@@ -1131,6 +1180,23 @@ fn test_biquad_coeffs() {
     near_ulp(load64(c + 16), 0x3FEA_8519_DD18_3FD1, 4, "lowshelf b2");
     near_ulp(load64(c + 24), 0xBFFD_82E5_3435_6B98, 4, "lowshelf a1");
     near_ulp(load64(c + 32), 0x3FEB_61FA_4C9C_16D9, 4, "lowshelf a2");
+    # 2.8.0: each coefficient within a few ulp of itself near fs/4 and fs/2
+    # too, the trig taken on pi/2 - w0 or pi - w0 (_bq_trig). At 2.7.0 the
+    # high-pass b0 was 77,269 ulp off, the band-pass b0 ~500, the peak b1
+    # 9,465 (2.8.0 P(-1) review).
+    var fs = f64_from(48000);
+    c = alloc(40);
+    var st, v = biquad_design(c, DSP_BQ_HIGHPASS, 0x40D7_6FF9_9999_999A, fs, f64_from(20), f64_from(0));
+    near_ulp(load64(c), 0x3DC7_8CBE_C161_63D9, 4, "highpass 23,999.9 Hz b0 (was 77,269 ulp off)");
+    near_ulp(load64(c + 24), 0x3FFF_FFFF_5043_728E, 4, "highpass 23,999.9 Hz a1");
+    st, v = biquad_design(c, DSP_BQ_BANDPASS, f64_from(23990), fs, f64_from(4), f64_from(0));
+    near_ulp(load64(c), 0x3F25_716E_6B36_B86E, 4, "bandpass 23,990 Hz b0");
+    near_ulp(load64(c + 32), 0x3FEF_FD51_D232_9929, 4, "bandpass 23,990 Hz a2");
+    st, v = biquad_design(c, DSP_BQ_PEAK, f64_from(11999), fs, 0x3FE6_A09E_667F_3BCD, f64_from(6));
+    near_ulp(load64(c + 8), 0xBF26_DE09_AFE9_8128, 4, "peak 11,999 Hz b1 (was 9,465 ulp off)");
+    near_ulp(load64(c + 32), 0x3FD5_4CB2_5F41_CEFD, 4, "peak 11,999 Hz a2");
+    st, v = biquad_design(c, DSP_BQ_PEAK, f64_from(12000), fs, 0x3FE6_A09E_667F_3BCD, f64_from(6));
+    assert(f64_eq(load64(c + 8), f64_from(0)) == 1, "peak at fs/4: cos w0 = 0 exactly, so b1 = a1 = 0");
     return 0;
 }
 
@@ -1267,6 +1333,15 @@ fn test_biquad_design_errors() {
     var c = alloc(40);
     var st, v = biquad_design(c, DSP_BQ_LOWPASS, f0, fs, q, nan);
     assert_eq(is_ok(st), 1, "lowpass ignores the gain, NaN included");
+    # 2.8.0: designs whose rounded coefficients are not stable are Err. Each
+    # was Ok at 2.7.0, with a pole on or outside the unit circle (2.8.0 P(-1)
+    # review).
+    var q2 = 0x3FE6_A09E_667F_3BCD;
+    _bq_err(DSP_BQ_LOWPASS, 0x3F0A_36E2_EB1C_432D, fs, DSP_ONE, z, "lowpass at 5e-5 Hz: 1 + a1 + a2 = -2^-53");
+    _bq_err(DSP_BQ_PEAK, f0, fs, q2, f64_neg(f64_from(700)), "peak -700 dB: a2 = -1");
+    _bq_err(DSP_BQ_PEAK, f0, fs, q2, f64_from(700), "peak +700 dB: a2 = 1, poles on the circle");
+    _bq_err(DSP_BQ_LOWPASS, f0, fs, 0x54B2_49AD_2594_C37D, z, "lowpass q = 1e100: a2 = 1");
+    _bq_err(DSP_BQ_LOWSHELF, f0, fs, q2, f64_neg(f64_from(20000)), "lowshelf -20,000 dB: b = 0, a2 = 1");
     return 0;
 }
 
@@ -1301,6 +1376,451 @@ fn test_biquad_stability() {
     }
     assert_eq(errs, 0, "20,000 valid designs: all Ok");
     assert_eq(bad, 0, "20,000 designs: all stable");
+    return 0;
+}
+
+# ---- 2.8.0: FFT ----
+
+# A twiddle table of size tn, asserting Ok.
+fn _tw(tn) {
+    var t = alloc(tn * 8 + 8);
+    var st, v = fft_twiddles(t, tn);
+    assert_eq(is_ok(st), 1, "fft_twiddles");
+    return t;
+}
+
+# A deterministic input in [-1, 1): a 64-bit LCG, top bits.
+var _fft_seed = 2808;
+fn _fft_rand() {
+    _fft_seed = _fft_seed * 6364136223846793005 + 1442695040888963407;
+    return f64_sub(f64_div(f64_from((_fft_seed >> 11) & 0xFFFFF), f64_from(524288)), DSP_ONE);
+}
+
+# The oracle: an O(n^2) DFT that shares no code with the FFT. Each twiddle is
+# cos / sin of 2 pi ((jk) mod n) / n, the angle reduced exactly first, and
+# each sum is compensated (Neumaier, batch_sum's step via _win_kadd). sign is
+# -1 forward and +1 inverse (unscaled).
+fn _dft(xr, xi, n, sign, outr, outi) {
+    var k = 0;
+    while (k < n) {
+        var sr = f64_from(0);
+        var cr = f64_from(0);
+        var si = f64_from(0);
+        var ci = f64_from(0);
+        var j = 0;
+        while (j < n) {
+            var a = f64_div(f64_mul(DSP_TAU, f64_from((j * k) % n)), f64_from(n));
+            var c = f64_cos(a);
+            var s = f64_sin(a);
+            if (sign < 0) { s = f64_neg(s); }
+            var ar = load64(xr + j * 8);
+            var ai = load64(xi + j * 8);
+            sr, cr = _win_kadd(sr, cr, f64_mul(ar, c));
+            sr, cr = _win_kadd(sr, cr, f64_neg(f64_mul(ai, s)));
+            si, ci = _win_kadd(si, ci, f64_mul(ar, s));
+            si, ci = _win_kadd(si, ci, f64_mul(ai, c));
+            j = j + 1;
+        }
+        store64(outr + k * 8, f64_add(sr, cr));
+        store64(outi + k * 8, f64_add(si, ci));
+        k = k + 1;
+    }
+    return 0;
+}
+
+# The largest |a[i] - b[i]| over both parts.
+fn _maxdiff(ar, ai, br, bi, n) {
+    var m = f64_from(0);
+    var i = 0;
+    while (i < n) {
+        var d1 = f64_abs(f64_sub(load64(ar + i * 8), load64(br + i * 8)));
+        var d2 = f64_abs(f64_sub(load64(ai + i * 8), load64(bi + i * 8)));
+        if (f64_gt(d1, m) == 1) { m = d1; }
+        if (f64_gt(d2, m) == 1) { m = d2; }
+        i = i + 1;
+    }
+    return m;
+}
+
+fn _copy(dst, src, n) {
+    var i = 0;
+    while (i < n) { store64(dst + i * 8, load64(src + i * 8)); i = i + 1; }
+    return 0;
+}
+
+# The table: Err for a size that is not a power of two (the table untouched),
+# the exact points, its symmetries bit for bit, and values against 45-digit
+# Decimal (python3) within 2 ulp; every entry of a 65536 table is within
+# 1.13 u of exact (the FFT oracle sweep).
+fn test_fft_twiddles() {
+    var t = alloc(64);
+    store64(t, 0x7FF4_0000_DEAD_0001);
+    var st, v = fft_twiddles(t, 12);
+    assert_eq(is_ok(st), 0, "twiddles: 12 is not a power of two");
+    st, v = fft_twiddles(t, 0);
+    assert_eq(is_ok(st), 0, "twiddles: 0");
+    st, v = fft_twiddles(t, 0 - 8);
+    assert_eq(is_ok(st), 0, "twiddles: -8");
+    assert_eq(load64(t), 0x7FF4_0000_DEAD_0001, "twiddles: the table untouched on Err");
+    var w = _tw(16);
+    assert_eq(load64(w), DSP_ONE, "cos 0 = 1");
+    assert_eq(load64(w + 64), 0, "sin 0 = +0");
+    assert_eq(load64(w + 32), 0, "cos(pi/2) = +0 exactly");
+    assert_eq(load64(w + 96), DSP_ONE, "sin(pi/2) = 1 exactly");
+    assert_eq(load64(w + 16), DSP_FRAC_1_SQRT2, "cos(pi/4) = sqrt(1/2)");
+    assert_eq(load64(w + 80), DSP_FRAC_1_SQRT2, "sin(pi/4) = sqrt(1/2), the same double");
+    assert_eq(load64(w + 48), f64_neg(DSP_FRAC_1_SQRT2), "cos(3 pi/4) = -sqrt(1/2)");
+    var tn = 1024;
+    var b = _tw(tn);
+    var h = tn / 2;
+    var bad = 0;
+    var k = 0;
+    while (k <= tn / 4) {
+        if (load64(b + k * 8) != load64(b + (h + tn / 4 - k) * 8)) { bad = bad + 1; }
+        k = k + 1;
+    }
+    k = 1;
+    while (k < h) {
+        # By value: cos(pi/2) is +0, and -(+0) is -0.
+        if (f64_eq(load64(b + (h - k) * 8), f64_neg(load64(b + k * 8))) == 0) { bad = bad + 1; }
+        if (load64(b + (h + h - k) * 8) != load64(b + (h + k) * 8)) { bad = bad + 1; }
+        k = k + 1;
+    }
+    assert_eq(bad, 0, "cos k = sin(n/4 - k), cos(n/2 - k) = -cos k, sin(n/2 - k) = sin k, exactly");
+    near_ulp(load64(b + 8), 0x3FEF_FFD8_858E_8A92, 2, "cos(2 pi / 1024)");
+    near_ulp(load64(b + (h + 1) * 8), 0x3F79_21F0_FE67_0071, 2, "sin(2 pi / 1024)");
+    near_ulp(load64(b + 800), 0x3FEA_29A7_A046_2782, 2, "cos(2 pi 100 / 1024)");
+    near_ulp(load64(b + (h + 100) * 8), 0x3FE2_6D05_4CDD_12DF, 2, "sin(2 pi 100 / 1024)");
+    near_ulp(load64(b + 2400), 0xBFD1_11D2_62B1_F677, 2, "cos(2 pi 300 / 1024)");
+    near_ulp(load64(b + (h + 300) * 8), 0x3FEE_D740_E768_4963, 2, "sin(2 pi 300 / 1024)");
+    return 0;
+}
+
+# fft and ifft against the O(n^2) oracle for n = 1..256, on one table of
+# size 1024 (stride 1024 / n). Both are within ~u Sum|x| of exact here, so
+# 16 u n (|x| < sqrt 2) holds either; a wrong twiddle, sign or permutation
+# is off by O(1).
+fn test_fft_vs_dft() {
+    var tw = _tw(1024);
+    var xr = alloc(256 * 8);
+    var xi = alloc(256 * 8);
+    var fr = alloc(256 * 8);
+    var fi = alloc(256 * 8);
+    var dr = alloc(256 * 8);
+    var di = alloc(256 * 8);
+    var bad = 0;
+    var n = 1;
+    while (n <= 256) {
+        var i = 0;
+        while (i < n) { store64(xr + i * 8, _fft_rand()); store64(xi + i * 8, _fft_rand()); i = i + 1; }
+        var tol = f64_mul(f64_from(16 * n), 0x3CA0000000000000);
+        _copy(fr, xr, n);
+        _copy(fi, xi, n);
+        var st, v = fft(fr, fi, n, tw, 1024);
+        if (is_ok(st) == 0) { bad = bad + 1; }
+        _dft(xr, xi, n, 0 - 1, dr, di);
+        if (f64_gt(_maxdiff(fr, fi, dr, di, n), tol) == 1) { bad = bad + 1; }
+        _copy(fr, xr, n);
+        _copy(fi, xi, n);
+        ifft(fr, fi, n, tw, 1024);
+        _dft(xr, xi, n, 1, dr, di);
+        var sc = f64_div(DSP_ONE, f64_from(n));
+        batch_scale(dr, dr, sc, n);
+        batch_scale(di, di, sc, n);
+        if (f64_gt(_maxdiff(fr, fi, dr, di, n), tol) == 1) { bad = bad + 1; }
+        n = n + n;
+    }
+    assert_eq(bad, 0, "fft and ifft match the O(n^2) DFT, n = 1..256");
+    return 0;
+}
+
+# Exact cases: small integer transforms, an impulse, a constant; the twiddle
+# table's size does not change a bit; ifft(fft(x)) within 2 u log2 n of x
+# (the oracle sweep measured at most 0.25 u log2 n up to 16384).
+fn test_fft_exact_and_round_trip() {
+    var tw = _tw(4096);
+    var re = alloc(4096 * 8);
+    var im = alloc(4096 * 8);
+    var i = 0;
+    while (i < 4) { store64(re + i * 8, f64_from(i + 1)); store64(im + i * 8, 0); i = i + 1; }
+    fft(re, im, 4, tw, 4096);
+    assert_eq(load64(re), f64_from(10), "fft [1,2,3,4]: X0 = 10");
+    assert_eq(load64(re + 8), f64_from(0 - 2), "X1 = -2 + 2i (re)");
+    assert_eq(load64(im + 8), f64_from(2), "X1 = -2 + 2i (im)");
+    assert_eq(load64(re + 16), f64_from(0 - 2), "X2 = -2");
+    assert_eq(load64(im + 24), f64_from(0 - 2), "X3 = -2 - 2i (im)");
+    ifft(re, im, 4, tw, 4096);
+    var ex = 0;
+    i = 0;
+    while (i < 4) {
+        if (f64_eq(load64(re + i * 8), f64_from(i + 1)) == 0 || f64_abs(load64(im + i * 8)) != 0) { ex = ex + 1; }
+        i = i + 1;
+    }
+    assert_eq(ex, 0, "ifft(fft([1,2,3,4])) exactly");
+    i = 0;
+    while (i < 64) { store64(re + i * 8, 0); store64(im + i * 8, 0); i = i + 1; }
+    store64(re, DSP_ONE);
+    fft(re, im, 64, tw, 4096);
+    ex = 0;
+    i = 0;
+    while (i < 64) {
+        if (load64(re + i * 8) != DSP_ONE || f64_abs(load64(im + i * 8)) != 0) { ex = ex + 1; }
+        i = i + 1;
+    }
+    assert_eq(ex, 0, "an impulse transforms to all ones, exactly");
+    i = 0;
+    while (i < 64) { store64(re + i * 8, f64_from(3)); store64(im + i * 8, 0); i = i + 1; }
+    fft(re, im, 64, tw, 4096);
+    ex = 0;
+    if (f64_eq(load64(re), f64_from(192)) == 0) { ex = 1; }
+    i = 1;
+    while (i < 64) {
+        if (f64_abs(load64(re + i * 8)) != 0 || f64_abs(load64(im + i * 8)) != 0) { ex = ex + 1; }
+        i = i + 1;
+    }
+    assert_eq(ex, 0, "a constant 3 transforms to 192 at DC and exact zeros");
+    # The same transform on a size-64 table and the size-4096 one.
+    var t64 = _tw(64);
+    var r2 = alloc(64 * 8);
+    var i2 = alloc(64 * 8);
+    i = 0;
+    while (i < 64) {
+        var a = _fft_rand();
+        var c = _fft_rand();
+        store64(re + i * 8, a);
+        store64(im + i * 8, c);
+        store64(r2 + i * 8, a);
+        store64(i2 + i * 8, c);
+        i = i + 1;
+    }
+    fft(re, im, 64, tw, 4096);
+    fft(r2, i2, 64, t64, 64);
+    ex = 0;
+    i = 0;
+    while (i < 64) {
+        if (load64(re + i * 8) != load64(r2 + i * 8) || load64(im + i * 8) != load64(i2 + i * 8)) { ex = ex + 1; }
+        i = i + 1;
+    }
+    assert_eq(ex, 0, "a stride-64 table gives the same bits as a size-64 one");
+    var orig = alloc(4096 * 16);
+    var bad = 0;
+    var n = 2;
+    while (n <= 4096) {
+        i = 0;
+        while (i < n) {
+            store64(orig + i * 8, _fft_rand());
+            store64(orig + (4096 + i) * 8, _fft_rand());
+            store64(re + i * 8, load64(orig + i * 8));
+            store64(im + i * 8, load64(orig + (4096 + i) * 8));
+            i = i + 1;
+        }
+        fft(re, im, n, tw, 4096);
+        ifft(re, im, n, tw, 4096);
+        var num = f64_from(0);
+        var den = f64_from(0);
+        i = 0;
+        while (i < n) {
+            var er = f64_sub(load64(re + i * 8), load64(orig + i * 8));
+            var ei = f64_sub(load64(im + i * 8), load64(orig + (4096 + i) * 8));
+            num = f64_add(num, f64_add(f64_mul(er, er), f64_mul(ei, ei)));
+            var o1 = load64(orig + i * 8);
+            var o2 = load64(orig + (4096 + i) * 8);
+            den = f64_add(den, f64_add(f64_mul(o1, o1), f64_mul(o2, o2)));
+            i = i + 1;
+        }
+        var lg = 0;
+        var t = n;
+        while (t > 1) { t = t >> 1; lg = lg + 1; }
+        var lim = f64_mul(f64_from(2 * lg), 0x3CA0000000000000);
+        if (f64_gt(f64_sqrt(f64_div(num, den)), lim) == 1) { bad = bad + 1; }
+        n = n + n;
+    }
+    assert_eq(bad, 0, "ifft(fft(x)) within 2 u log2 n of x, n = 2..4096");
+    return 0;
+}
+
+# rfft against fft of the same real input, and its Hermitian bins; n = 1 and
+# 2 exactly; irfft(rfft(x)) within 2 u log2 n; irfft ignores im[0] and
+# im[n/2], as numpy.fft.irfft.
+fn test_rfft() {
+    var tw = _tw(1024);
+    var x = alloc(1024 * 8);
+    var re = alloc(1024 * 8);
+    var im = alloc(1024 * 8);
+    var cr = alloc(1024 * 8);
+    var ci = alloc(1024 * 8);
+    var y = alloc(1024 * 8);
+    store64(x, f64_from(5));
+    rfft(x, re, im, 1, tw, 1024);
+    assert(f64_eq(load64(re), f64_from(5)) == 1 && load64(im) == 0, "rfft of one sample is itself");
+    store64(x, f64_from(5));
+    store64(x + 8, f64_from(2));
+    rfft(x, re, im, 2, tw, 1024);
+    assert(f64_eq(load64(re), f64_from(7)) == 1 && f64_eq(load64(re + 8), f64_from(3)) == 1, "rfft([5, 2]) = [7, 3]");
+    var bad = 0;
+    var rt = 0;
+    var n = 2;
+    while (n <= 1024) {
+        var i = 0;
+        while (i < n) {
+            var v = _fft_rand();
+            store64(x + i * 8, v);
+            store64(cr + i * 8, v);
+            store64(ci + i * 8, 0);
+            i = i + 1;
+        }
+        rfft(x, re, im, n, tw, 1024);
+        fft(cr, ci, n, tw, 1024);
+        var h = n / 2;
+        var tol = f64_mul(f64_from(16 * n), 0x3CA0000000000000);
+        if (f64_gt(_maxdiff(re, im, cr, ci, h + 1), tol) == 1) { bad = bad + 1; }
+        if (load64(im) != 0 || load64(im + h * 8) != 0) { bad = bad + 1; }
+        store64(im, f64_from(7));
+        store64(im + h * 8, f64_from(0 - 9));
+        irfft(re, im, y, n, tw, 1024);
+        var num = f64_from(0);
+        var den = f64_from(0);
+        i = 0;
+        while (i < n) {
+            var e = f64_sub(load64(y + i * 8), load64(x + i * 8));
+            num = f64_add(num, f64_mul(e, e));
+            den = f64_add(den, f64_mul(load64(x + i * 8), load64(x + i * 8)));
+            i = i + 1;
+        }
+        var lg = 0;
+        var t = n;
+        while (t > 1) { t = t >> 1; lg = lg + 1; }
+        if (f64_gt(f64_sqrt(f64_div(num, den)), f64_mul(f64_from(2 * lg), 0x3CA0000000000000)) == 1) { rt = rt + 1; }
+        n = n + n;
+    }
+    assert_eq(bad, 0, "rfft = the first n/2 + 1 bins of fft, im[0] = im[n/2] = 0, n = 2..1024");
+    assert_eq(rt, 0, "irfft(rfft(x)) within 2 u log2 n, ignoring im[0] and im[n/2]");
+    # A tone on bin 5 of 64.
+    var i = 0;
+    while (i < 64) {
+        store64(x + i * 8, f64_cos(f64_div(f64_mul(DSP_TAU, f64_from(5 * i)), f64_from(64))));
+        i = i + 1;
+    }
+    rfft(x, re, im, 64, tw, 1024);
+    near_abs(load64(re + 40), f64_from(32), 0x3D10000000000000, "cos at bin 5: X5 = 32");
+    near_abs(load64(re + 48), f64_from(0), 0x3D10000000000000, "cos at bin 5: X6 = 0");
+    return 0;
+}
+
+# Err, with the data untouched, for a size that is not a power of two, a
+# size past the table, or a table size that is not a power of two.
+fn test_fft_errors() {
+    var tw = _tw(64);
+    var re = alloc(128 * 8);
+    var im = alloc(128 * 8);
+    var x = alloc(128 * 8);
+    store64(re, 0x7FF4_0000_DEAD_0001);
+    store64(x, 0x7FF4_0000_DEAD_0002);
+    var bad = 0;
+    var st, v = fft(re, im, 12, tw, 64);
+    if (is_ok(st) == 1) { bad = bad + 1; }
+    st, v = fft(re, im, 0, tw, 64);
+    if (is_ok(st) == 1) { bad = bad + 1; }
+    st, v = fft(re, im, 128, tw, 64);
+    if (is_ok(st) == 1) { bad = bad + 1; }
+    st, v = fft(re, im, 16, tw, 48);
+    if (is_ok(st) == 1) { bad = bad + 1; }
+    st, v = ifft(re, im, 0 - 4, tw, 64);
+    if (is_ok(st) == 1) { bad = bad + 1; }
+    st, v = rfft(x, re, im, 6, tw, 64);
+    if (is_ok(st) == 1) { bad = bad + 1; }
+    st, v = irfft(re, im, x, 128, tw, 64);
+    if (is_ok(st) == 1) { bad = bad + 1; }
+    st, v = stft_frame(x, 128, 0, x, 3, re, im, tw, 64);
+    if (is_ok(st) == 1) { bad = bad + 1; }
+    assert_eq(bad, 0, "every malformed size is Err");
+    assert_eq(load64(re), 0x7FF4_0000_DEAD_0001, "re untouched on Err");
+    assert_eq(load64(x), 0x7FF4_0000_DEAD_0002, "x untouched on Err");
+    return 0;
+}
+
+# stft_frame: inside the signal it is rfft of src times w, bit for bit; off
+# either end the missing samples are 0; a frame wholly outside is all zeros,
+# for any start.
+fn test_stft_frame() {
+    var tw = _tw(64);
+    var src = alloc(100 * 8);
+    var w = alloc(64 * 8);
+    var x = alloc(64 * 8);
+    var r1 = alloc(64 * 8);
+    var i1 = alloc(64 * 8);
+    var r2 = alloc(64 * 8);
+    var i2 = alloc(64 * 8);
+    var i = 0;
+    while (i < 100) { store64(src + i * 8, _fft_rand()); i = i + 1; }
+    i = 0;
+    while (i < 64) { store64(w + i * 8, window_hann_periodic(i, 64)); i = i + 1; }
+    var bad = 0;
+    var starts = 0;
+    while (starts < 4) {
+        var s0 = 10;
+        if (starts == 1) { s0 = 0 - 20; }
+        if (starts == 2) { s0 = 60; }
+        if (starts == 3) { s0 = 0 - 64; }
+        i = 0;
+        while (i < 64) {
+            var idx = s0 + i;
+            var v = f64_from(0);
+            if (idx >= 0 && idx < 100) { v = f64_mul(load64(src + idx * 8), load64(w + i * 8)); }
+            store64(x + i * 8, v);
+            i = i + 1;
+        }
+        rfft(x, r1, i1, 64, tw, 64);
+        stft_frame(src, 100, s0, w, 64, r2, i2, tw, 64);
+        i = 0;
+        while (i <= 32) {
+            if (load64(r1 + i * 8) != load64(r2 + i * 8) || load64(i1 + i * 8) != load64(i2 + i * 8)) { bad = bad + 1; }
+            i = i + 1;
+        }
+        starts = starts + 1;
+    }
+    assert_eq(bad, 0, "stft_frame = rfft(src * w) inside, and zero-padded off either end");
+    var zs = 0;
+    var far = 0;
+    while (far < 3) {
+        var s1 = 100;
+        if (far == 1) { s1 = 0x7FFF_FFFF_FFFF_FFF0; }
+        if (far == 2) { s1 = 0x8000_0000_0000_0000; }
+        stft_frame(src, 100, s1, w, 64, r2, i2, tw, 64);
+        i = 0;
+        while (i <= 32) { if (load64(r2 + i * 8) != 0 || load64(i2 + i * 8) != 0) { zs = zs + 1; } i = i + 1; }
+        far = far + 1;
+    }
+    assert_eq(zs, 0, "a frame wholly outside is all zeros, start = 100, near i64 max, i64 min");
+    return 0;
+}
+
+# The spectra and bin frequencies.
+fn test_spectrum_helpers() {
+    var re = alloc(5 * 8);
+    var im = alloc(5 * 8);
+    var out = alloc(5 * 8);
+    var i = 0;
+    while (i < 5) { store64(re + i * 8, f64_from(3 * (i + 1))); store64(im + i * 8, f64_from(4 * (i + 1))); i = i + 1; }
+    magnitude_spectrum(re, im, out, 5);
+    assert_eq(load64(out + 32), f64_from(25), "|15 + 20i| = 25");
+    power_spectrum(re, im, out, 5);
+    assert_eq(load64(out), f64_from(25), "|3 + 4i|^2 = 25");
+    assert_eq(load64(out + 32), f64_from(625), "|15 + 20i|^2 = 625 (the odd tail)");
+    power_spectrum(re, im, im, 5);
+    assert_eq(load64(im + 16), f64_from(225), "power_spectrum into im: 9^2 + 12^2");
+    i = 0;
+    while (i < 5) { store64(im + i * 8, f64_from(4 * (i + 1))); i = i + 1; }
+    power_spectrum(re, im, re, 5);
+    assert_eq(load64(re + 16), f64_from(225), "power_spectrum into re");
+    store64(re, 0x7E37E43C8800759C);   # 1e300
+    store64(im, 0x7E37E43C8800759C);
+    magnitude_spectrum(re, im, out, 1);
+    near_rel(load64(out), 0x7E40E4D50F99B211, "|1e300 + 1e300 i| without overflow");
+    assert_eq(bin_frequency(1, 1024, f64_from(48000)), 0x4047_7000_0000_0000, "bin 1 of 1024 at 48 kHz = 46.875 Hz");
+    assert_eq(bin_frequency(512, 1024, f64_from(44100)), f64_from(22050), "bin n/2 = Nyquist");
+    assert_eq(bin_frequency(0 - 3, 8, f64_from(8000)), f64_from(0 - 3000), "a negative bin");
+    assert(f64_eq(bin_frequency(1, 0, f64_from(48000)), bin_frequency(1, 0, f64_from(48000))) == 0, "n = 0 is NaN");
     return 0;
 }
 
@@ -1345,12 +1865,20 @@ fn main() {
     test_window_270_structure();
     test_window_270_params();
     test_window_metrics();
+    test_window_metrics_scale();
     test_biquad_gains();
     test_biquad_coeffs();
     test_biquad_response_accuracy();
     test_biquad_process();
     test_biquad_design_errors();
     test_biquad_stability();
+    test_fft_twiddles();
+    test_fft_vs_dft();
+    test_fft_exact_and_round_trip();
+    test_rfft();
+    test_fft_errors();
+    test_stft_frame();
+    test_spectrum_helpers();
     # Propagate failure to the process exit code. assert_summary() RETURNS
     # _assert_fail; discarding it and returning 0 made a red suite exit 0, and
     # CI gates on the exit code — so failures shipped green (fixed 2.4.4).

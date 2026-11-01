@@ -234,6 +234,9 @@ source. No magic numbers.
       Measurement Systems: Theory and Applications.* Springer (the flat-top).
   - **Window metrics** (2.7.0), defined as in Harris 1978, Table I, for any
     window buffer:
+    - Since 2.8.0 a metric whose sums overflowed, or fell below 2⁻⁷⁰⁰, runs
+      again on w·2⁻ᵉ, with max |w| in [1, 2). The scaling is exact, so no
+      square or sum overflows or flushes at any scale.
     - **Coherent gain:** Σw / N.
     - **Equivalent noise bandwidth:** N·Σw² / (Σw)², in bins.
     - **Scalloping loss:** −20 log₁₀(|Σ w(k) e^(−iπk/N)| / Σw), in dB.
@@ -249,9 +252,18 @@ source. No magic numbers.
     the shelves taking Q (S = 1 is Q = 1/√2). The formulas are the
     bilinear-transform images of the analog prototypes, prewarped so f0 maps
     exactly. abaco forms 1 − cos w₀ as 2 sin²(w₀/2) and 1 + cos w₀ as
-    2 cos²(w₀/2), which do not cancel near DC or Nyquist. Over 1,135 designs
-    the coefficients are within 3.6 ulp of the largest coefficient, against
-    45-digit Decimal from the exact inputs.
+    2 cos²(w₀/2), which do not cancel near DC or Nyquist.
+  - **Angles (2.8.0):** the angles come from the nearest of 0, π/2 and π, with
+    the offsets formed from exact frequency differences (`_bq_trig`). Each
+    coefficient is within ~2.4 ulp of itself near DC and near fs/2; 2.7.0 was
+    up to 77,269 ulp off near fs/2. Around fs/4 the peak's b2 = (1 − αA)/a0
+    cancels in the cookbook formula itself, with an absolute error of about ε.
+    Over 1,135 designs the coefficients are within 2.1 ulp of the largest
+    coefficient, against 45-digit Decimal from the exact inputs.
+  - **Stability (2.8.0):** a design is Err unless its stored coefficients
+    pass the stability triangle, |a₂| < 1 and |a₁| < 1 + a₂ (Jury). Exact RBJ
+    designs always do, but at extremes the doubles lose the margin: f0
+    within ~1e-8·fs of 0 or fs/2, gains past ~450 dB, or a huge q.
   - **Response:** each of N(e^jw) and D(e^jw) is expanded about the nearer of
     DC and Nyquist, in e = sin²(w/2) or cos²(w/2). Near poles at z = ±1 the
     leading sums 1 ± a₁ + a₂ and a₁ ± 2a₂ are then exact (Sterbenz), where
@@ -262,7 +274,10 @@ source. No magic numbers.
     evaluation of the stored coefficients, p99 is 5.5 ulp, where the direct form gives 250,098.
     The worst well-conditioned point is 100 ulp, at Q 41 mid-band, which is
     the rounding of w itself and matches the direct form. The phase is within
-    6.2e-14 rad away from the zeros of H.
+    6.2e-14 rad away from the zeros of H. At a resonance the error grows with
+    Q, as D(e^jw) shrinks to ~1/Q there. The 2.8.0 review's worst per Q was
+    3.9 ulp at Q 0.707, 41 at 20, 206 at 50, 689 at 200 and 3,151 at 1,000,
+    about 1e-12 relative.
   - **Processing:** transposed direct form II, with the two-sample state
     owned by the caller.
   - Bristow-Johnson, R. "Cookbook formulae for audio equalizer biquad filter
@@ -272,6 +287,65 @@ source. No magic numbers.
     Applications.* W3K Publishing (transposed direct form II).
   - Sterbenz, P. H. (1974). *Floating-Point Computation.* Prentice-Hall (the
     subtraction of doubles within a factor of 2 of each other is exact).
+  - Jury, E. I. (1964). *Theory and Application of the z-Transform Method.*
+    Wiley (the stability conditions on a second-order denominator).
+- **FFT (2.8.0)** — `fft_twiddles`, `fft`, `ifft`, `rfft`, `irfft` and
+  `stft_frame`, plus `magnitude_spectrum`, `power_spectrum` and
+  `bin_frequency`.
+  - **Algorithm:** radix-2 decimation in time, in place on split re / im
+    arrays, for power-of-two n: a bit-reversal permutation, then log₂ n
+    stages of butterflies. The conventions are numpy.fft's: e^(−2πijk/n)
+    forward, and e^(+2πijk/n) with the 1/n (exact for a power of two)
+    inverse.
+  - **Twiddles:** taken from a table the caller fills once. A size-tn table
+    serves every n dividing tn, read with stride tn/n, and gives the same
+    bits as a size-n table. Each angle is reduced to its octant first, so cos
+    and sin are only taken of (π/4)·(j/o) with j/o exact. The quarter turn is
+    exact and the eighth turn is √½ on both sides. Over a 65,536 table the
+    twiddles are within 1.13 u of exact.
+  - **Stages with half-length h ≥ 8** run their butterflies through the
+    `f64v_*` batch wrappers, in chunks of 64 twiddles gathered once per
+    stage. Every operation is the scalar path's, unfused and in the same
+    order, so the results are bit for bit the same: 270 transforms of up to
+    16,384 points compared identical. A 1024-point fft + ifft costs 160 →
+    101 µs.
+  - **Real transforms** go through the half-length complex transform of
+    z[j] = x[2j] + i·x[2j+1]:
+    - E = (Z[k] + Z̄[h−k])/2 and O = (Z[k] − Z̄[h−k])/2i;
+    - X[k] = E + w^k·O, with k and h − k done together in place;
+    - `irfft` folds the bins back the same way. As in numpy, im[0] and
+      im[n/2] are ignored.
+  - **Error:** Higham bounds the radix-2 FFT at
+    ‖ŷ − y‖ / ‖y‖ ≤ log₂(n)·η / (1 − log₂(n)·η), with η = μ + γ₄(√2 + μ) and
+    μ the twiddle error: about 6.7·u·log₂ n.
+    - **Measured:** against O(n²) DFTs in 80-bit long double, with each angle
+      reduced exactly as (jk mod n)/n, and in 45-digit Decimal for n ≤ 64.
+      Random complex input gives 0.17–0.30·u·log₂ n for n = 8..16,384, and
+      2.40 u at 16,384. `rfft` is within 2.45 u, and `ifft∘fft` and
+      `irfft∘rfft` within 3.5 u. n ≤ 4 is exact.
+    - **Edges:** impulses, constants and alternating signs are exact or
+      nearly so, and mixtures of 1e300 and 1e-300 are within 1.8 u. Subnormal
+      input loses relative precision, as any f64 arithmetic does on the
+      2⁻¹⁰⁷⁴ grid: scale it up first. Values past DBL_MAX / n overflow.
+  - **Tests:** the suite checks n ≤ 256 against its own O(n²) DFT, which has
+    compensated sums and directly computed twiddles and shares no code with
+    the FFT. It also checks ifft∘fft within 2u·log₂ n up to 4096. It catches
+    17 of 17 mutants: permutation, twiddle signs and octants, both stage
+    paths, the real-transform folds, stride and scale.
+  - **`stft_frame`** is one frame of the short-time Fourier transform: src
+    times a caller-filled window (a periodic one, for analysis and
+    resynthesis; Allen & Rabiner 1977, above), zero-padded off either end.
+  - **`magnitude_spectrum`** uses hypot. **`power_spectrum`** is re² + im²
+    through the SIMD `batch_mul` / `batch_fmadd`.
+  - Cooley, J. W. & Tukey, J. W. (1965). "An algorithm for the machine
+    calculation of complex Fourier series." *Mathematics of Computation*
+    19(90), 297–301. doi:10.1090/S0025-5718-1965-0178586-1
+  - Sorensen, H. V., Jones, D. L., Heideman, M. T. & Burrus, C. S. (1987).
+    "Real-valued fast Fourier transform algorithms." *IEEE Trans. Acoustics,
+    Speech, and Signal Processing* 35(6), 849–863 (the real FFT through the
+    half-length complex one).
+  - Higham, N. J. (2002). *Accuracy and Stability of Numerical Algorithms*,
+    2nd ed., SIAM, ch. 24 (the FFT's error bound).
 - **Windowed-sinc interpolation kernel.**
   - Shannon, C. E. (1949). "Communication in the Presence of Noise."
     *Proc. IRE*, 37(1), 10–21 (Whittaker–Shannon interpolation).

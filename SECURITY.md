@@ -60,7 +60,8 @@ no crashes or invariant violations.
 
 | Version | Supported |
 |---------|-----------|
-| 2.7.x   | Yes (current — Cyrius 6.7.x) |
+| 2.8.x   | Yes (current — Cyrius 6.7.x) |
+| 2.7.x   | Security fixes only |
 | 2.6.x   | Security fixes only |
 | 2.5.x   | Security fixes only |
 | 2.4.x   | Security fixes only |

@@ -5,6 +5,132 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.0] — 2026-10-31
+
+**The FFT: complex and real transforms, the STFT frame and the spectra.**
+Before it, the P(-1) pass reviewed the 2.7.0 changes
+([`docs/audit/2026-10-31-dsp-audit.md`](docs/audit/2026-10-31-dsp-audit.md)).
+It found 3 low and 6 info issues:
+- the three low ones are fixed in code: an out-of-bounds read in `stddev`,
+  unstable `biquad_design` results returned as Ok, and window metrics that
+  overflowed;
+- two of the info items are fixed in code (biquad coefficients near fs/4 and
+  fs/2, and the error code for an unknown name past the argument cap);
+- the rest are documented.
+
+Suite 2633 → **2723** asserts; fuzz 4/4 at 20,000 iterations; fmt / lint / vet
+clean; aarch64 (qemu) green.
+
+### Added
+
+- **FFT (`src/dsp.cyr`):** radix-2 decimation in time (Cooley & Tukey 1965),
+  in place on split re / im arrays, for power-of-two sizes, with numpy.fft's
+  conventions.
+  - **`fft_twiddles(tw, tn)`** fills a caller-owned table of `8 * tn` bytes.
+    It serves every power-of-two size up to tn, and gives the same bits as a
+    table of the transform's own size. Each angle is reduced to its octant,
+    so every twiddle is within 1.13 u of exact. The quarter turn is exactly
+    (0, 1), and the eighth turn is √½ on both sides.
+  - **`fft(re, im, n, tw, tn)` / `ifft(...)`:** the inverse divides by n,
+    exactly.
+  - **`rfft(x, re, im, n, tw, tn)` / `irfft(re, im, x, n, tw, tn)`** go
+    through the half-length complex transform: n/2 + 1 bins, with im[0] and
+    im[n/2] ignored on the way back, as in numpy. `irfft` uses re / im as
+    scratch.
+  - **`stft_frame(src, len, start, w, n, re, im, tw, tn)`** is one frame,
+    times a caller-filled (periodic) window and zero-padded off either end.
+  - **`magnitude_spectrum` (hypot), `power_spectrum` (SIMD) and
+    `bin_frequency(k, n, fs)`.**
+  - The transforms return `Ok` / `Err`. They refuse a non-power-of-two n or
+    tn, and an n > tn, leaving the data untouched.
+  - **SIMD:** stages with half-length 8 or more run their butterflies through
+    the `f64v_*` batch wrappers, with twiddles gathered once per chunk. The
+    roundings are the scalar path's, so the results are bit for bit the same:
+    270 transforms of up to 16,384 points compared identical. A 1024-point
+    fft + ifft costs 160 → 101 µs.
+  - **Accuracy:** checked against O(n²) DFTs in 80-bit long double for every
+    n up to 16,384, and in 45-digit Decimal for n ≤ 64.
+    - The norm-wise error is 0.17–0.30·u·log₂ n (2.4 u at 16,384), against
+      Higham's bound of ~6.7·u·log₂ n.
+    - `rfft` is within 2.45 u, and `ifft∘fft` and `irfft∘rfft` within 3.5 u.
+    - n ≤ 4 and impulse and constant inputs are exact.
+    - Subnormal input loses relative precision, as any f64 sum does.
+- **Tests (`test_dsp`, 427 → 510):**
+  - against the suite's own O(n²) DFT, which shares no code with the FFT, for
+    n ≤ 256;
+  - the twiddle table: exact points, symmetries bit for bit, and Decimal rows;
+  - exact transforms; table-size independence; round trips within
+    2u·log₂ n up to 4096;
+  - `rfft` against `fft`; `stft_frame` against `rfft` of the windowed
+    samples, off either end and at i64 extremes;
+  - the spectra; every refused size.
+
+  All 17 targeted mutants are caught.
+- **Bench rows:** `fft_twiddles_1024`, `fft_ifft_1024`, `rfft_1024`,
+  `stft_frame_1024`, `magnitude_spectrum_513`, `power_spectrum_513`.
+
+### Fixed
+
+From the P(-1) review. Each fix has tests that fail on 2.7.0.
+
+- **`stddev` no longer reads below its buffer** (low; a 2.7.0 regression).
+  With a trailing Inf or NaN the exact sum's expansion was left at length −1,
+  and `_mean_rem` read 16 bytes below the stack array. The value read only
+  ever reached a NaN result, and nothing was written out of bounds. A
+  non-finite argument now returns the canonical NaN, `0x7FF8…`, at once; it
+  was `0xFFF8…` on x86.
+- **`biquad_design` refuses designs that are not stable** (low). At
+  extremes the rounded coefficients lose the stability margin, and 2.7.0
+  returned Ok with a pole on or outside the unit circle:
+  - a low-pass at 5e-5 Hz;
+  - a peak at ±700 dB;
+  - q = 1e100;
+  - a shelf at −20,000 dB.
+
+  Such designs are now Err: |a₂| < 1 and |a₁| < 1 + a₂ (Jury) are checked
+  exactly. Every Ok section is stable.
+- **Window metrics at any scale** (low). `window_enbw` of 8 × 1e154 was NaN,
+  of 8 × 1e-160 0.99999228, and the gain of [DBL_MAX, DBL_MAX] +Inf. Each
+  metric now checks its sums. Where one overflowed, or fell below 2^-700
+  where terms may have flushed, it runs again on w·2^-e, an exact scaling
+  with max |w| in [1, 2). Ordinary windows get the same bits as before.
+- **Biquad coefficients near fs/4 and fs/2** (info). w0's rounding swamped
+  the small values there. A high-pass b0 at 23,999.9 Hz was 77,269 ulp off,
+  and a peak b1 at 11,999 Hz 9,465 ulp. The angles now come from the nearest
+  of 0, π/2 and π, with exact frequency differences. Near DC and fs/2 every
+  coefficient is within ~2.4 ulp of itself.
+- **An unknown function past 32 arguments is `ABACO_ERR_UNKNOWN_FN`** (info),
+  as below the cap, not `ABACO_ERR_ARITY`.
+- **Documented:**
+  - `biquad_process`'s tail ends in a subnormal limit cycle, never 0;
+  - `biquad_response`'s error at a resonance grows with Q (~3,000 ulp at
+    Q 1,000);
+  - the flat-top window's interior dips to −0.0706;
+  - f0 past ~2.86e307 is refused;
+  - `Evaluator_eval_partial` backs off an open call past the cap, as other
+    open calls.
+
+### Changed
+
+- **Differential, 97,944 records against 2.7.0:** 154 differ. All are
+  `stddev` / `stdev` with an Inf or NaN argument, NaN `0xFFF8…` → `0x7FF8…`.
+  Nothing else changed.
+- **Benchmarks:** an interleaved A/B against 2.7.0 (5 rounds, one core) has a
+  median of 1.003 over 125 rows.
+  - **Cost of the review fixes:** `biquad_design_peak` +4.5% (the stability
+    check and the angle regions) and `window_enbw_1024` +2.6% (the check on
+    its sums). `stddev8`, `mean8`, `mean_ovf`, `biquad_response` and
+    `biquad_process_256` are level.
+  - **The slow tail** is `bench_units` rows, which swing between processes
+    and have level minimums, and `simd_mac_4096` (+7%). That one is
+    bench-binary layout: no `batch_*` code changed, and the 2.8.0 library
+    built with the 2.7.0 bench file times it as 2.7.0 does.
+  - **New rows:** `fft_ifft_1024` 103 µs, `rfft_1024` 31 µs,
+    `stft_frame_1024` 38 µs, `fft_twiddles_1024` 29 µs,
+    `magnitude_spectrum_513` 16 µs, `power_spectrum_513` 0.65 µs.
+- `dist/abaco.cyr` is 348,846 B / 8,529 lines (was 326,813 / 7,939). The smoke
+  binary is unchanged at 429,560 B.
+
 ## [2.7.0] — 2026-10-31
 
 **DSP: six more windows, window metrics, and RBJ biquads.** Before them, the

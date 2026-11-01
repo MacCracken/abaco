@@ -640,6 +640,15 @@ fn test_stats_robust() {
     # corpora (100,000 cases) are within 1 ulp, and 2.6.0's clustered row is
     # exact.
     assert_eq(ev("stddev(0-837649.1643549813, 0-837649.1643459676)"), 0x3ED2E73000000000, "clustered: exact");
+    # 2.8.0: a non-finite argument is NaN at once, the canonical 0x7FF8...
+    # Through 2.7.0 a trailing one left the expansion at length -1 and
+    # _mean_rem read 16 bytes below ps (seen with an instrumented build); the
+    # NaN that came out was whatever the hardware made of Inf - Inf
+    # (0xFFF8... on x86).
+    var nq = 0x7FF8000000000000;
+    assert_eq(ev("stddev(1, 1e308*10)"), nq, "stddev(1, Inf) is the canonical NaN");
+    assert_eq(ev("stddev(1, 2, sqrt(0-1))"), nq, "stddev with a trailing NaN");
+    assert_eq(ev("stddev(0-1e308*10, 3)"), nq, "stddev(-Inf, 3)");
     return 0;
 }
 
@@ -792,6 +801,22 @@ fn test_arity_cap() {
     _arity_case(32, ",)", ABACO_ERR_PARSE, "32 args and a trailing comma: PARSE (was ARITY)");
     _arity_case(33, ", 2 +)", ABACO_ERR_PARSE, "a malformed 34th argument: PARSE (was ARITY)");
     _arity_case(33, "", ABACO_ERR_PARSE, "33 args and no ')': PARSE (was ARITY)");
+    # 2.8.0: an unknown name is UNKNOWN_FN past the cap too (was ARITY).
+    var ex = alloc(128);
+    memcpy(ex, "nosuch(", 7);
+    var p2 = 7;
+    var a2 = 0;
+    while (a2 < 33) {
+        if (a2 > 0) { store8(ex + p2, 44); p2 = p2 + 1; }
+        store8(ex + p2, 49);
+        p2 = p2 + 1;
+        a2 = a2 + 1;
+    }
+    store8(ex + p2, 41);
+    store8(ex + p2 + 1, 0);
+    var ev2 = Evaluator_new();
+    Evaluator_eval(ev2, ex);
+    assert_eq(eval_err(ev2), ABACO_ERR_UNKNOWN_FN, "nosuch(33 args): UNKNOWN_FN (was ARITY)");
     return 0;
 }
 

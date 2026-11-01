@@ -12,7 +12,7 @@ In your project's `cyrius.cyml`:
 ```toml
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.7.0"                 # pin to a released tag, never a branch
+tag = "2.8.0"                 # pin to a released tag, never a branch
 modules = ["dist/abaco.cyr"]  # the bundle is the only file you name
 ```
 
@@ -92,7 +92,7 @@ fn main() {
 | Expressions | `Evaluator_new`, `Evaluator_set_variable`, `Evaluator_eval`, `Evaluator_eval_partial` | `eval` |
 | Units | `UnitRegistry_new`, `UnitRegistry_convert`, `UnitRegistry_find`, `UnitRegistry_list` | `units` |
 | Number theory | `is_prime`, `next_prime`, `prev_prime`, `factor`, `totient`, `mod_pow`, `mod_inverse`, `crt`, `jacobi`, `isqrt`, `iroot`, `is_perfect_power`, `mobius`, `num_divisors`, `sum_divisors`, `carmichael`, `primitive_root`, `abaco_binomial` | `ntheory` |
-| DSP | windows (`window_hann` … symmetric, for FIR design; `window_hann_periodic` … DFT-even, for FFT / STFT), window metrics (`window_enbw` …), biquads (`biquad_design`, `biquad_response`, `biquad_process`), `amplitude_to_db`, MIDI↔freq, interpolation, chromagram, batch ops — every value argument an **f64 bit pattern** (`time_constant(f64_from(10), f64_from(48000))`, not `48000`), a sample count included (`samples_to_ms(f64_from(441), f64_from(44100))`; `ms_to_samples` returns an f64 too); the plain integers are window indices and sizes (`window_hann(n, size)`), batch lengths `n`, buffer and out pointers, pitch-class numbers and the octave `freq_to_octave` returns | `dsp` |
+| DSP | windows (`window_hann` … symmetric, for FIR design; `window_hann_periodic` … DFT-even, for FFT / STFT), window metrics (`window_enbw` …), biquads (`biquad_design`, `biquad_response`, `biquad_process`), the FFT (`fft_twiddles`, `fft`, `ifft`, `rfft`, `irfft`, `stft_frame`, `magnitude_spectrum`, `power_spectrum`, `bin_frequency`), `amplitude_to_db`, MIDI↔freq, interpolation, chromagram, batch ops — every value argument an **f64 bit pattern** (`time_constant(f64_from(10), f64_from(48000))`, not `48000`), a sample count included (`samples_to_ms(f64_from(441), f64_from(44100))`; `ms_to_samples` returns an f64 too); the plain integers are window indices and sizes (`window_hann(n, size)`), batch lengths `n`, buffer and out pointers, pitch-class numbers and the octave `freq_to_octave` returns | `dsp` |
 | Values | `Value_*`, `Unit`, `ConversionResult` | `core` |
 | NL / history / currency | `nl_parse`, `CalcHistory_*`, `CurrencyCache_*` (`CurrencyCache_set_ca_file` to pin a CA); over `https://` also `abaco_tls_init` — opt-in, `-D ABACO_TLS` plus `tls` in your stdlib | `ai` |
 
@@ -101,6 +101,39 @@ fn main() {
 Bump the `tag` and run `cyrius deps`. abaco follows SemVer (post-1.0): patch and
 minor bumps are source-compatible; a major bump documents breaking changes in
 [`CHANGELOG.md`](../../CHANGELOG.md) with a migration section.
+
+### 2.8.0 — the FFT
+
+- **New in the library (`dsp`):**
+  - **Twiddles:** `fft_twiddles(tw, tn)` fills a table of `8 * tn` bytes once.
+    It serves every power-of-two size up to tn.
+  - **Complex transforms:** `fft(re, im, n, tw, tn)` and
+    `ifft(re, im, n, tw, tn)` work in place on split arrays. The inverse
+    divides by n, as numpy.fft does.
+  - **Real transforms:** `rfft(x, re, im, n, tw, tn)` writes n/2 + 1 bins.
+    `irfft(re, im, x, n, tw, tn)` overwrites re / im, which are its scratch.
+  - **STFT:** `stft_frame(src, len, start, w, n, re, im, tw, tn)` is one
+    windowed frame, zero-padded off either end.
+  - **Spectra:** `magnitude_spectrum(re, im, out, n)`,
+    `power_spectrum(re, im, out, n)` and `bin_frequency(k, n, fs)`.
+
+  The transforms return `Ok` / `Err`. They refuse an n or tn that is not a
+  power of two, and an n > tn, leaving the data untouched. A new name can
+  collide with one you define yourself; rename yours if so.
+- **`biquad_design` can now return `Err` where 2.7.0 returned Ok.** It does
+  so for a design whose rounded coefficients are not stable: f0 within
+  ~1e-8·fs of 0 or fs/2, a gain past ~450 dB, or a huge q. Every Ok section
+  is stable. Coefficients for f0 past fs/8 can change by ulps; near fs/2 they
+  were up to 77,269 ulp off.
+- **The window metrics** give the same bits for an ordinary window, and a
+  finite answer where 2.7.0 overflowed (huge or tiny buffers).
+- **`stddev` / `stdev` with an Inf or NaN argument** is the canonical NaN
+  `0x7FF8…`; it was `0xFFF8…` on x86. Nothing else in the 97,944-record
+  differential changed.
+- **Error codes:** an unknown function past 32 arguments is
+  `ABACO_ERR_UNKNOWN_FN`, as below the cap. `Evaluator_eval_partial` backs
+  off an unclosed call past the cap as it does any open call
+  (`2+mean(<33 ones>` is 2 with no error; 2.6.0 gave ARITY).
 
 ### 2.7.0 — windows, biquads, and three fixes
 

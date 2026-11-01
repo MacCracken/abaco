@@ -388,6 +388,68 @@ fn _bench_biquad_process_256() {
     return 0;
 }
 
+# 2.8.0: the FFT at 1024 points (complex forward / inverse, real forward /
+# inverse, one Hann-windowed STFT frame), the twiddle table, and the two
+# spectra over the 513 bins of a 1024-point real transform.
+var _bench_fft_tw = 0;
+var _bench_fft_re = 0;
+var _bench_fft_im = 0;
+var _bench_fft_x = 0;
+var _bench_fft_w = 0;
+var _bench_fft_out = 0;
+
+fn _bench_fft_setup() {
+    _bench_fft_tw = alloc(1024 * 8);
+    fft_twiddles(_bench_fft_tw, 1024);
+    _bench_fft_re = alloc(1024 * 8);
+    _bench_fft_im = alloc(1024 * 8);
+    _bench_fft_x = alloc(1024 * 8);
+    _bench_fft_w = alloc(1024 * 8);
+    _bench_fft_out = alloc(1024 * 8);
+    var i = 0;
+    while (i < 1024) {
+        var v = f64_div(f64_from((i * 37) % 101 - 50), f64_from(50));
+        store64(_bench_fft_re + i * 8, v);
+        store64(_bench_fft_im + i * 8, f64_neg(v));
+        store64(_bench_fft_x + i * 8, v);
+        store64(_bench_fft_w + i * 8, window_hann_periodic(i, 1024));
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _bench_fft_twiddles_1024() {
+    fft_twiddles(_bench_fft_tw, 1024);
+    return 0;
+}
+
+# fft then ifft, so the data stays bounded over the iterations.
+fn _bench_fft_ifft_1024() {
+    fft(_bench_fft_re, _bench_fft_im, 1024, _bench_fft_tw, 1024);
+    ifft(_bench_fft_re, _bench_fft_im, 1024, _bench_fft_tw, 1024);
+    return 0;
+}
+
+fn _bench_rfft_1024() {
+    rfft(_bench_fft_x, _bench_fft_re, _bench_fft_im, 1024, _bench_fft_tw, 1024);
+    return 0;
+}
+
+fn _bench_stft_frame_1024() {
+    stft_frame(_bench_fft_x, 1024, 0, _bench_fft_w, 1024, _bench_fft_re, _bench_fft_im, _bench_fft_tw, 1024);
+    return 0;
+}
+
+fn _bench_magnitude_spectrum_513() {
+    magnitude_spectrum(_bench_fft_re, _bench_fft_im, _bench_fft_out, 513);
+    return 0;
+}
+
+fn _bench_power_spectrum_513() {
+    power_spectrum(_bench_fft_re, _bench_fft_im, _bench_fft_out, 513);
+    return 0;
+}
+
 fn run_dsp_benches() {
     println("--- dsp ---");
 
@@ -547,6 +609,32 @@ fn run_dsp_benches() {
 
     b = bench_new("biquad_process_256");
     bench_run(b, &_bench_biquad_process_256, BENCH_ITERS);
+    bench_report(b);
+
+    _bench_fft_setup();
+
+    b = bench_new("fft_twiddles_1024");
+    bench_run(b, &_bench_fft_twiddles_1024, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("fft_ifft_1024");
+    bench_run(b, &_bench_fft_ifft_1024, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("rfft_1024");
+    bench_run(b, &_bench_rfft_1024, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("stft_frame_1024");
+    bench_run(b, &_bench_stft_frame_1024, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("magnitude_spectrum_513");
+    bench_run(b, &_bench_magnitude_spectrum_513, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("power_spectrum_513");
+    bench_run(b, &_bench_power_spectrum_513, BENCH_ITERS);
     bench_report(b);
 
     return 0;

@@ -12,6 +12,7 @@
 - [x] Chromagram helpers — `freq_to_pitch_class`, `freq_to_octave`, `pitch_class_name`, `DSP_C0_FREQ` (2026-04-14)
 - [x] Window catalogue — Nuttall, Blackman–Harris, flat-top, Bartlett, Tukey, Gaussian, symmetric and periodic; coherent gain, ENBW, scalloping loss (2026-10-31, 2.7.0)
 - [x] RBJ biquads — `biquad_design` (nine kinds), `biquad_response`, `biquad_process` in TDF-II (2026-10-31, 2.7.0)
+- [x] FFT — radix-2 `fft` / `ifft` with caller-owned twiddles, `rfft` / `irfft`, `stft_frame`, magnitude / power spectra, `bin_frequency` (2026-10-31, 2.8.0)
 
 ## Audio Unit Conversions
 

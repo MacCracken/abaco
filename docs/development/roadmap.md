@@ -10,19 +10,6 @@
 > against an oracle that does not call the code under test, and has a bench row
 > before and after.
 
-## 2.8.0 — DSP: FFT
-
-- [ ] **Radix-2 complex FFT / inverse FFT**, in place, for power-of-two
-      sizes (Cooley & Tukey 1965). Twiddles come from a table the caller
-      allocates, never a global.
-- [ ] **Real-input FFT** through the half-length complex transform.
-- [ ] **Spectrum helpers**: `magnitude_spectrum`, `power_spectrum`,
-      `bin_frequency(k, n, fs)`, and one windowed STFT frame using the
-      periodic windows.
-- [ ] **Accuracy**: against an O(n²) DFT oracle, with an error bound of
-      O(ε log n) per size. Round trips (IFFT ∘ FFT) are pinned. SIMD paths go
-      through the existing `f64v_*` builtins.
-
 ## 2.9.0 — evaluator: functions
 
 - [ ] **Γ, ln Γ, erf, erfc.** None is in ganita. Port fdlibm 5.3's
@@ -119,6 +106,11 @@
 - **lib/net.cyr: a name lookup that takes a deadline.** `net_resolve_ipv4`
   gives up only after 2 tries of up to 8 replies, 2 s each (~32 s). From 2.6.0
   abaco's HTTPS deadline counts the lookup, but cannot cut it short.
+- **ganita: `ldexp` / `frexp` (or `scalbn` / `ilogb`).** abaco carries two
+  private copies of exact power-of-two scaling and exponent extraction:
+  `_pow_scale` / `_frexp1` in `eval` (mean, stddev, literals) and
+  `_win_ldexp` / `_win_max_exp` in `dsp` (window metrics, 2.8.0). When ganita
+  ships them, abaco switches and drops both.
 
 **bayan.** Filed in bayan's `docs/development/issues/`. When a Cyrius release
 ships one, abaco re-measures:

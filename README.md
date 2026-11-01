@@ -18,7 +18,7 @@ math engine you can wrap any way you like, this is it.
 |--------|--------------|
 | [`core`](src/core.cyr)     | `Value` (Integer / Float / Fraction / Complex / Text), `Unit`, `UnitCategory` (19 categories), `Currency`, `ConversionResult` |
 | [`ntheory`](src/ntheory.cyr) | `is_prime` (deterministic Miller–Rabin), `next_prime` / `prev_prime`, `factor` / `totient` (Pollard–Brent rho past trial division), `mod_pow`, `mod_inverse`, `crt`, `jacobi`, `isqrt` / `iroot` / `is_perfect_power`, `mobius`, `num_divisors`, `sum_divisors`, `carmichael`, `primitive_root`, `abaco_binomial` (exact whenever the result fits in i64) |
-| [`dsp`](src/dsp.cyr)       | dB ↔ amplitude, MIDI ↔ frequency, envelope time constants, PolyBLEP, panning, crossfade, Hann / Hamming / Blackman / Kaiser / Nuttall / Blackman–Harris / flat-top / Bartlett / Tukey / Gaussian windows (symmetric, and periodic / DFT-even for STFT) with coherent gain, ENBW and scalloping loss, RBJ biquads (design, response, TDF-II processing), cubic / sinc interpolation, chromagram helpers, SIMD batch ops, samples ↔ ms, BPM ↔ Hz |
+| [`dsp`](src/dsp.cyr)       | dB ↔ amplitude, MIDI ↔ frequency, envelope time constants, PolyBLEP, panning, crossfade, Hann / Hamming / Blackman / Kaiser / Nuttall / Blackman–Harris / flat-top / Bartlett / Tukey / Gaussian windows (symmetric, and periodic / DFT-even for STFT) with coherent gain, ENBW and scalloping loss, RBJ biquads (design, response, TDF-II processing), radix-2 FFT (complex and real, inverse, STFT frame, magnitude / power spectra), cubic / sinc interpolation, chromagram helpers, SIMD batch ops, samples ↔ ms, BPM ↔ Hz |
 | [`eval`](src/eval.cyr)     | Tokenizer + recursive-descent parser, 56 functions, variables, implicit multiplication, `%` operator, scientific notation, `eval_partial` for live-as-you-type feedback |
 | [`units`](src/units.cyr)   | Built-in units in 19 categories with factors exact to the definition (NIST SP 811), O(1) hashmap lookup, reciprocal units (L/100km), pitch (semitones / cents / octaves), BPM via frequency |
 | [`ai`](src/ai.cyr)         | Natural-language parsing (`"convert 5 km to miles"`, `"what is 15% of 230"`), bounded calculation history with JSON save/load, currency cache + a live rates fetch: plaintext from a loopback server, or HTTPS when built with `-D ABACO_TLS` (opt-in, see below) |
@@ -60,7 +60,7 @@ stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged",
 
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.7.0"
+tag = "2.8.0"
 modules = ["dist/abaco.cyr"]   # self-contained library bundle
 ```
 
