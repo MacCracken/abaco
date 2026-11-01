@@ -12,7 +12,7 @@ In your project's `cyrius.cyml`:
 ```toml
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.5.2"                 # pin to a released tag, never a branch
+tag = "2.6.0"                 # pin to a released tag, never a branch
 modules = ["dist/abaco.cyr"]  # the bundle is the only file you name
 ```
 
@@ -91,7 +91,7 @@ fn main() {
 |--------|-------------|--------|
 | Expressions | `Evaluator_new`, `Evaluator_set_variable`, `Evaluator_eval`, `Evaluator_eval_partial` | `eval` |
 | Units | `UnitRegistry_new`, `UnitRegistry_convert`, `UnitRegistry_find`, `UnitRegistry_list` | `units` |
-| Number theory | `is_prime`, `next_prime`, `prev_prime`, `factor`, `totient` | `ntheory` |
+| Number theory | `is_prime`, `next_prime`, `prev_prime`, `factor`, `totient`, `mod_pow`, `mod_inverse`, `crt`, `jacobi`, `isqrt`, `iroot`, `is_perfect_power`, `mobius`, `num_divisors`, `sum_divisors`, `carmichael`, `primitive_root`, `abaco_binomial` | `ntheory` |
 | DSP | windows (`window_hann` … symmetric, for FIR design; `window_hann_periodic` … DFT-even, for FFT / STFT), `amplitude_to_db`, MIDI↔freq, interpolation, chromagram, batch ops — every value argument an **f64 bit pattern** (`time_constant(f64_from(10), f64_from(48000))`, not `48000`), a sample count included (`samples_to_ms(f64_from(441), f64_from(44100))`; `ms_to_samples` returns an f64 too); the plain integers are window indices and sizes (`window_hann(n, size)`), batch lengths `n`, buffer and out pointers, pitch-class numbers and the octave `freq_to_octave` returns | `dsp` |
 | Values | `Value_*`, `Unit`, `ConversionResult` | `core` |
 | NL / history / currency | `nl_parse`, `CalcHistory_*`, `CurrencyCache_*` (`CurrencyCache_set_ca_file` to pin a CA); over `https://` also `abaco_tls_init` — opt-in, `-D ABACO_TLS` plus `tls` in your stdlib | `ai` |
@@ -101,6 +101,30 @@ fn main() {
 Bump the `tag` and run `cyrius deps`. abaco follows SemVer (post-1.0): patch and
 minor bumps are source-compatible; a major bump documents breaking changes in
 [`CHANGELOG.md`](../../CHANGELOG.md) with a migration section.
+
+### 2.6.0 — number theory, and the P(-1) review's fixes
+
+- **New in the library:** `mod_inverse`, `crt`, `jacobi`, `isqrt`, `iroot`,
+  `is_perfect_power`, `mobius`, `num_divisors`, `sum_divisors`, `carmichael`
+  and `primitive_root`. The fallible ones (`mod_inverse`, `crt`, `jacobi`,
+  `isqrt`, `iroot`, `sum_divisors`, `primitive_root`) return `Ok` / `Err`. A new
+  name can collide with one you define yourself; rename yours if so.
+- **New in the evaluator:** `modinv`, `modpow` (three arguments; a negative
+  exponent inverts first), `jacobi`, `mobius`, `numdiv`, `sigma`, `carmichael`
+  and `isqrt`. They take integers only; out of domain is `ABACO_ERR_MATH`.
+- **`mean` results can change**, in the last bit or by much more: it is now
+  correctly rounded in every case. Through 2.5.2, `mean(1e308, -1e308, 1e-300)`
+  was 0, a mean of 2e121 beside ±1.8e308 terms was 0, and subnormal means were
+  1 ulp off. `mean(-0, -0)` is −0.
+- **`stddev` results can change** in the last bits: the corrected two-pass sum
+  is within 9 ulp on clustered data, where it was up to 443,769 ulp off.
+- **A call with more than 32 arguments is `ABACO_ERR_ARITY`**, not
+  `ABACO_ERR_PARSE`.
+- **HTTPS:** the 30 s deadline counts the name lookup. A lookup that uses it
+  up is `AI_ERR_HTTP` once it returns; the lookup itself still cannot be cut
+  (~32 s at worst).
+- **Also:** `sinc_kernel` is 0 at the edge of a subnormal half-width and
+  never NaN, and −1e-9 K is refused as below absolute zero.
 
 ### 2.5.2 — fast factorisation
 

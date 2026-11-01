@@ -306,6 +306,199 @@ fn test_is_prime_pseudoprimes() {
     return 0;
 }
 
+# ---- 2.6.0: modular arithmetic, integer roots, multiplicative functions ----
+
+# The first 30 values of each function, from OEIS (A008683 mu, A000005 tau,
+# A000203 sigma, A002322 lambda, A046145 least primitive root with 0 for none),
+# recomputed by brute force in Python.
+fn test_multiplicative_tables() {
+    var mu = "1,-1,-1,0,-1,1,-1,0,0,1,-1,0,-1,1,1,0,-1,0,-1,0,1,1,-1,0,0,1,0,0,-1,-1,";
+    var tau = "1,2,2,3,2,4,2,4,3,4,2,6,2,4,4,5,2,6,2,6,4,4,2,8,3,4,4,6,2,8,";
+    var sig = "1,3,4,7,6,12,8,15,13,18,12,28,14,24,24,31,18,39,20,42,32,36,24,60,31,42,40,56,30,72,";
+    var lam = "1,1,2,2,4,2,6,2,6,4,10,2,12,6,4,4,16,6,18,4,6,10,22,2,20,12,18,6,28,4,";
+    var prt = "0,1,2,3,2,5,3,0,2,3,2,0,2,3,0,0,3,5,2,0,0,7,5,0,2,7,2,0,2,0,";
+    var bad = 0;
+    var n = 1;
+    while (n <= 30) {
+        if (mobius(n) != _csv_at(mu, n - 1)) { bad = bad + 1; }
+        if (num_divisors(n) != _csv_at(tau, n - 1)) { bad = bad + 1; }
+        var st, sv = sum_divisors(n);
+        if (is_ok(st) == 0 || sv != _csv_at(sig, n - 1)) { bad = bad + 1; }
+        if (carmichael(n) != _csv_at(lam, n - 1)) { bad = bad + 1; }
+        var pt, pv = primitive_root(n);
+        var want = _csv_at(prt, n - 1);
+        if (want == 0 && is_ok(pt) == 1) { bad = bad + 1; }
+        if (want != 0 && (is_ok(pt) == 0 || pv != want)) { bad = bad + 1; }
+        n = n + 1;
+    }
+    assert_eq(bad, 0, "mu, tau, sigma, lambda, primitive root match OEIS for n = 1..30");
+    # Large and edge values.
+    assert_eq(mobius(9223372036854775783), 0 - 1, "mu(2^63 - 25) = -1, a prime");
+    assert_eq(mobius(9223371994482243049), 0, "mu(3037000493^2) = 0");
+    assert_eq(num_divisors(4611685975477714963), 4, "tau(2147483647 * 2147483629) = 4");
+    assert_eq(num_divisors(4611686018427387904), 63, "tau(2^62) = 63");
+    var st, sv = sum_divisors(4611686018427387904);
+    assert_eq(sv, 9223372036854775807, "sigma(2^62) = 2^63 - 1, exactly at the top of i64");
+    st, sv = sum_divisors(6917529027641081856);
+    assert_eq(is_ok(st), 0, "sigma(3 * 2^61) does not fit: Err");
+    st, sv = sum_divisors(7450580596923828125);
+    assert_eq(is_ok(st), 0, "sigma(5^27) = (5^28 - 1) / 4 passes i64 inside one prime power: Err");
+    st, sv = sum_divisors(0);
+    assert_eq(is_ok(st), 0, "sigma(0) is Err");
+    assert_eq(carmichael(561), 80, "lambda(561) = 80 (a Carmichael number: lambda | 560)");
+    assert_eq(carmichael(4611686018427387904), 1152921504606846976, "lambda(2^62) = 2^60");
+    assert_eq(mobius(0), 0, "mu(0) = 0 (undefined)");
+    assert_eq(num_divisors(0 - 6), 0, "tau(-6) = 0 (undefined)");
+    assert_eq(carmichael(0), 0, "lambda(0) = 0 (undefined)");
+    var pt, pv = primitive_root(1000000007);
+    assert_eq(pv, 5, "least primitive root of 10^9 + 7 is 5");
+    pt, pv = primitive_root(9223372036854775783);
+    assert_eq(pv, 3, "least primitive root of 2^63 - 25 is 3");
+    pt, pv = primitive_root(2 * 3 * 3 * 3);
+    assert_eq(pv, 5, "least primitive root of 54 = 2 * 3^3 is 5");
+    pt, pv = primitive_root(12);
+    assert_eq(is_ok(pt), 0, "12 has no primitive root");
+    pt, pv = primitive_root(1);
+    assert_eq(is_ok(pt), 0, "primitive_root(1) is Err");
+    return 0;
+}
+
+# The CSV field at index i of s ("a,b,c,"), as an integer; "-" allowed.
+fn _csv_at(s, i) {
+    var p = 0;
+    var k = 0;
+    while (k < i) {
+        while (load8(s + p) != 44) { p = p + 1; }
+        p = p + 1;
+        k = k + 1;
+    }
+    var neg = 0;
+    if (load8(s + p) == 45) { neg = 1; p = p + 1; }
+    var v = 0;
+    while (load8(s + p) >= 48 && load8(s + p) <= 57) { v = v * 10 + load8(s + p) - 48; p = p + 1; }
+    if (neg == 1) { return 0 - v; }
+    return v;
+}
+
+fn test_mod_inverse() {
+    var t, v = mod_inverse(3, 11);
+    assert_eq(v, 4, "modinv(3, 11) = 4");
+    t, v = mod_inverse(10, 17);
+    assert_eq(v, 12, "modinv(10, 17) = 12");
+    t, v = mod_inverse(0 - 3, 11);
+    assert_eq(v, 7, "modinv(-3, 11) = 7: -3 * 7 = -21 = 1 mod 11");
+    t, v = mod_inverse(5, 1);
+    assert_eq(is_ok(t), 1, "modinv(a, 1) is Ok");
+    assert_eq(v, 0, "and 0, the only residue mod 1");
+    t, v = mod_inverse(2, 9223372036854775783);
+    assert_eq(v, 4611686018427387892, "modinv(2, 2^63 - 25) = (p + 1) / 2");
+    t, v = mod_inverse(2, 4);
+    assert_eq(is_ok(t), 0, "modinv(2, 4) is Err: gcd 2");
+    t, v = mod_inverse(0, 7);
+    assert_eq(is_ok(t), 0, "modinv(0, 7) is Err");
+    t, v = mod_inverse(3, 0);
+    assert_eq(is_ok(t), 0, "modinv(3, 0) is Err");
+    var i64min = 0 - 9223372036854775807 - 1;
+    var p63 = 9223372036854775783;
+    t, v = mod_inverse(i64min, p63);
+    var back = bayan_u64_mulmod(_mod_floor(i64min, p63), v, p63);
+    assert_eq(back, 1, "modinv(-2^63, 2^63 - 25) inverts -2^63");
+    return 0;
+}
+
+fn test_crt() {
+    var rs[32];
+    var ms[32];
+    store64(&rs, 2); store64(&rs + 8, 3); store64(&rs + 16, 2);
+    store64(&ms, 3); store64(&ms + 8, 5); store64(&ms + 16, 7);
+    var t, v = crt(&rs, &ms, 3);
+    assert_eq(v, 23, "x = 2 (3), 3 (5), 2 (7) is 23 (Sunzi)");
+    store64(&rs, 1); store64(&rs + 8, 3); store64(&ms, 4); store64(&ms + 8, 6);
+    t, v = crt(&rs, &ms, 2);
+    assert_eq(v, 9, "x = 1 (4), 3 (6) is 9 mod 12: moduli need not be coprime");
+    store64(&rs + 8, 2);
+    t, v = crt(&rs, &ms, 2);
+    assert_eq(is_ok(t), 0, "x = 1 (4), 2 (6) has no solution: Err");
+    store64(&rs, 0); store64(&rs + 8, 1); store64(&ms, 4611686018427387904); store64(&ms + 8, 3);
+    t, v = crt(&rs, &ms, 2);
+    assert_eq(is_ok(t), 0, "lcm(2^62, 3) does not fit in i64: Err");
+    store64(&rs, 0 - 1); store64(&ms, 1000000007);
+    t, v = crt(&rs, &ms, 1);
+    assert_eq(v, 1000000006, "one congruence: the residue, reduced (-1 mod p = p - 1)");
+    store64(&rs, 5); store64(&rs + 8, 7); store64(&ms, 2147483647); store64(&ms + 8, 2147483629);
+    t, v = crt(&rs, &ms, 2);
+    assert_eq(v % 2147483647, 5, "two 31-bit prime moduli: x = 5 mod the first");
+    assert_eq(v % 2147483629, 7, "and 7 mod the second");
+    t, v = crt(&rs, &ms, 0);
+    assert_eq(is_ok(t), 0, "no congruences: Err");
+    store64(&ms, 0);
+    t, v = crt(&rs, &ms, 2);
+    assert_eq(is_ok(t), 0, "a modulus of 0: Err");
+    return 0;
+}
+
+fn test_jacobi() {
+    # (a / 15) and (a / 21) for a = 0..14 / 0..20.
+    var j15 = "0,1,1,0,1,0,0,-1,1,0,0,-1,0,-1,-1,";
+    var j21 = "0,1,-1,0,1,1,0,0,-1,0,-1,-1,0,-1,0,0,1,1,0,-1,1,";
+    var bad = 0;
+    var a = 0;
+    while (a < 15) {
+        var t, v = jacobi(a, 15);
+        if (v != _csv_at(j15, a)) { bad = bad + 1; }
+        a = a + 1;
+    }
+    a = 0;
+    while (a < 21) {
+        var t2, v2 = jacobi(a, 21);
+        if (v2 != _csv_at(j21, a)) { bad = bad + 1; }
+        a = a + 1;
+    }
+    assert_eq(bad, 0, "Jacobi symbols mod 15 and mod 21");
+    var t, v = jacobi(0 - 1, 9223372036854775783);
+    # p = 2^63 - 25 = 3 mod 4, so -1 is a non-residue.
+    assert_eq(v, 0 - 1, "(-1 / p) = -1 for p = 3 mod 4");
+    t, v = jacobi(2, 9223372036854775783);
+    # p = 7 mod 8, so 2 is a residue.
+    assert_eq(v, 1, "(2 / p) = 1 for p = 7 mod 8");
+    t, v = jacobi(5, 1);
+    assert_eq(v, 1, "(a / 1) = 1");
+    t, v = jacobi(1, 4);
+    assert_eq(is_ok(t), 0, "an even modulus is Err");
+    t, v = jacobi(1, 0 - 3);
+    assert_eq(is_ok(t), 0, "a negative modulus is Err");
+    return 0;
+}
+
+fn test_integer_roots() {
+    var t, v = isqrt(9223372036854775807);
+    assert_eq(v, 3037000499, "isqrt(2^63 - 1)");
+    t, v = isqrt(0 - 1);
+    assert_eq(is_ok(t), 0, "isqrt(-1) is Err");
+    t, v = iroot(9223372036854775807, 3);
+    assert_eq(v, 2097151, "iroot(2^63 - 1, 3): 2097152^3 = 2^63");
+    t, v = iroot(9223372036854775807, 62);
+    assert_eq(v, 2, "iroot(2^63 - 1, 62) = 2");
+    t, v = iroot(9223372036854775807, 63);
+    assert_eq(v, 1, "iroot(2^63 - 1, 63) = 1");
+    t, v = iroot(1000000000000000000, 6);
+    assert_eq(v, 1000, "iroot(10^18, 6) = 1000, exactly");
+    t, v = iroot(999999999999999999, 6);
+    assert_eq(v, 999, "iroot(10^18 - 1, 6) = 999");
+    t, v = iroot(0, 5);
+    assert_eq(v, 0, "iroot(0, 5) = 0");
+    t, v = iroot(7, 0);
+    assert_eq(is_ok(t), 0, "iroot(n, 0) is Err");
+    assert_eq(is_perfect_power(9223371994482243049), 1, "3037000493^2 is a perfect power");
+    assert_eq(is_perfect_power(4052555153018976267), 1, "3^39 is a perfect power");
+    assert_eq(is_perfect_power(4052555153018976266), 0, "3^39 - 1 is not");
+    assert_eq(is_perfect_power(4611686018427387904), 1, "2^62 is");
+    assert_eq(is_perfect_power(8), 1, "8 = 2^3");
+    assert_eq(is_perfect_power(6), 0, "6 is not");
+    assert_eq(is_perfect_power(1), 0, "1 is not (m >= 2)");
+    return 0;
+}
+
 # 1 when factor(n) is exactly the expected list exp[0..k).
 fn _factor_is(n, exp, k) {
     var fs = factor(n);
@@ -428,6 +621,11 @@ fn main() {
     test_is_prime_pseudoprimes();
     test_top_of_i64();
     test_factor_rho();
+    test_multiplicative_tables();
+    test_mod_inverse();
+    test_crt();
+    test_jacobi();
+    test_integer_roots();
     test_isqrt();
     test_mod_pow_boundaries();
     # Propagate failure to the process exit code. assert_summary() RETURNS

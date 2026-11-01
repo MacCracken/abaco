@@ -225,7 +225,7 @@ fn _fz_pathological(which, e) {
 }
 
 # Function table for the call shape: name and arity (-1 = variadic).
-var _FZ_FN_N = 19;
+var _FZ_FN_N = 27;
 fn _fz_fn(i, out_arity) {
     store64(out_arity, 1);
     if (i == 0)  { store64(out_arity, 2); return "gcd"; }
@@ -246,8 +246,18 @@ fn _fz_fn(i, out_arity) {
     if (i == 15) { store64(out_arity, 2); return "atan2"; }
     if (i == 16) { return "sqrt"; }
     if (i == 17) { return "abs"; }
-    store64(out_arity, 2);
-    return "pow";
+    if (i == 18) { store64(out_arity, 2); return "pow"; }
+    # 2.6.0: integer functions, checked against the library when the
+    # arguments are small integers (fuzz_ntheory checks the library itself).
+    if (i == 19) { return "mobius"; }
+    if (i == 20) { return "numdiv"; }
+    if (i == 21) { return "sigma"; }
+    if (i == 22) { return "carmichael"; }
+    if (i == 23) { return "isqrt"; }
+    if (i == 24) { store64(out_arity, 2); return "modinv"; }
+    if (i == 25) { store64(out_arity, 2); return "jacobi"; }
+    store64(out_arity, 3);
+    return "modpow";
 }
 
 # Argument kinds: 0 small integer 0..60, 1 negative integer, 2 fraction,
@@ -300,6 +310,38 @@ fn _fz_choose(n, k) {
     return load64(_FZ_PASCAL + (n * 61 + k) * 8);
 }
 
+# 2.6.0: a number-theory builtin on small integer arguments must give the
+# library's answer, or ABACO_ERR_MATH exactly where the library refuses.
+fn _fz_check_ntheory_name(buf, fi, r, err, v0, v1, v2) {
+    var ok = 1;
+    var want = 0;
+    if (fi == 19) { if (v0 >= 1) { want = mobius(v0); } else { ok = 0; } }
+    if (fi == 20) { if (v0 >= 1) { want = num_divisors(v0); } else { ok = 0; } }
+    if (fi == 21) {
+        var st, sv = sum_divisors(v0);
+        if (is_ok(st) == 1) { want = sv; } else { ok = 0; }
+    }
+    if (fi == 22) { if (v0 >= 1) { want = carmichael(v0); } else { ok = 0; } }
+    if (fi == 23) { want = _isqrt(v0); }
+    if (fi == 24) {
+        var it, iv = mod_inverse(v0, v1);
+        if (is_ok(it) == 1) { want = iv; } else { ok = 0; }
+    }
+    if (fi == 25) {
+        var jt, jv = jacobi(v0, v1);
+        if (is_ok(jt) == 1) { want = jv; } else { ok = 0; }
+    }
+    if (fi == 26) {
+        if (v2 >= 1) { want = mod_pow(v0 % v2, v1, v2); } else { ok = 0; }
+    }
+    if (ok == 0) {
+        if (err != ABACO_ERR_MATH) { _fz_puts(buf); _fz_fail(" refused by the library but not ABACO_ERR_MATH"); }
+        return 0;
+    }
+    if (err != ABACO_ERR_NONE || r != f64_from(want)) { _fz_puts(buf); _fz_fail(" disagrees with the library"); }
+    return 0;
+}
+
 # One call to a named function with adversarial arguments.
 fn _fz_call_shape(e) {
     var arb = alloc(8);
@@ -318,6 +360,7 @@ fn _fz_call_shape(e) {
     var allsmall = 1;
     var v0 = 0;
     var v1 = 0;
+    var v2 = 0;
     var i = 0;
     while (i < nargs) {
         if (i > 0) { store8(buf + pos, 44); pos = pos + 1; }
@@ -331,6 +374,7 @@ fn _fz_call_shape(e) {
         if (kind != 0) { allsmall = 0; }
         if (i == 0) { v0 = small; }
         if (i == 1) { v1 = small; }
+        if (i == 2) { v2 = small; }
         i = i + 1;
     }
     store8(buf + pos, 41); pos = pos + 1;
@@ -338,7 +382,10 @@ fn _fz_call_shape(e) {
     var r = Evaluator_eval(e, buf);
     var err = eval_err(e);
     if (nargs > 32) {
-        if (err == ABACO_ERR_NONE) { _fz_puts(buf); _fz_fail(" call with more than 32 arguments accepted"); }
+        if (err != ABACO_ERR_ARITY) {
+            _fz_puts(buf);
+            _fz_fail(" call with more than 32 arguments is not ABACO_ERR_ARITY");
+        }
         return 0;
     }
     if (arity >= 0 && nargs != arity) {
@@ -346,7 +393,7 @@ fn _fz_call_shape(e) {
         return 0;
     }
     var intfn = 0;
-    if (fi <= 9) { intfn = 1; }
+    if (fi <= 9 || fi >= 19) { intfn = 1; }
     if (intfn == 1 && bad == 1) {
         if (fi == 6) {
             if (err != ABACO_ERR_NONE || r != 0) { _fz_puts(buf); _fz_fail(" isprime of a non-integer is not 0"); }
@@ -372,6 +419,7 @@ fn _fz_call_shape(e) {
         }
         return 0;
     }
+    if (allsmall == 1 && fi >= 19) { _fz_check_ntheory_name(buf, fi, r, err, v0, v1, v2); }
     if (nan == 1 && (fi == 10 || fi == 11 || fi == 12)) {
         if (err != ABACO_ERR_NONE || f64_eq(r, r) == 1) {
             _fz_puts(buf);

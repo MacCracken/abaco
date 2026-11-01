@@ -16,6 +16,13 @@
 #     through Pollard-Brent rho): factor(n) is exactly those primes, sorted,
 #     and totient(n) equals the product formula over them. The answer is known
 #     by construction, so the oracle never calls factor().
+#   - 2.6.0: tau, sigma and mu against brute force for n < 2000; lambda and
+#     the least primitive root against element orders for n < 200; tau, mu,
+#     sigma and lambda multiplicative on coprime a, b < 2^31; mod_inverse Err
+#     exactly when gcd != 1, else a * x = 1 checked by bayan_u64_mulmod; crt
+#     recovering a known x, and against brute force on two small moduli;
+#     jacobi equal to Euler's criterion at a random prime, and multiplicative in
+#     the modulus; r^k <= n < (r+1)^k for iroot; is_perfect_power(m^k) = 1.
 
 include "lib/args.cyr"
 
@@ -125,6 +132,230 @@ fn _fz_check_constructed() {
         _fz_puts("FAIL: totient("); print_num(n); _fz_puts(") = "); print_num(totient(n));
         _fz_puts(" but its primes give "); print_num(phi); println(""); sys_exit(1);
     }
+    return 0;
+}
+
+# ---- 2.6.0: modular arithmetic, integer roots, multiplicative functions ----
+
+# Brute-force oracles, independent of src/ntheory.cyr's factorisation.
+fn _bf_tau(n) {
+    var t = 0;
+    var d = 1;
+    while (d <= n) { if (n % d == 0) { t = t + 1; } d = d + 1; }
+    return t;
+}
+fn _bf_sigma(n) {
+    var s = 0;
+    var d = 1;
+    while (d <= n) { if (n % d == 0) { s = s + d; } d = d + 1; }
+    return s;
+}
+fn _bf_mu(n) {
+    var m = n;
+    var k = 0;
+    var d = 2;
+    while (d <= m) {
+        if (m % d == 0) {
+            m = m / d;
+            if (m % d == 0) { return 0; }
+            k = k + 1;
+        }
+        d = d + 1;
+    }
+    if (k % 2 == 1) { return 0 - 1; }
+    return 1;
+}
+# Multiplicative order of a mod n (gcd(a, n) = 1, n >= 2), by stepping.
+fn _bf_order(a, n) {
+    var x = a % n;
+    var k = 1;
+    while (x != 1) { x = x * a % n; k = k + 1; }
+    return k;
+}
+fn _bf_phi(n) {
+    var c = 0;
+    var a = 1;
+    while (a <= n) { if (gcd(a, n) == 1) { c = c + 1; } a = a + 1; }
+    return c;
+}
+# lambda(n) as the lcm of every unit's order (n >= 2).
+fn _bf_lambda(n) {
+    var l = 1;
+    var a = 1;
+    while (a < n) {
+        if (gcd(a, n) == 1) {
+            var o = _bf_order(a, n);
+            l = l / gcd(l, o) * o;
+        }
+        a = a + 1;
+    }
+    return l;
+}
+# Least g whose order is phi(n), or 0 when none (n >= 2).
+fn _bf_proot(n) {
+    var ph = _bf_phi(n);
+    var g = 1;
+    while (g < n) {
+        if (gcd(g, n) == 1 && _bf_order(g, n) == ph) { return g; }
+        g = g + 1;
+    }
+    return 0;
+}
+# 1 when b^k <= n (b >= 1), overflow-free.
+fn _fz_pow_le(b, k, n) {
+    var p = 1;
+    var i = 0;
+    while (i < k) {
+        if (p > n / b) { return 0; }
+        p = p * b;
+        i = i + 1;
+    }
+    return 1;
+}
+
+# Report a failed 2.6.0 check at a (and b) and exit 1.
+fn _fz_bad(what, a) {
+    _fz_puts("FAIL: ");
+    _fz_puts(what);
+    _fz_puts(" at ");
+    print_num(a);
+    println("");
+    sys_exit(1);
+    return 0;
+}
+fn _fz_bad2(what, a, b) {
+    _fz_puts("FAIL: ");
+    _fz_puts(what);
+    _fz_puts(" at ");
+    print_num(a);
+    _fz_puts(", ");
+    print_num(b);
+    println("");
+    sys_exit(1);
+    return 0;
+}
+
+fn _fz_check_260() {
+    # tau, sigma, mu against brute force for n < 2000.
+    var n = 1 + _fz_u(1999);
+    if (num_divisors(n) != _bf_tau(n)) { _fz_bad("num_divisors", n); }
+    var st, sv = sum_divisors(n);
+    if (is_ok(st) == 0 || sv != _bf_sigma(n)) { _fz_bad("sum_divisors", n); }
+    if (mobius(n) != _bf_mu(n)) { _fz_bad("mobius", n); }
+    # lambda and the least primitive root against orders for 2 <= n < 200.
+    var s = 2 + _fz_u(198);
+    if (carmichael(s) != _bf_lambda(s)) { _fz_bad("carmichael", s); }
+    var pt, pv = primitive_root(s);
+    var want = _bf_proot(s);
+    if ((want == 0 && is_ok(pt) == 1) || (want != 0 && (is_ok(pt) == 0 || pv != want))) {
+        _fz_bad("primitive_root", s);
+    }
+    # Multiplicativity on coprime a, b < 2^31: tau, sigma, mu, lambda.
+    var a = 1 + _fz_u(2147483647);
+    var b = 1 + _fz_u(2147483647);
+    if (gcd(a, b) == 1) {
+        var ab = a * b;
+        if (num_divisors(ab) != num_divisors(a) * num_divisors(b)) {
+            _fz_bad2("tau not multiplicative", a, b);
+        }
+        if (mobius(ab) != mobius(a) * mobius(b)) {
+            _fz_bad2("mu not multiplicative", a, b);
+        }
+        var sat, sa = sum_divisors(a);
+        var sbt, sb = sum_divisors(b);
+        var sabt, sab = sum_divisors(ab);
+        if (is_ok(sat) == 1 && is_ok(sbt) == 1 && sa <= 9223372036854775807 / sb) {
+            if (is_ok(sabt) == 0 || sab != sa * sb) {
+                _fz_bad2("sigma not multiplicative", a, b);
+            }
+        }
+        var la = carmichael(a);
+        var lb = carmichael(b);
+        if (carmichael(ab) != la / gcd(la, lb) * lb) {
+            _fz_bad2("lambda(ab) != lcm(lambda(a), lambda(b))", a, b);
+        }
+    }
+    # mod_inverse: Err exactly when gcd != 1, else a * x = 1 (mod m), checked
+    # with bayan_u64_mulmod (128-bit), not with mod_inverse's own arithmetic.
+    var m = 1 + _fz_u(9223372036854775806);
+    var x0 = _fz_rand();
+    var it, iv = mod_inverse(x0, m);
+    var ar = x0 % m;
+    if (ar < 0) { ar = ar + m; }
+    if (gcd(ar, m) == 1) {
+        if (is_ok(it) == 0 || iv < 0 || iv >= m || bayan_u64_mulmod(ar, iv, m) != 1 % m) {
+            _fz_bad2("mod_inverse", x0, m);
+        }
+    } else {
+        if (is_ok(it) == 1) { _fz_bad2("mod_inverse accepted a non-unit", x0, m); }
+    }
+    # crt: residues of a known x for 2-4 moduli below 2^15 (lcm < 2^60); the
+    # answer must be x mod lcm. Brute force decides solvability for random
+    # residues on two small moduli.
+    var rs[32];
+    var ms[32];
+    var k = 2 + _fz_u(3);
+    var lcmv = 1;
+    var i = 0;
+    while (i < k) {
+        var mi = 1 + _fz_u(32767);
+        store64(&ms + i * 8, mi);
+        lcmv = lcmv / gcd(lcmv, mi) * mi;
+        i = i + 1;
+    }
+    var x = _fz_u(1152921504606846976);
+    i = 0;
+    while (i < k) { store64(&rs + i * 8, x % load64(&ms + i * 8)); i = i + 1; }
+    var ct, cv = crt(&rs, &ms, k);
+    if (is_ok(ct) == 0 || cv != x % lcmv) {
+        _fz_bad("crt of the residues of a known x", x);
+    }
+    var m1 = 2 + _fz_u(60);
+    var m2 = 2 + _fz_u(60);
+    store64(&ms, m1); store64(&ms + 8, m2);
+    store64(&rs, _fz_u(m1)); store64(&rs + 8, _fz_u(m2));
+    var c2t, c2v = crt(&rs, &ms, 2);
+    var sol = 0 - 1;
+    var y = 0;
+    var l2 = m1 / gcd(m1, m2) * m2;
+    while (y < l2 && sol < 0) {
+        if (y % m1 == load64(&rs) && y % m2 == load64(&rs + 8)) { sol = y; }
+        y = y + 1;
+    }
+    if ((sol < 0 && is_ok(c2t) == 1) || (sol >= 0 && (is_ok(c2t) == 0 || c2v != sol))) {
+        _fz_bad2("crt against brute force, moduli", m1, m2);
+    }
+    # jacobi at an odd prime p is Euler's criterion; and it is multiplicative
+    # in the modulus.
+    var p = next_prime(3 + _fz_u(2000000000));
+    var ja = _fz_rand();
+    var jt, jv = jacobi(ja, p);
+    var e = mod_pow(_mod_floor(ja, p), (p - 1) / 2, p);
+    var ew = 0;
+    if (e == 1) { ew = 1; }
+    if (e == p - 1) { ew = 0 - 1; }
+    if (is_ok(jt) == 0 || jv != ew) { _fz_bad2("jacobi against Euler's criterion", ja, p); }
+    var n1 = 2 * _fz_u(1000000) + 1;
+    var n2 = 2 * _fz_u(1000000) + 1;
+    var j1t, j1 = jacobi(ja, n1);
+    var j2t, j2 = jacobi(ja, n2);
+    var j12t, j12 = jacobi(ja, n1 * n2);
+    if (j12 != j1 * j2) { _fz_bad2("jacobi not multiplicative in the modulus", n1, n2); }
+    # iroot: r^k <= n < (r+1)^k; is_perfect_power of a constructed m^k is 1.
+    var rn = _fz_u(9223372036854775807);
+    var rk = 1 + _fz_u(64);
+    var rt, rv = iroot(rn, rk);
+    if (is_ok(rt) == 0 || rv < 0) { _fz_bad2("iroot refused", rn, rk); }
+    if (rn >= 1) {
+        if (_fz_pow_le(rv, rk, rn) == 0 || _fz_pow_le(rv + 1, rk, rn) == 1) {
+            _fz_bad2("iroot bounds", rn, rk);
+        }
+    }
+    var base = 2 + _fz_u(3037000497);
+    var ex = 2;
+    var pw = base * base;
+    while (_fz_u(2) == 1 && pw <= 9223372036854775807 / base) { pw = pw * base; ex = ex + 1; }
+    if (is_perfect_power(pw) != 1) { _fz_bad("is_perfect_power of a constructed power", pw); }
     return 0;
 }
 
@@ -285,6 +516,9 @@ fn main() {
 
         # Factorisation past the trial bound, against a known answer (2.5.2).
         _fz_check_constructed();
+
+        # Modular arithmetic, roots and multiplicative functions (2.6.0).
+        _fz_check_260();
 
         pass = pass + 1;
         iter = iter + 1;

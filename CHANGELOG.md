@@ -5,6 +5,104 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] — 2026-10-31
+
+**Number theory: modular arithmetic, integer roots and the multiplicative
+functions**, in the library and in the evaluator. Before them, the P(-1)
+hardening pass reviewed everything that changed since the 2.4.9 audit
+([`docs/audit/2026-10-31-audit.md`](docs/audit/2026-10-31-audit.md)). It found
+8 issues (1 medium, 4 low, 3 info), and all are fixed. The largest: **`mean`
+is now correctly rounded in every case**, where 292 of 20,000 random means
+were wrong, some by everything.
+
+Suite 2308 → **2435** asserts; fuzz 4/4 at 20,000 iterations; fmt / lint / vet
+clean; aarch64 (qemu) green.
+
+### Added
+
+- **Library (`src/ntheory.cyr`):**
+  - `mod_inverse(a, m)`: extended Euclid.
+  - `crt(residues, moduli, count)`: moduli need not be coprime; refused when
+    there is no solution or the lcm passes i64.
+  - `jacobi(a, n)`: the binary algorithm.
+  - `isqrt(n)`, `iroot(n, k)` and `is_perfect_power(n)`.
+  - `mobius(n)`, `num_divisors(n)`, `sum_divisors(n)` (refused past i64),
+    `carmichael(n)` and `primitive_root(n)`.
+
+  Fallible ones return `Ok` / `Err`. All are exact for every i64, and those
+  that need a factorization share 2.5.2's trial-division-plus-Pollard–Brent
+  path. Sources are in `docs/sources.md`: Knuth, Cohen, Hardy & Wright,
+  Carmichael 1910 and Gauss.
+- **Evaluator names:** `modinv(a, m)`, `modpow(b, e, m)`, `jacobi(a, n)`,
+  `mobius(n)`, `numdiv(n)`, `sigma(n)`, `carmichael(n)` and `isqrt(n)`.
+  - They take integers only; out of domain is `ABACO_ERR_MATH`.
+  - `modpow` is the first 3-argument builtin. A negative exponent is a power
+    of the inverse: `modpow(3, -1, 7)` is 5.
+  - `tau` stays the constant 2π.
+- **Tests:**
+  - `test_ntheory`: OEIS values for n = 1..30 (A008683, A000005, A000203,
+    A002322, A046145), Jacobi symbols mod 15 and 21, and edges at the top of
+    i64 such as σ(2⁶²) = 2⁶³ − 1 and σ(5²⁷) overflowing. 186 → 246 asserts.
+  - `test_eval`: `test_ntheory_names`.
+- **Fuzz:**
+  - `fuzz_ntheory` checks the new functions against brute force (τ, σ, μ for
+    n < 2,000; λ and primitive roots from element orders for n < 200). It
+    also checks multiplicativity on coprime pairs below 2³¹, `mod_inverse`
+    through the independent `bayan_u64_mulmod`, `crt` recovering a known
+    x, Jacobi against Euler's criterion, and `iroot`'s bounds.
+  - `fuzz_eval` calls the eight names with right and wrong argument counts,
+    and with fractions, NaN and ±Inf.
+  - The tests and fuzz checks catch a `carmichael` or `jacobi` mutant.
+- **Bench rows:** `mod_inverse` (34 ns), `jacobi` (156 ns), `crt3` (137 ns),
+  `mobius` / `sum_divisors` / `carmichael` of 1234567890 (~3.3 µs),
+  `primitive_root(10^9 + 7)` (41 µs), `iroot3` (255 ns), `is_perfect_power`
+  (541 ns).
+
+### Fixed
+
+From the P(-1) review. Each fix has a test that fails on 2.5.2.
+
+- **`mean` is correctly rounded in every case** (medium; partly a 2.4.10
+  regression). The sum is kept exactly as a Shewchuk expansion, the algorithm
+  behind Python's `math.fsum`. The division is then corrected by the exact
+  remainder, ties go to even, and subnormal results are rounded once.
+  2.4.10–2.5.2 scaled the largest argument into [1, 2) and used Neumaier's
+  compensated sum:
+  - `mean(1e308, -1e308, 1e-300)` was 0;
+  - a mean of 2e121 beside ±1.8e308 terms came back 0;
+  - subnormal means were 1 ulp off;
+  - a tie that only a tiny argument could break went to even.
+
+  The review's corpora went from 292 of 20,000 and 358 of 5,000 wrong to 0 and
+  0. `mean8` is 5% faster. `mean(-0, -0)` is −0 again, as in 2.4.9 and as IEEE
+  addition gives.
+- **`stddev` uses the corrected two-pass sum** (Chan, Golub & LeVeque 1983).
+  On clustered data it was up to 443,769 ulp off; it is within 9 ulp on the
+  review's 10,000 cases. It is not correctly rounded.
+- **The HTTPS fetch deadline counts the name lookup.** It started after
+  `net_resolve_ipv4`, so a resolver sending stray replies stretched a fetch to
+  38.6 s; it now ends at 30.0 s. The lookup itself cannot be cut (lib/net.cyr
+  takes no deadline, ~32 s at worst), which is now documented, and a resolver
+  deadline is an upstream ask.
+- **More than 32 arguments is `ABACO_ERR_ARITY`**, not `ABACO_ERR_PARSE`.
+- **`sinc_kernel`'s envelope computes |x| / hw first.**
+  `sinc_kernel(5e-324, 5e-324)` was 0.005, not 0, and |x| past ~5.7e307 inside
+  a finite half-width gave NaN.
+- **The absolute-zero margin is 1e-12 K, not 1e-9.** −1e-9 K converted to a
+  negative temperature.
+
+### Changed
+
+- **Differential, 97,944 records against 2.5.2:** 3 differ, all expected:
+  `mean(-0, -0)` and `avg(-0, -0)` (now −0), and one `sinc_kernel` value
+  (1 ulp, the reordered envelope).
+- **Benchmarks:** an interleaved A/B against 2.5.2 (5–6 rounds, one core) has
+  a median of 1.000 over 86 rows. `mean8` is 0.948. `mixed_ops_funcs`
+  (`2^3 + sqrt(9) * 2`) reads 1.046 while `pow`, `eval_sqrt` and `mixed_ops`
+  are each level, so that is layout. The new names sit last in their lookup
+  buckets, so no existing name pays an extra compare.
+- `dist/abaco.cyr` is 301,816 B / 7,369 lines (was 280,073 / 6,775).
+
 ## [2.5.2] — 2026-10-31
 
 **`factor` and `totient` by Pollard–Brent rho.** Both trial-divided to √n

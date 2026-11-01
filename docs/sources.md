@@ -58,6 +58,49 @@ source. No magic numbers.
     *BIT* 20, 176–184. doi:10.1007/BF01933190
   - Cohen, H. (1993). *A Course in Computational Algebraic Number Theory*,
     §8.5 (Pollard's ρ method).
+- **Modular inverse (`mod_inverse`, 2.6.0)** — the extended Euclidean
+  algorithm on (a mod m, m). Every remainder and Bézout coefficient stays
+  within m in magnitude, so nothing overflows for m < 2⁶³; refused when
+  gcd(a, m) ≠ 1.
+  - Knuth, D. E. *TAOCP Vol. 2* (3rd ed.), §4.5.2, Algorithm X.
+- **Chinese remainder theorem (`crt`, 2.6.0)** — congruences merged one at a
+  time. With g = gcd(M, m), a solution exists iff g | (r − x), and then
+  x += M · ((r − x)/g · (M/g)⁻¹ mod m/g), the product through
+  `bayan_u64_mulmod`. lcm(M, m) is checked to fit in i64 first, so moduli need
+  not be coprime and no step overflows.
+  - Knuth, *TAOCP Vol. 2*, §4.3.2.
+  - Bach, E. & Shallit, J. (1996). *Algorithmic Number Theory, Vol. 1:
+    Efficient Algorithms*, MIT Press, ch. 5.
+- **Jacobi symbol (`jacobi`, 2.6.0)** — the binary algorithm. Factors of 2
+  are stripped with the second supplement ((2/n) = −1 iff n ≡ 3, 5 mod 8), and
+  the arguments are swapped by quadratic reciprocity (a sign flip iff both are
+  ≡ 3 mod 4). For prime n it is the Legendre symbol; `fuzz_ntheory` checks it
+  against Euler's criterion.
+  - Cohen, H. (1993). *A Course in Computational Algebraic Number Theory*,
+    §1.4.
+- **Integer roots (`isqrt`, `iroot`, `is_perfect_power`, 2.6.0)** — an f64
+  estimate corrected both ways by exact, overflow-free comparisons of bᵏ
+  against n. A perfect power needs checking only at prime exponents k ≤ 61,
+  since m^(ab) = (m^a)^b.
+- **Multiplicative functions (`mobius`, `num_divisors`, `sum_divisors`,
+  `carmichael`, 2.6.0)** — from one factorization (`_factor_pe`: trial
+  division to 8191, then Pollard–Brent rho):
+  - μ(n) is (−1)^ω(n), or 0 when a square divides n.
+  - τ(n) = ∏(e + 1).
+  - σ(n) = ∏(1 + p + … + pᵉ), each factor by Horner's rule with every product
+    tested before it is formed, so a sum past i64 is refused: σ(5²⁷) is, while
+    σ(2⁶²) = 2⁶³ − 1 fits exactly.
+  - λ(n) = lcm of λ(pᵉ) = pᵉ⁻¹(p − 1), except λ(2ᵉ) = 2ᵉ⁻² for e ≥ 3.
+  - Hardy, G. H. & Wright, E. M. *An Introduction to the Theory of Numbers*
+    (6th ed.), §16.3 (μ) and §16.7 (τ, σ).
+  - Carmichael, R. D. (1910). "Note on a new number theory function." *Bull.
+    Amer. Math. Soc.* 16, 232–238.
+- **Primitive roots (`primitive_root`, 2.6.0)** — they exist exactly for
+  n = 2, 4, pᵏ and 2pᵏ (p an odd prime). g generates the units iff
+  g^(φ(n)/q) ≢ 1 (mod n) for every prime q | φ(n). The least such g is found
+  by scanning from 2, with φ(n) factored once.
+  - Gauss, C. F. (1801). *Disquisitiones Arithmeticae*, Section III (power
+    residues and primitive roots, arts. 45–93).
 - **Binomial coefficient (`abaco_binomial`)** — the multiplicative recurrence
   C(n, i+1) = C(n, i) · (n − i) / (i + 1) after folding k to min(k, n − k),
   with the division done first: with g = gcd(C(n, i), i + 1), the cofactor
@@ -402,12 +445,30 @@ source. No magic numbers.
 - **n! (`_eval_factorial`, 2.4.10)** — exact i64 product to 20!, then a
   double-double product (Dekker 1971) over chunks of consecutive factors whose
   product stays below 2^53, rounded once; every n ≤ 170 matches the exact value.
-- **mean (`_eval_mean`, 2.4.10)** — arguments scaled by the power of two that
-  brings max |x| into [1, 2) (exact), Neumaier-compensated sum, then one
-  division of the renormalised pair corrected by the remainder (Dekker
-  two-product). Correctly rounded in 3,000 of 3,000 random cases against exact
-  rationals. **stddev / stdev** is the population form √(Σ(x − x̄)²/n) on the
-  same scaled arguments (no overflow or underflow of the deviations or squares).
+- **mean (`_eval_mean`, 2.6.0)** — correctly rounded in every case, ties and
+  subnormal results included. The sum is kept exactly as an expansion of
+  non-overlapping partials (Shewchuk's GROW-EXPANSION with zero elimination,
+  the algorithm of Python's `math.fsum`). q = round(S) / n is within about an
+  ulp. The remainder R = S − q·n is formed exactly: n ≤ 32 has at most 6
+  significant bits, so q's top 27 significant bits times n, and the rest of q
+  times n, are each exact. q then steps to its neighbour while 2|R| > n·|q′ − q|,
+  decided exactly as an expansion, with ties to even. The arguments are scaled
+  down by 2ᵏ only when a partial sum overflows. 2.4.10–2.5.2 used a
+  Neumaier-compensated sum of arguments scaled into [1, 2). The 2.6.0 review
+  found 292 of 20,000 random means wrong, some by everything (a 7.6e120 mean
+  came back 0); now 0 of 20,000, and 0 of 5,000 subnormal-heavy ones.
+  - Shewchuk, J. R. (1997). "Adaptive precision floating-point arithmetic and
+    fast robust geometric predicates." *Discrete & Computational Geometry* 18,
+    305–363. doi:10.1007/PL00009321
+- **stddev / stdev (`_eval_stddev`)** — the population form √(Σ(x − x̄)²/n),
+  on arguments scaled so max |x| lies in [1, 2) (no overflow or underflow of
+  the deviations or squares). From 2.6.0 it uses the corrected two-pass sum
+  Σd² − (Σd)²/n, which takes out the mean's rounding error. Within 9 ulp on
+  10,000 clustered cases, where the uncorrected form of 2.4.10–2.5.2 was off
+  by up to 443,769 ulp.
+  - Chan, T. F., Golub, G. H. & LeVeque, R. J. (1983). "Algorithms for
+    computing the sample variance: analysis and recommendations." *The
+    American Statistician* 37(3), 242–247.
   - Higham, N. J. (2002). *Accuracy and Stability of Numerical Algorithms*,
     2nd ed., SIAM, §1.9 (two-pass variance) and ch. 4 (summation).
 - **log10 of an exact power of ten (`_eval_log10`)** — `ln(x) / ln(10)`

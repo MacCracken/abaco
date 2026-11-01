@@ -1359,7 +1359,7 @@ enum CcyTls {
     CCY_TLS_CA_MAX = 1048576;      # largest CA bundle read — lib/tls.cyr's own bound
     CCY_TLS_CA_MAX_CERTS = 300;    # certificates in a CA file: bounds each fetch's parse
     CCY_TLS_STEP_MS = 10000;       # one step: connect, handshake, request or one read
-    CCY_TLS_DEADLINE_MS = 30000;   # whole fetch: connect + handshake + response
+    CCY_TLS_DEADLINE_MS = 30000;   # whole fetch: lookup + connect + handshake + response
     CCY_TLS_MAX_READS = 32;        # tls_read calls per fetch (see _ccy_tls_exchange)
 }
 
@@ -1717,7 +1717,9 @@ fn _ccy_tls_err(code) {
 # silent server), and the whole fetch by its deadline (CCY_TLS_DEADLINE_MS,
 # 30 s): a peer that sends one byte every few seconds keeps every wait short,
 # needs no key or certificate (any on-path box can do it), and is cut there.
-# The connect is net_connect_nb's own bound; every TLS step runs under
+# The deadline starts before the name lookup (lib/net.cyr's resolver takes
+# none: ~32 s at worst, after which a spent deadline is AI_ERR_HTTP). The
+# connect is net_connect_nb's own bound; every TLS step runs under
 # lib/tls.cyr's per-connection deadline (tls_set_deadline, Cyrius 6.6.13),
 # which waits for the socket with the time left before every read and write,
 # on Linux, macOS and Windows. A cut step is TLS_ERR_TIMEOUT, AI_ERR_HTTP.
@@ -1811,10 +1813,11 @@ fn _ccy_tls_session(fd, host, port, addr, hk, req, out, dl) {
 # CCY_TLS_CA_MAX_CERTS (abaco's own bound; through Cyrius 6.6.12 it was
 # lib/tls.cyr's TLS_CA_MAX_ROOTS, which refused such a bundle whole, and from
 # 6.6.13 that name bounds nothing). No redirect is
-# followed — a 3xx is a non-200. Connect, handshake and response run under the
-# step bound and the CCY_TLS_DEADLINE_MS deadline, which starts once the name
-# has resolved (the deadline section above); a fetch either cuts is
-# AI_ERR_HTTP. Every exit after the socket opens closes the TLS ctx (when one
+# followed — a 3xx is a non-200. The name lookup, connect, handshake and
+# response run under the CCY_TLS_DEADLINE_MS deadline, and every step after the
+# lookup under the step bound too (the deadline section above); a fetch either
+# cuts is AI_ERR_HTTP. The lookup itself cannot be interrupted: lib/net.cyr
+# bounds it at ~32 s. Every exit after the socket opens closes the TLS ctx (when one
 # exists) and the socket. Returns 0, AI_ERR_HTTP or AI_ERR_TLS.
 fn _ccy_https_get(c, host, port, req, out) {
     if (_ccy_tls_ready() == 0) { return AI_ERR_TLS; }
@@ -1833,9 +1836,15 @@ fn _ccy_https_get(c, host, port, req, out) {
     }
     var ms = load64(c + 48);
     if (ms <= 0) { ms = CCY_TLS_DEADLINE_MS; }
+    # The deadline starts before the name lookup, which counts against it.
+    # lib/net.cyr's resolver takes no deadline (2 tries of up to 8 replies, 2 s
+    # each: ~32 s at worst), so a lookup that uses the whole deadline is
+    # AI_ERR_HTTP once it returns. Through 2.5.2 the deadline started after
+    # it, and a slow resolver stretched a fetch past 30 s (2.6.0 P(-1) review).
+    var dl = clock_now_ns() + ms * 1000000;
     var addr = net_resolve_ipv4(host);
     if (addr == 0 - 1) { return AI_ERR_HTTP; }
-    var dl = clock_now_ns() + ms * 1000000;
+    if (clock_now_ns() >= dl) { return AI_ERR_HTTP; }
     var st, fd = tcp_socket();
     if (is_err_result(st) == 1) { return AI_ERR_HTTP; }
     # TCP_NODELAY, best effort: the client sends its Finished and then the
@@ -1891,8 +1900,9 @@ fn _ccy_https_get(c, host, port, req, out) { return AI_ERR_TLS; }
 #     IPv4 literal matches iPAddress entries only); the libssl backend is
 #     refused (abaco drives the native one only). Each step (connect,
 #     handshake, request, each read) must finish within CCY_TLS_STEP_MS
-#     (10 s) and the whole fetch within CCY_TLS_DEADLINE_MS (30 s) — a peer
-#     that keeps every step short is cut there.
+#     (10 s) and the whole fetch, name lookup included, within
+#     CCY_TLS_DEADLINE_MS (30 s) — a peer that keeps every step short is cut
+#     there. The lookup alone cannot be cut: lib/net.cyr bounds it at ~32 s.
 #   - Rate values are sanity-checked (finite, > 0, < 10^6). Poisoned
 #     responses that try to survive validation by smuggling NaN/inf/zero
 #     rates get dropped silently; an all-bad response is rejected entirely.

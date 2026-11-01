@@ -568,8 +568,9 @@ fn test_tan_kernel() {
     return 0;
 }
 
-# 2.4.10: mean is correctly rounded (3,000 random cases matched exact
-# rationals) and neither mean nor stddev overflows or underflows on the way.
+# Neither mean nor stddev overflows or underflows on the way (2.4.10), and
+# from 2.6.0 mean is correctly rounded in every case, ties and subnormals
+# included.
 fn test_stats_robust() {
     assert_eq(ev("mean(0.1, 0.2, 0.3)"), 0x3FC999999999999A, "mean(0.1, 0.2, 0.3) = 0.2 (was 0.20000000000000004)");
     assert_eq(ev("mean(1e308, 1e308)"), 0x7FE1CCF385EBC8A0, "mean(1e308, 1e308) = 1e308 (was +Inf)");
@@ -578,11 +579,65 @@ fn test_stats_robust() {
     assert_eq(ev("stddev(1e200, 0-1e200)"), 0x6974E718D7D7625A, "stddev(1e200, -1e200) = 1e200 (was +Inf)");
     assert_eq(ev("stddev(1e-200, 2e-200)"), 0x16587E92154EF7AC, "stddev(1e-200, 2e-200) = 5e-201 (was 0)");
     assert_eq(ev("stddev(3)"), 0, "one value: 0");
+    # 2.6.0: the corrected two-pass form. 443,769 ulp off at 2.5.2; the exact
+    # value is 0x3ED2E73000000000.
+    var sd = ev("stddev(0-837649.1643549813, 0-837649.1643459676)");
+    assert(sd >= 0x3ED2E72FFFFFFFFE && sd <= 0x3ED2E73000000002, "clustered stddev within 2 ulp (was 443,769)");
     var mi = ev("mean(1e308*10, 1)");
     assert_eq(mi, 0x7FF0000000000000, "mean(Inf, 1) is +Inf");
     var e = Evaluator_new();
     var nn = Evaluator_eval(e, "mean(sqrt(0-1), 1)");
     assert(f64_eq(nn, nn) == 0, "mean with a NaN is NaN");
+    # 2.6.0: the sum is exact (Shewchuk / math.fsum) and the division
+    # correctly rounded. Each row was wrong at 2.5.2 (in brackets), against
+    # exact rationals; the 2.6.0 P(-1) review found 292 of 20,000 random means
+    # wrong, and 358 of 5,000 subnormal-heavy ones.
+    assert_eq(ev("mean(1.7976931348623157e308, 1e300, 0-1.7976931348623157e308, 0-1e300, 1e122)"),
+      0x591EFB1178484135, "what huge cancelling terms leave survives: 2e121 (was 0)");
+    assert_eq(ev("mean(1e308, 0-1e308, 1e-300)"), 0x018C92D503F699CC, "a tiny argument beside cancelling ones (was 0)");
+    assert_eq(ev("mean(1e308, 0-1e308, 0.1)"), 0x3FA1111111111111, "1/30 exactly rounded (was 4 ulp off)");
+    assert_eq(ev("mean(5.163697e-318, 1.60233846248483e-308, 1e-323)"), 0x0003D7370DCDFB15,
+      "a subnormal mean, rounded once (was 1 ulp low)");
+    assert_eq(ev("mean(1e308, 0-1e308, 0-2.2115048708574196e-308)"), 0x80054D01D9EF6A09,
+      "a negative subnormal mean (was 0)");
+    assert_eq(ev("mean(1, 1.1102230246251565e-16, 6.223015277861142e-61, 0)"), 0x3FD0000000000001,
+      "a tie broken by an argument 2^-200 down (was 0.25, to even)");
+    return 0;
+}
+
+# 2.6.0: number theory in the evaluator. Integers only, as gcd; values past
+# 2^53 are rounded by f64_from like any other.
+fn test_ntheory_names() {
+    ev_int("mobius(30)", 0 - 1, "mobius(30) = -1");
+    ev_int("mobius(12)", 0, "mobius(12) = 0");
+    ev_int("numdiv(360)", 24, "numdiv(360) = 24");
+    ev_int("sigma(28)", 56, "sigma(28) = 56, a perfect number");
+    ev_int("carmichael(561)", 80, "carmichael(561) = 80");
+    ev_int("isqrt(99)", 9, "isqrt(99) = 9");
+    ev_int("isqrt(10^15)", 31622776, "isqrt(10^15)");
+    ev_int("modinv(3, 11)", 4, "modinv(3, 11) = 4");
+    ev_int("modinv(0-3, 11)", 7, "modinv(-3, 11) = 7");
+    ev_int("jacobi(2, 15)", 1, "jacobi(2, 15) = 1");
+    ev_int("jacobi(7, 15)", 0 - 1, "jacobi(7, 15) = -1");
+    ev_int("modpow(2, 10, 1000)", 24, "modpow(2, 10, 1000) = 24");
+    ev_int("modpow(0-2, 3, 7)", 6, "modpow(-2, 3, 7) = 6: -8 = 6 mod 7");
+    ev_int("modpow(3, 0-1, 7)", 5, "modpow(3, -1, 7) = 5, the inverse");
+    ev_int("modpow(3, 0-2, 7)", 4, "modpow(3, -2, 7) = 4 = 5^2 mod 7");
+    ev_int("modpow(5, 0, 1)", 0, "anything mod 1 is 0");
+    ev_int("sigma(2^52)", 9007199254740991, "sigma(2^52) = 2^53 - 1");
+    ev_err_is("mobius(0)", ABACO_ERR_MATH, "mobius(0): n >= 1");
+    ev_err_is("numdiv(2.5)", ABACO_ERR_MATH, "numdiv(2.5): integers only");
+    ev_err_is("sigma(6917529027641081856)", ABACO_ERR_MATH, "sigma(3 * 2^61) does not fit");
+    ev_err_is("carmichael(0-4)", ABACO_ERR_MATH, "carmichael(-4)");
+    ev_err_is("isqrt(0-1)", ABACO_ERR_MATH, "isqrt(-1)");
+    ev_err_is("modinv(2, 4)", ABACO_ERR_MATH, "modinv(2, 4): no inverse");
+    ev_err_is("modinv(3, 0)", ABACO_ERR_MATH, "modinv(3, 0)");
+    ev_err_is("jacobi(1, 4)", ABACO_ERR_MATH, "jacobi with an even modulus");
+    ev_err_is("modpow(2, 3, 0)", ABACO_ERR_MATH, "modpow mod 0");
+    ev_err_is("modpow(2, 0-1, 4)", ABACO_ERR_MATH, "modpow(2, -1, 4): 2 has no inverse mod 4");
+    ev_err_is("modpow(2, 3)", ABACO_ERR_ARITY, "modpow takes three");
+    ev_err_is("modinv(3)", ABACO_ERR_ARITY, "modinv takes two");
+    ev_err_is("sigma(1, 2)", ABACO_ERR_ARITY, "sigma takes one");
     return 0;
 }
 
@@ -660,7 +715,13 @@ fn test_arity_cap() {
     store8(expr + pos, 0);
     ev = Evaluator_new();
     Evaluator_eval(ev, expr);
-    assert(eval_err(ev) != ABACO_ERR_NONE, "33-arg call rejected");
+    assert_eq(eval_err(ev), ABACO_ERR_ARITY, "33-arg call rejected as ABACO_ERR_ARITY (was PARSE)");
+    memcpy(expr, "sin(", 4);                  # "mean(1,..." -> "sin((1,...", then drop a '('
+    var k = 4;
+    while (k < pos) { store8(expr + k, load8(expr + k + 1)); k = k + 1; }
+    ev = Evaluator_new();
+    Evaluator_eval(ev, expr);
+    assert_eq(eval_err(ev), ABACO_ERR_ARITY, "33 args to sin: ABACO_ERR_ARITY");
     return 0;
 }
 
@@ -2147,6 +2208,7 @@ fn main() {
     test_depth_boundary();
     test_dispatch_values();
     test_arity_error();
+    test_ntheory_names();
     test_tan_kernel();
     test_stats_robust();
     test_literal_rounding();

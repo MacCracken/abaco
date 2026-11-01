@@ -1347,46 +1347,189 @@ fn _stat_exp(args, n) {
     return be;
 }
 
-# Mean of args[0..n): a compensated (Neumaier) sum of the arguments scaled
-# into [-2, 2], renormalised, then one corrected division — so the mean is
-# correctly rounded but for the rarest ties, and neither overflows nor
-# underflows on the way. Through 2.4.9 a plain sum: mean(1e308, 1e308) was
-# +Inf and mean(0.1, 0.2, 0.3) 0.20000000000000004 (2.4.9 audit). A NaN or
-# infinite sum is returned as it is (/ n), as before.
+# ---- Exact summation (Shewchuk 1997; Python's math.fsum) ----
+# An expansion is ps[0..m): non-overlapping doubles in increasing magnitude
+# whose exact sum is the value. Every operation below is error-free, so the
+# sum of up to 32 arguments is kept exactly, whatever cancels.
+
+# Add x to the expansion ps[0..m) and return the new length, or -1 when a
+# partial sum overflows. Shewchuk's GROW-EXPANSION with zero elimination,
+# as msum / math.fsum: each two-sum's error is kept, its rounded sum carried.
+fn _xp_add(ps, m, x) {
+    var i = 0;
+    var j = 0;
+    while (j < m) {
+        var y = load64(ps + j * 8);
+        if (f64_lt(f64_abs(x), f64_abs(y)) == 1) {
+            var tx = x;
+            x = y;
+            y = tx;
+        }
+        var hi = f64_add(x, y);
+        var lo = f64_sub(y, f64_sub(hi, x));
+        if ((lo & 0x7FFF_FFFF_FFFF_FFFF) != 0) {
+            store64(ps + i * 8, lo);
+            i = i + 1;
+        }
+        x = hi;
+        j = j + 1;
+    }
+    if (f64_eq(f64_sub(x, x), f64_from(0)) == 0) { return 0 - 1; }   # overflowed
+    store64(ps + i * 8, x);
+    return i + 1;
+}
+
+# The expansion's value correctly rounded to nearest, ties to even: math.fsum's
+# final step, summing down from the top until a step is inexact, then
+# breaking a halfway case with the sign of the next partial down.
+fn _xp_round(ps, m) {
+    if (m == 0) { return f64_from(0); }
+    var j = m - 1;
+    var hi = load64(ps + j * 8);
+    var lo = f64_from(0);
+    while (j > 0) {
+        j = j - 1;
+        var x = hi;
+        var y = load64(ps + j * 8);
+        hi = f64_add(x, y);
+        lo = f64_sub(y, f64_sub(hi, x));
+        if ((lo & 0x7FFF_FFFF_FFFF_FFFF) != 0) { break; }
+    }
+    if (j > 0 && (lo & 0x7FFF_FFFF_FFFF_FFFF) != 0) {
+        var below = load64(ps + (j - 1) * 8);
+        if ((below & 0x7FFF_FFFF_FFFF_FFFF) != 0 && ((lo >> 63) & 1) == ((below >> 63) & 1)) {
+            var y2 = f64_mul(lo, f64_from(2));
+            var x2 = f64_add(hi, y2);
+            if (f64_sub(x2, hi) == y2) { hi = x2; }
+        }
+    }
+    return hi;
+}
+
+# The sign of the expansion's value: -1, 0 or 1. Its largest non-zero
+# partial outweighs everything below it.
+fn _xp_sign(ps, m) {
+    var j = m - 1;
+    while (j >= 0) {
+        var v = load64(ps + j * 8);
+        if ((v & 0x7FFF_FFFF_FFFF_FFFF) != 0) {
+            if (((v >> 63) & 1) == 1) { return 0 - 1; }
+            return 1;
+        }
+        j = j - 1;
+    }
+    return 0;
+}
+
+# The double next to finite q, toward +Inf when up == 1 and -Inf otherwise.
+fn _f64_step(q, up) {
+    if ((q & 0x7FFF_FFFF_FFFF_FFFF) == 0) {
+        if (up == 1) { return 1; }
+        return 0x8000_0000_0000_0001;
+    }
+    var pos = 1 - ((q >> 63) & 1);
+    if (pos == up) { return q + 1; }
+    return q - 1;
+}
+
+# Mean of args[0..n), correctly rounded (to nearest, ties to even), subnormal
+# results included. The sum is kept exactly as an expansion (above); q = S / n
+# to within about an ulp; the remainder R = S - q * n is formed exactly (q * n
+# by Dekker's two-product), and q steps to its neighbour while R / n reaches
+# past the midpoint, which 2|R| against n * |q' - q| decides exactly. A NaN or
+# an infinite argument gives the plain sum / n, as before. Only when a partial
+# sum would overflow are the arguments scaled down, by 2^k with
+# k = max(1, e - 1017) for a largest |x| in [2^e, 2^(e+1)) (32 arguments sum
+# below 2^(e+6)), and then a subnormal mean can be rounded twice.
+#
+# History. Through 2.4.9 a plain sum: mean(1e308, 1e308) was +Inf (2.4.9
+# audit). 2.4.10 compensated the sum (Neumaier) after scaling the largest
+# argument into [1, 2); the 2.6.0 P(-1) review measured 292 of 20,000 random
+# means wrong: the scaling flushed small arguments (mean(1e308, -1e308,
+# 1e-300) was 0), the compensation lost what large cancelling terms left
+# (7.6e120 came back 0), subnormal means were rounded twice, and a tiny
+# argument's tie-break was dropped.
 fn _eval_mean(args, n) {
     _dd_init();
-    var k = _stat_exp(args, n);
-    var sum = f64_from(0);
-    var comp = f64_from(0);
+    var nf = f64_from(n);
+    var plain = f64_from(0);
     var i = 0;
     while (i < n) {
-        var x = _pow_scale(load64(args + i * 8), 0 - k);
-        var t = f64_add(sum, x);
-        if (f64_lt(f64_abs(sum), f64_abs(x)) == 0) {
-            comp = f64_add(comp, f64_add(f64_sub(sum, t), x));
-        } else {
-            comp = f64_add(comp, f64_add(f64_sub(x, t), sum));
-        }
-        sum = t;
+        plain = f64_add(plain, load64(args + i * 8));
         i = i + 1;
     }
-    var nf = f64_from(n);
-    if (f64_eq(f64_sub(sum, sum), f64_from(0)) == 0) { return f64_div(sum, nf); }
-    # (hi, lo) = sum + comp exactly (two-sum).
-    var hi = f64_add(sum, comp);
-    var bv = f64_sub(hi, sum);
-    var lo = f64_add(f64_sub(sum, f64_sub(hi, bv)), f64_sub(comp, bv));
-    if ((hi & 0x7FFF_FFFF_FFFF_FFFF) == 0) { return _pow_scale(f64_div(lo, nf), k); }
-    # Divide with hi in [1, 2), so the quotient is normal whatever the
-    # exponent, then correct it by the remainder (Dekker two-product).
-    var hm, he = _frexp1(f64_abs(hi));
-    hm = hm | (hi & 0x8000_0000_0000_0000);
-    var lm = _pow_scale(lo, 0 - he);
-    var q = f64_div(hm, nf);
-    var p, pe = _two_product(q, nf);
-    var rem = f64_add(f64_sub(f64_sub(hm, p), pe), lm);
-    q = f64_add(q, f64_div(rem, nf));
-    return _pow_scale(q, he + k);
+    var fin = 1;
+    i = 0;
+    while (i < n) {
+        var a = load64(args + i * 8);
+        if (f64_eq(f64_sub(a, a), f64_from(0)) == 0) { fin = 0; }
+        i = i + 1;
+    }
+    if (fin == 0) { return f64_div(plain, nf); }
+    var ps[528];                      # 66 partials: 32 arguments plus the remainder's
+    var k = 0;
+    var m = 0 - 1;
+    var q = f64_from(0);
+    var pass = 0;
+    while (m < 0 && pass < 2) {
+        if (pass == 1) {
+            k = _stat_exp(args, n) - 1017;
+            if (k < 1) { k = 1; }
+        }
+        m = 0;
+        i = 0;
+        while (i < n && m >= 0) {
+            var x = load64(args + i * 8);
+            if (k > 0) { x = _pow_scale(x, 0 - k); }
+            m = _xp_add(&ps, m, x);
+            i = i + 1;
+        }
+        if (m >= 0) {
+            q = f64_div(_xp_round(&ps, m), nf);
+            # R = S - q * n, exactly. n <= 32 has at most 6 significant bits,
+            # so q's top 27 significant bits times n and the rest of q times n
+            # are both exact: no splitting multiply, which would overflow for
+            # |q| above ~2^996 (Dekker's _two_product did, at first).
+            var qh = q & 0xFFFF_FFFF_FC00_0000;
+            var ql = f64_sub(q, qh);
+            m = _xp_add(&ps, m, f64_mul(qh, nf) ^ 0x8000_0000_0000_0000);
+            if (m >= 0) { m = _xp_add(&ps, m, f64_mul(ql, nf) ^ 0x8000_0000_0000_0000); }
+        }
+        pass = pass + 1;
+    }
+    var steps = 0;
+    while (steps < 3) {
+        var rs = _xp_sign(&ps, m);
+        if (rs == 0) { break; }
+        var up = 0;
+        if (rs > 0) { up = 1; }
+        var q2 = _f64_step(q, up);
+        var d = f64_abs(f64_sub(q2, q));                 # exact: adjacent doubles
+        var nd = f64_mul(nf, d);                         # exact: n <= 32, d a power of 2
+        # E = 2|R| - n * d, in a scratch expansion.
+        var es[528];
+        var me = 0;
+        var t = 0;
+        while (t < m) {
+            var c = f64_mul(load64(&ps + t * 8), f64_from(2));
+            if (rs < 0) { c = c ^ 0x8000_0000_0000_0000; }
+            me = _xp_add(&es, me, c);
+            t = t + 1;
+        }
+        me = _xp_add(&es, me, nd ^ 0x8000_0000_0000_0000);
+        var es_sign = _xp_sign(&es, me);
+        var move = 0;
+        if (es_sign > 0) { move = 1; }
+        if (es_sign == 0 && (q & 1) == 1) { move = 1; }  # a tie: to even
+        if (move == 0) { break; }
+        q = q2;
+        var step = nd;
+        if (rs > 0) { step = nd ^ 0x8000_0000_0000_0000; }
+        m = _xp_add(&ps, m, step);                       # R -= (q2 - q) * n
+        steps = steps + 1;
+    }
+    if (k > 0) { return _pow_scale(q, k); }
+    return q;
 }
 
 # Population standard deviation sqrt(sum((x - mean)^2) / n) — the divisor
@@ -1403,14 +1546,24 @@ fn _eval_stddev(args, n) {
         i = i + 1;
     }
     var mean = f64_div(sum, f64_from(n));
+    # The corrected two-pass form, sum(d^2) - (sum d)^2 / n (Chan, Golub &
+    # LeVeque 1983): the mean's own rounding error delta comes back as
+    # n * delta^2 in sum(d^2), and (sum d)^2 / n takes it out. Through 2.5.2
+    # the uncorrected form left up to ~1e-10 relative on clustered data:
+    # stddev(-837649.1643549813, -837649.1643459676) was 443,769 ulp off
+    # (2.6.0 P(-1) review).
     var vsum = f64_from(0);
+    var dsum = f64_from(0);
     i = 0;
     while (i < n) {
         var d = f64_sub(_pow_scale(load64(args + i * 8), 0 - k), mean);
         vsum = f64_add(vsum, f64_mul(d, d));
+        dsum = f64_add(dsum, d);
         i = i + 1;
     }
-    return _pow_scale(f64_sqrt(f64_div(vsum, f64_from(n))), k);
+    var v = f64_sub(vsum, f64_div(f64_mul(dsum, dsum), f64_from(n)));
+    if (f64_lt(v, f64_from(0)) == 1) { v = f64_from(0); }
+    return _pow_scale(f64_sqrt(f64_div(v, f64_from(n))), k);
 }
 
 # Ok(n) when x is an integer inside i64 — the domain of the evaluator's integer
@@ -1857,8 +2010,11 @@ fn parse_primary(e) {
                 nargs = nargs + 1;
                 while (eval_at(e, TOK_COMMA) == 1) {
                     eval_advance(e);
+                    # Past the cap is a wrong argument count, ABACO_ERR_ARITY;
+                    # through 2.5.2 it was ABACO_ERR_PARSE, though the input
+                    # parses (2.6.0 P(-1) review).
                     if (nargs >= 32) {
-                        eval_set_err(e, ABACO_ERR_PARSE);
+                        eval_set_err(e, ABACO_ERR_ARITY);
                         return f64_from(0);
                     }
                     eval_set_depth(e, eval_depth(e) + 1);
@@ -1914,6 +2070,7 @@ enum EvalFn {
     EVF_ATANH;
     EVF_AVG;
     EVF_BINOMIAL;
+    EVF_CARMICHAEL;
     EVF_CEIL;
     EVF_CHOOSE;
     EVF_COS;
@@ -1927,6 +2084,8 @@ enum EvalFn {
     EVF_FRACT;
     EVF_GCD;
     EVF_ISPRIME;
+    EVF_ISQRT;
+    EVF_JACOBI;
     EVF_LCM;
     EVF_LN;
     EVF_LOG;
@@ -1936,12 +2095,17 @@ enum EvalFn {
     EVF_MEAN;
     EVF_MEDIAN;
     EVF_MIN;
+    EVF_MOBIUS;
+    EVF_MODINV;
+    EVF_MODPOW;
     EVF_NEXTPRIME;
+    EVF_NUMDIV;
     EVF_POW;
     EVF_PREVPRIME;
     EVF_RAD;
     EVF_ROUND;
     EVF_SGN;
+    EVF_SIGMA;
     EVF_SIGN;
     EVF_SIN;
     EVF_SINH;
@@ -1955,7 +2119,7 @@ enum EvalFn {
 }
 
 # The builtin a call names, as an EvalFn id (EVF_NONE if none). Bucketed by the
-# first byte, so a call costs a few streq rather than a walk of all 48 names:
+# first byte, so a call costs a few streq rather than a walk of all 56 names:
 # through 2.4.9 call_function compared the name against each builtin in turn,
 # ~1.1 us of a 1.7 us call (2.4.9 audit).
 fn _fn_id(name) {
@@ -1977,6 +2141,7 @@ fn _fn_id(name) {
         if (streq(name, "choose") == 1) { return EVF_CHOOSE; }
         if (streq(name, "cos") == 1) { return EVF_COS; }
         if (streq(name, "cosh") == 1) { return EVF_COSH; }
+        if (streq(name, "carmichael") == 1) { return EVF_CARMICHAEL; }   # 2.6.0 names last in a bucket
     } elif (c == 100) {
         if (streq(name, "deg") == 1) { return EVF_DEG; }
     } elif (c == 101) {
@@ -1991,6 +2156,9 @@ fn _fn_id(name) {
         if (streq(name, "gcd") == 1) { return EVF_GCD; }
     } elif (c == 105) {
         if (streq(name, "isprime") == 1) { return EVF_ISPRIME; }
+        if (streq(name, "isqrt") == 1) { return EVF_ISQRT; }
+    } elif (c == 106) {
+        if (streq(name, "jacobi") == 1) { return EVF_JACOBI; }
     } elif (c == 108) {
         if (streq(name, "lcm") == 1) { return EVF_LCM; }
         if (streq(name, "ln") == 1) { return EVF_LN; }
@@ -2002,8 +2170,12 @@ fn _fn_id(name) {
         if (streq(name, "mean") == 1) { return EVF_MEAN; }
         if (streq(name, "median") == 1) { return EVF_MEDIAN; }
         if (streq(name, "min") == 1) { return EVF_MIN; }
+        if (streq(name, "mobius") == 1) { return EVF_MOBIUS; }
+        if (streq(name, "modinv") == 1) { return EVF_MODINV; }
+        if (streq(name, "modpow") == 1) { return EVF_MODPOW; }
     } elif (c == 110) {
         if (streq(name, "nextprime") == 1) { return EVF_NEXTPRIME; }
+        if (streq(name, "numdiv") == 1) { return EVF_NUMDIV; }
     } elif (c == 112) {
         if (streq(name, "pow") == 1) { return EVF_POW; }
         if (streq(name, "prevprime") == 1) { return EVF_PREVPRIME; }
@@ -2018,6 +2190,7 @@ fn _fn_id(name) {
         if (streq(name, "sqrt") == 1) { return EVF_SQRT; }
         if (streq(name, "stddev") == 1) { return EVF_STDDEV; }
         if (streq(name, "stdev") == 1) { return EVF_STDEV; }
+        if (streq(name, "sigma") == 1) { return EVF_SIGMA; }
     } elif (c == 116) {
         if (streq(name, "tan") == 1) { return EVF_TAN; }
         if (streq(name, "tanh") == 1) { return EVF_TANH; }
@@ -2027,12 +2200,14 @@ fn _fn_id(name) {
     return EVF_NONE;
 }
 
-# Arguments a builtin takes: 1 or 2, or -1 for the variadic statistics
+# Arguments a builtin takes: 1, 2 or 3, or -1 for the variadic statistics
 # (one or more).
 fn _fn_arity(fid) {
     if (fid == EVF_MEAN || fid == EVF_AVG || fid == EVF_MEDIAN || fid == EVF_STDDEV || fid == EVF_STDEV) {
         return 0 - 1;
     }
+    if (fid == EVF_MODPOW) { return 3; }
+    if (fid == EVF_MODINV || fid == EVF_JACOBI) { return 2; }
     if (fid == EVF_ATAN2 || fid == EVF_BINOMIAL || fid == EVF_CHOOSE || fid == EVF_GCD) { return 2; }
     if (fid == EVF_LCM || fid == EVF_MAX || fid == EVF_MIN || fid == EVF_POW) { return 2; }
     return 1;
@@ -2180,6 +2355,23 @@ fn call_function(e, name, args, nargs) {
             # CHANGELOG 2.5.2). The result is exact; f64_from rounds it.
             return f64_from(totient(n));
         }
+        # 2.6.0: mu, tau, sigma and lambda take n >= 1; sigma refuses a sum
+        # past i64. Each factors n once (trial division, then Pollard-Brent).
+        if (fid == EVF_MOBIUS || fid == EVF_NUMDIV || fid == EVF_SIGMA || fid == EVF_CARMICHAEL) {
+            var mt, mn = _int_arg(a);
+            if (is_ok(mt) == 0 || mn < 1) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
+            if (fid == EVF_MOBIUS) { return f64_from(mobius(mn)); }
+            if (fid == EVF_NUMDIV) { return f64_from(num_divisors(mn)); }
+            if (fid == EVF_CARMICHAEL) { return f64_from(carmichael(mn)); }
+            var sgt, sgv = sum_divisors(mn);
+            if (is_ok(sgt) == 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
+            return f64_from(sgv);
+        }
+        if (fid == EVF_ISQRT) {
+            var qt, qn = _int_arg(a);
+            if (is_ok(qt) == 0 || qn < 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
+            return f64_from(_isqrt(qn));
+        }
         var is_fib = 0;
         if (fid == EVF_FIBONACCI) { is_fib = 1; }
         if (fid == EVF_FIB) { is_fib = 1; }
@@ -2229,6 +2421,22 @@ fn call_function(e, name, args, nargs) {
         # divided i64_MIN by it and trapped. (gcd of that pair answered -1 on
         # x86 through 6.6.7.) Every other lcm result is unchanged — the stdlib
         # returns |lcm| whatever the operand signs.
+        # 2.6.0: modinv(a, m) for m >= 1 and gcd(a, m) = 1; jacobi(a, n) for
+        # odd n >= 1. Integers only, as gcd.
+        if (fid == EVF_MODINV || fid == EVF_JACOBI) {
+            var xt, xa = _int_arg(a);
+            var yt, yb = _int_arg(b);
+            if (is_ok(xt) == 0 || is_ok(yt) == 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
+            var zt = 0;
+            var zv = 0;
+            if (fid == EVF_MODINV) {
+                zt, zv = mod_inverse(xa, yb);
+            } else {
+                zt, zv = jacobi(xa, yb);
+            }
+            if (is_ok(zt) == 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
+            return f64_from(zv);
+        }
         if (fid == EVF_GCD) {
             var gat, ga = _int_arg(f64_abs(a));
             var gbt, gb = _int_arg(f64_abs(b));
@@ -2278,6 +2486,32 @@ fn call_function(e, name, args, nargs) {
                 return f64_from(0);
             }
             return f64_from(bv);
+        }
+        eval_set_err(e, ABACO_ERR_UNKNOWN_FN);
+        return f64_from(0);
+    }
+
+    # 3-arg functions (2.6.0)
+    if (nargs == 3) {
+        # modpow(b, e, m) = b^e mod m for integers, m >= 1. A negative e is a
+        # power of b's inverse, refused when b has none mod m. 0 - e of
+        # e = -2^63 wraps back to -2^63, which mod_pow reads as the u64 2^63:
+        # still the right exponent.
+        if (fid == EVF_MODPOW) {
+            var pbt, pb = _int_arg(a);
+            var pet, pe = _int_arg(b);
+            var pmt, pm = _int_arg(load64(args + 16));
+            if (is_ok(pbt) == 0 || is_ok(pet) == 0 || is_ok(pmt) == 0 || pm < 1) {
+                eval_set_err(e, ABACO_ERR_MATH);
+                return f64_from(0);
+            }
+            var pbase = _mod_floor(pb, pm);
+            if (pe < 0) {
+                var pit, piv = mod_inverse(pbase, pm);
+                if (is_ok(pit) == 0) { eval_set_err(e, ABACO_ERR_MATH); return f64_from(0); }
+                return f64_from(mod_pow(piv, 0 - pe, pm));
+            }
+            return f64_from(mod_pow(pbase, pe, pm));
         }
         eval_set_err(e, ABACO_ERR_UNKNOWN_FN);
         return f64_from(0);

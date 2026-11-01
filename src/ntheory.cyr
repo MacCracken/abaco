@@ -1,4 +1,6 @@
-# abaco::ntheory — number theory primitives: primality, factorization, totient, fibonacci, binomial.
+# abaco::ntheory — number theory: primality, factorization, totient, binomial,
+# modular arithmetic (inverse, CRT, Jacobi), integer roots and the
+# multiplicative functions (mu, tau, sigma, lambda, primitive roots).
 
 # Modular exponentiation — a thin wrapper onto the hardware-fast
 # `bayan_u64_powmod` (Cyrius 4.8.5+; the 6.2.x stdlib batching moved it into
@@ -404,4 +406,344 @@ fn abaco_binomial(n, k) {
         i = i + 1;
     }
     return Ok(r);
+}
+
+# ================================================================
+# 2.6.0 — modular arithmetic, integer roots, multiplicative functions
+# ================================================================
+
+# -- Modular inverse --
+# Ok(x) with 0 <= x < m and a*x = 1 (mod m), or Err(0) when m < 1 or
+# gcd(a, m) != 1. a may be any i64 (reduced into [0, m) first); m = 1 gives
+# Ok(0), every residue being 0. Extended Euclid on (a, m): every remainder and
+# Bezout coefficient stays within m in magnitude, so nothing overflows for any
+# m < 2^63. Knuth, TAOCP Vol. 2 (3rd ed.), §4.5.2, Algorithm X.
+fn mod_inverse(a, m) {
+    if (m < 1) { return Err(0); }
+    var r0 = a % m;
+    if (r0 < 0) { r0 = r0 + m; }
+    var r1 = m;
+    var s0 = 1;
+    var s1 = 0;
+    while (r1 != 0) {
+        var q = r0 / r1;
+        var rt = r0 - q * r1;
+        r0 = r1;
+        r1 = rt;
+        var st = s0 - q * s1;
+        s0 = s1;
+        s1 = st;
+    }
+    if (r0 != 1) { return Err(0); }
+    var x = s0 % m;
+    if (x < 0) { x = x + m; }
+    return Ok(x);
+}
+
+# (x mod m) in [0, m) for m >= 1, whatever the sign of x.
+fn _mod_floor(x, m) {
+    var r = x % m;
+    if (r < 0) { r = r + m; }
+    return r;
+}
+
+# -- Chinese remainder theorem --
+# Ok(x), the least x >= 0 with x = residues[i] (mod moduli[i]) for all i <
+# count, unique modulo M = lcm(moduli); Err(0) when count < 1, a modulus < 1,
+# the congruences contradict each other (moduli need not be coprime), or M does
+# not fit in i64. Merged one congruence at a time: with g = gcd(M, m), a
+# solution exists iff g | (r - x), and then x += M * t where
+# t = ((r - x) / g) * inv(M / g) mod (m / g). M * t < lcm(M, m), which is
+# checked to fit first, and the product inside t goes through
+# bayan_u64_mulmod, so no step overflows. Knuth, TAOCP Vol. 2 (3rd ed.),
+# §4.3.2; the non-coprime merge as in Bach & Shallit, Algorithmic Number
+# Theory, Vol. 1 (1996), §5.5.
+fn crt(residues, moduli, count) {
+    if (count < 1) { return Err(0); }
+    var mm = load64(moduli);
+    if (mm < 1) { return Err(0); }
+    var x = _mod_floor(load64(residues), mm);
+    var i = 1;
+    while (i < count) {
+        var m = load64(moduli + i * 8);
+        if (m < 1) { return Err(0); }
+        var r = _mod_floor(load64(residues + i * 8), m);
+        var g = gcd(mm, m);
+        var diff = r - x;
+        if (diff % g != 0) { return Err(0); }
+        var mg = mm / g;
+        var ng = m / g;
+        if (mg > ABACO_I64_MAX / m) { return Err(0); }      # lcm(mm, m) = mg * m
+        if (ng > 1) {
+            var it, inv = mod_inverse(mg, ng);
+            var t = bayan_u64_mulmod(_mod_floor(diff / g, ng), inv, ng);
+            x = x + mm * t;
+        }
+        mm = mg * m;
+        x = _mod_floor(x, mm);
+        i = i + 1;
+    }
+    return Ok(x);
+}
+
+# -- Jacobi symbol --
+# Ok((a / n)) in {-1, 0, 1} for odd n >= 1 (the Legendre symbol when n is
+# prime), or Err(0) for an even or non-positive n. The binary algorithm:
+# strip factors of 2 from a with the second supplement ((2/n) = -1 iff
+# n = 3, 5 mod 8), then swap by quadratic reciprocity (a sign flip iff both are
+# 3 mod 4). Cohen, A Course in Computational Algebraic Number Theory (1993),
+# §1.4.
+fn jacobi(a, n) {
+    if (n < 1 || n % 2 == 0) { return Err(0); }
+    var x = _mod_floor(a, n);
+    var y = n;
+    var s = 1;
+    while (x != 0) {
+        while (x % 2 == 0) {
+            x = x / 2;
+            var r8 = y % 8;
+            if (r8 == 3 || r8 == 5) { s = 0 - s; }
+        }
+        var t = x;
+        x = y;
+        y = t;
+        if (x % 4 == 3 && y % 4 == 3) { s = 0 - s; }
+        x = x % y;
+    }
+    if (y == 1) { return Ok(s); }
+    return Ok(0);
+}
+
+# -- Integer roots --
+
+# 1 when b^k <= n, for b >= 0, k >= 1, n >= 0, without overflowing: each step
+# multiplies only when the product stays at or below n.
+fn _pow_le(b, k, n) {
+    var p = 1;
+    var i = 0;
+    while (i < k) {
+        if (b != 0 && p > n / b) { return 0; }
+        p = p * b;
+        i = i + 1;
+    }
+    if (p <= n) { return 1; }
+    return 0;
+}
+
+# Ok(floor(sqrt(n))) for n >= 0; Err(0) for n < 0. Exact for every i64.
+fn isqrt(n) {
+    if (n < 0) { return Err(0); }
+    return Ok(_isqrt(n));
+}
+
+# Ok(floor(n^(1/k))) for n >= 0 and k >= 1; Err(0) otherwise. An f64 estimate
+# (within a step or two of the root once n passes 2^53), corrected both ways by
+# exact overflow-free comparisons.
+fn iroot(n, k) {
+    if (n < 0 || k < 1) { return Err(0); }
+    if (k == 1 || n < 2) { return Ok(n); }
+    if (k >= 63) { return Ok(1); }                          # 2^63 > every n
+    var r = f64_to(f64_pow(f64_from(n), f64_div(f64_from(1), f64_from(k))));
+    if (r < 1) { r = 1; }
+    while (r > 1 && _pow_le(r, k, n) == 0) { r = r - 1; }
+    while (_pow_le(r + 1, k, n) == 1) { r = r + 1; }
+    return Ok(r);
+}
+
+# 1 when n = m^k for integers m >= 2 and k >= 2, else 0 (so 0 for n < 4).
+# Only prime k need checking: m^(ab) = (m^a)^b.
+fn is_perfect_power(n) {
+    if (n < 4) { return 0; }
+    var k = 2;
+    while (k <= 62) {
+        if (is_prime(k) == 1) {
+            var rt, r = iroot(n, k);
+            if (r < 2) { return 0; }                         # larger k only shrinks r
+            if (_pow_le(r, k, n) == 1 && _pow_le(r, k, n - 1) == 0) { return 1; }
+        }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# -- Prime-power factorization --
+# The distinct primes of n >= 2, ascending, into ps[0..count) and their
+# exponents into es[0..count); returns count (0 for n < 2). An i64 has at most
+# 15 distinct primes (2*3*...*47 < 2^63 < that * 53): 16-slot (128-byte)
+# buffers. Trial division to ABACO_FACTOR_TRIAL, then Pollard-Brent rho on the
+# rest (factor's path), whose at most four primes are sorted and grouped.
+fn _factor_pe(n, ps, es) {
+    var cnt = 0;
+    if (n < 2) { return 0; }
+    if (n % 2 == 0) {
+        var e2 = 0;
+        while (n % 2 == 0) { n = n / 2; e2 = e2 + 1; }
+        store64(ps, 2);
+        store64(es, e2);
+        cnt = 1;
+    }
+    var d = 3;
+    var root = _isqrt(n);
+    var lim = root;
+    if (lim > ABACO_FACTOR_TRIAL) { lim = ABACO_FACTOR_TRIAL; }
+    while (d <= lim) {
+        if (n % d == 0) {
+            var e = 0;
+            while (n % d == 0) { n = n / d; e = e + 1; }
+            store64(ps + cnt * 8, d);
+            store64(es + cnt * 8, e);
+            cnt = cnt + 1;
+            root = _isqrt(n);
+            lim = root;
+            if (lim > ABACO_FACTOR_TRIAL) { lim = ABACO_FACTOR_TRIAL; }
+        }
+        d = d + 2;
+    }
+    if (n == 1) { return cnt; }
+    if (root <= ABACO_FACTOR_TRIAL) {
+        store64(ps + cnt * 8, n);
+        store64(es + cnt * 8, 1);
+        return cnt + 1;
+    }
+    var big[32];
+    var nb = _rho_factor_into(n, &big, 0);
+    _sort_i64(&big, nb);
+    var i = 0;
+    while (i < nb) {
+        var p = load64(&big + i * 8);
+        if (cnt > 0 && load64(ps + (cnt - 1) * 8) == p) {
+            store64(es + (cnt - 1) * 8, load64(es + (cnt - 1) * 8) + 1);
+        } else {
+            store64(ps + cnt * 8, p);
+            store64(es + cnt * 8, 1);
+            cnt = cnt + 1;
+        }
+        i = i + 1;
+    }
+    return cnt;
+}
+
+# -- Multiplicative functions --
+
+# The Moebius function mu(n) for n >= 1: 0 when a square divides n, else
+# (-1)^(number of primes). 0 for n <= 0, where mu is undefined. Hardy &
+# Wright (6th ed.), §16.3.
+fn mobius(n) {
+    if (n < 1) { return 0; }
+    var ps[128];
+    var es[128];
+    var c = _factor_pe(n, &ps, &es);
+    var s = 1;
+    var i = 0;
+    while (i < c) {
+        if (load64(&es + i * 8) > 1) { return 0; }
+        s = 0 - s;
+        i = i + 1;
+    }
+    return s;
+}
+
+# tau(n), the number of divisors of n >= 1: prod(e + 1). 0 for n <= 0. At
+# most 2^15-ish for an i64, so it always fits. Hardy & Wright, §16.7.
+fn num_divisors(n) {
+    if (n < 1) { return 0; }
+    var ps[128];
+    var es[128];
+    var c = _factor_pe(n, &ps, &es);
+    var t = 1;
+    var i = 0;
+    while (i < c) {
+        t = t * (load64(&es + i * 8) + 1);
+        i = i + 1;
+    }
+    return t;
+}
+
+# Ok(sigma(n)), the sum of the divisors of n >= 1: prod(1 + p + ... + p^e),
+# each factor by Horner's rule; Err(0) for n <= 0, or when the sum does not fit
+# in i64 (sigma(n) can pass 2^63 for n above ~2^61). Every product is tested
+# before it is formed. Hardy & Wright, §16.7.
+fn sum_divisors(n) {
+    if (n < 1) { return Err(0); }
+    var ps[128];
+    var es[128];
+    var c = _factor_pe(n, &ps, &es);
+    var s = 1;
+    var i = 0;
+    while (i < c) {
+        var p = load64(&ps + i * 8);
+        var e = load64(&es + i * 8);
+        var f = 1;
+        var j = 0;
+        while (j < e) {
+            if (f > (ABACO_I64_MAX - 1) / p) { return Err(0); }
+            f = f * p + 1;
+            j = j + 1;
+        }
+        if (s > ABACO_I64_MAX / f) { return Err(0); }
+        s = s * f;
+        i = i + 1;
+    }
+    return Ok(s);
+}
+
+# Carmichael's lambda(n) for n >= 1: the exponent of the unit group mod n, the
+# least k with a^k = 1 (mod n) for every a coprime to n. lcm over the prime
+# powers of lambda(p^e) = p^(e-1)(p - 1), except lambda(2^e) = 2^(e-2) for
+# e >= 3. lambda(n) divides phi(n) <= n, so every lcm fits. 0 for n <= 0.
+# Carmichael (1910), Bull. AMS 16, 232-238.
+fn carmichael(n) {
+    if (n < 1) { return 0; }
+    var ps[128];
+    var es[128];
+    var c = _factor_pe(n, &ps, &es);
+    var l = 1;
+    var i = 0;
+    while (i < c) {
+        var p = load64(&ps + i * 8);
+        var e = load64(&es + i * 8);
+        var v = p - 1;
+        var j = 1;
+        while (j < e) { v = v * p; j = j + 1; }
+        if (p == 2 && e >= 3) { v = v / 2; }
+        l = l / gcd(l, v) * v;
+        i = i + 1;
+    }
+    return l;
+}
+
+# Ok(g), the least primitive root modulo n, or Err(0) when n has none. Primitive
+# roots exist exactly for n = 2, 4, p^k and 2p^k with p an odd prime (Gauss,
+# Disquisitiones Arithmeticae, 1801, Section III); n < 2 is Err(0). g generates the
+# units iff g^(phi(n)/q) != 1 (mod n) for every prime q | phi(n). The least
+# root is small, so the scan ends within a few hundred candidates in practice
+# and always ends, a root being known to exist.
+fn primitive_root(n) {
+    if (n < 2) { return Err(0); }
+    if (n == 2) { return Ok(1); }
+    if (n == 4) { return Ok(3); }
+    var m = n;
+    if (m % 2 == 0) { m = m / 2; }
+    if (m % 2 == 0) { return Err(0); }                     # 4 | n, n != 4
+    var ps[128];
+    var es[128];
+    if (_factor_pe(m, &ps, &es) != 1) { return Err(0); }   # m must be a prime power
+    var phi = totient(n);
+    var qs[128];
+    var qe[128];
+    var nq = _factor_pe(phi, &qs, &qe);
+    var g = 2;
+    while (g < n) {
+        if (gcd(g, n) == 1) {
+            var ok = 1;
+            var i = 0;
+            while (ok == 1 && i < nq) {
+                if (mod_pow(g, phi / load64(&qs + i * 8), n) == 1) { ok = 0; }
+                i = i + 1;
+            }
+            if (ok == 1) { return Ok(g); }
+        }
+        g = g + 1;
+    }
+    return Err(0);
 }

@@ -372,6 +372,11 @@ fn test_tons_and_absolute_zero(r) {
     assert_eq(reg_err(r), UERR_NONE, "-459.67 F (absolute zero, with rounding) is allowed");
     UnitRegistry_convert(r, 0xC071126666666666, "C", "F");
     assert_eq(reg_err(r), UERR_NONE, "-273.15 C is allowed");
+    # 2.6.0: the margin is 1e-12 K, not 1e-9 (2.6.0 P(-1) review).
+    UnitRegistry_convert(r, f64_div(f64_from(0 - 1), f64_from(1000000000)), "K", "K");
+    assert_eq(reg_err(r), UERR_CONVERT, "-1e-9 K refused (was accepted)");
+    UnitRegistry_convert(r, f64_div(f64_from(0 - 5), f64_from(10000000000)), "K", "C");
+    assert_eq(reg_err(r), UERR_CONVERT, "-5e-10 K refused (was accepted)");
     return 0;
 }
 

@@ -146,8 +146,12 @@ fn UnitRegistry_list(r, category) {
     return result;
 }
 
-# -273.15 C less 1e-9 K: the lowest base value a temperature may have.
-var UNITS_ABS_ZERO_C = 0xC07112666666AB1E;
+# -273.15 C less 1e-12 K: the lowest base value a temperature may have. The
+# margin absorbs the rounding at -459.67 F, which lands 3e-14 below -273.15
+# (-273.15000000000003), and nothing more: through 2.5.2 it was 1e-9 K, ~30,000
+# times that, and -1e-9 K converted to a negative temperature (2.6.0 P(-1)
+# review).
+var UNITS_ABS_ZERO_C = 0xC071126666666678;
 
 # 1 if x is finite and > 0. A reciprocal unit (L/100km) has no meaning for a
 # zero, negative or non-finite amount, and a subnormal one overflows to Inf.
@@ -173,7 +177,7 @@ fn UnitRegistry_convert(r, value, from_str, to_str) {
     # A temperature below absolute zero is not a temperature (2.4.10; through
     # 2.4.9 -300 C converted to -26.85 K). Checked before the same-unit
     # shortcut so "-300 C to C" is refused too. The base unit is Celsius; the
-    # 1e-9 margin keeps rounding at the boundary (-459.67 F) from refusing
+    # 1e-12 margin keeps rounding at the boundary (-459.67 F) from refusing
     # absolute zero itself.
     if (Unit_category(from_u) == CAT_TEMPERATURE) {
         var tb = f64_mul(f64_add(value, Unit_offset(from_u)), Unit_factor(from_u));

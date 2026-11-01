@@ -10,28 +10,6 @@
 > against an oracle that does not call the code under test, and has a bench row
 > before and after.
 
-## 2.6.0 — number theory: modular arithmetic and multiplicative functions
-
-- [ ] **Modular arithmetic.**
-      - `mod_inverse(a, m)`: extended Euclid, refused when gcd(a, m) ≠ 1.
-      - `crt(residues, moduli, n)`: general CRT, with a consistency check for
-        moduli that are not coprime, and overflow-checked through 128-bit
-        products.
-- [ ] **`jacobi(a, n)`**, with Legendre as the prime case. Cohen, *A Course in
-      Computational Algebraic Number Theory*, Alg. 1.4.10.
-- [ ] **Multiplicative functions from one factorisation**: `mobius(n)`,
-      `num_divisors(n)` (τ), `sum_divisors(n)` (σ₁), `carmichael(n)` (λ), plus
-      `primitive_root(p)`.
-- [ ] **Integer roots**: `isqrt(n)`, `iroot(n, k)` and `is_perfect_power(n)`,
-      exact for every i64. Newton's method on integers, with the overflow-free
-      bound `factor` already uses.
-- [ ] **Evaluator names for the scalar functions**: `modinv`, `modpow`,
-      `jacobi`, `mobius`, `numdiv`, `sigma`, `carmichael`, `isqrt`. `tau`
-      stays the constant 2π.
-- [ ] **Tests**: identities (Σ_{d|n} μ(d) = [n = 1], σ and τ multiplicative,
-      a · modinv(a) ≡ 1 (mod m), and CRT's answer reduces to every residue),
-      plus brute-force oracles for n < 10^6 in `fuzz_ntheory`.
-
 ## 2.7.0 — DSP: window catalogue and biquad design
 
 - [ ] **Windows**: Bartlett, Tukey(α), Gaussian(σ), Nuttall, 4-term
@@ -156,10 +134,14 @@
 - [ ] **TLS 1.2-only servers**: offer 1.3, then fall back to 1.2. Today
       such a server is `AI_ERR_TLS`.
 
-## Upstream asks (bayan)
+## Upstream asks
 
-Filed in bayan's `docs/development/issues/`. When a Cyrius release ships one,
-abaco re-measures:
+- **lib/net.cyr: a name lookup that takes a deadline.** `net_resolve_ipv4`
+  gives up only after 2 tries of up to 8 replies, 2 s each (~32 s). From 2.6.0
+  abaco's HTTPS deadline counts the lookup, but cannot cut it short.
+
+**bayan.** Filed in bayan's `docs/development/issues/`. When a Cyrius release
+ships one, abaco re-measures:
 - `bayan_u64_powmod` shifts its exponent with a call on every bit, ~28 %
   slower since bayan 1.5.10;
 - a `bayan_u64_mulmod_reduced` fast path would recover Miller–Rabin's 1.53×;

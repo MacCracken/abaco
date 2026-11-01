@@ -34,6 +34,27 @@ fn _bench_totient() { totient(1000000); return 0; }
 fn _bench_factor_semiprime62() { factor(4611685975477714963); return 0; }
 fn _bench_totient_semiprime62() { totient(4611685975477714963); return 0; }
 fn _bench_fibonacci() { fibonacci(92); return 0; }
+# 2.6.0: modular arithmetic, integer roots, multiplicative functions.
+fn _bench_mod_inverse() { mod_inverse(123456789, 1000000007); return 0; }
+fn _bench_jacobi() { jacobi(123456789, 9223372036854775783); return 0; }
+fn _bench_crt3() {
+    var rs[24];
+    var ms[24];
+    store64(&rs, 2);
+    store64(&rs + 8, 3);
+    store64(&rs + 16, 2);
+    store64(&ms, 1000000007);
+    store64(&ms + 8, 998244353);
+    store64(&ms + 16, 65537);
+    crt(&rs, &ms, 3);
+    return 0;
+}
+fn _bench_mobius() { mobius(1234567890); return 0; }
+fn _bench_sum_divisors() { sum_divisors(1234567890); return 0; }
+fn _bench_carmichael() { carmichael(1234567890); return 0; }
+fn _bench_primitive_root() { primitive_root(1000000007); return 0; }
+fn _bench_iroot3() { iroot(1000000000000000000, 3); return 0; }
+fn _bench_is_perfect_power() { is_perfect_power(4052555153018976267); return 0; }
 # abaco_binomial, the evaluator's binomial since 2.4.9. A new row name, so the
 # trail does not splice it onto the `binomial` row, which measured ganita's
 # `binomial` through 2.4.8.
@@ -72,6 +93,42 @@ fn run_ntheory_benches() {
 
     b = bench_new("totient_semiprime62");
     bench_run(b, &_bench_totient_semiprime62, 200);
+    bench_report(b);
+
+    b = bench_new("mod_inverse");
+    bench_run(b, &_bench_mod_inverse, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("jacobi");
+    bench_run(b, &_bench_jacobi, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("crt3");
+    bench_run(b, &_bench_crt3, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("mobius");
+    bench_run(b, &_bench_mobius, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("sum_divisors");
+    bench_run(b, &_bench_sum_divisors, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("carmichael");
+    bench_run(b, &_bench_carmichael, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("primitive_root");
+    bench_run(b, &_bench_primitive_root, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("iroot3");
+    bench_run(b, &_bench_iroot3, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("is_perfect_power");
+    bench_run(b, &_bench_is_perfect_power, BENCH_ITERS);
     bench_report(b);
 
     b = bench_new("fibonacci");

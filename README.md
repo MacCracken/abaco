@@ -17,9 +17,9 @@ math engine you can wrap any way you like, this is it.
 | Module | What it does |
 |--------|--------------|
 | [`core`](src/core.cyr)     | `Value` (Integer / Float / Fraction / Complex / Text), `Unit`, `UnitCategory` (19 categories), `Currency`, `ConversionResult` |
-| [`ntheory`](src/ntheory.cyr) | `is_prime` (deterministic Miller–Rabin), `next_prime` / `prev_prime`, `factor`, `totient`, `mod_pow`, `abaco_binomial` (exact whenever the result fits in i64) |
+| [`ntheory`](src/ntheory.cyr) | `is_prime` (deterministic Miller–Rabin), `next_prime` / `prev_prime`, `factor` / `totient` (Pollard–Brent rho past trial division), `mod_pow`, `mod_inverse`, `crt`, `jacobi`, `isqrt` / `iroot` / `is_perfect_power`, `mobius`, `num_divisors`, `sum_divisors`, `carmichael`, `primitive_root`, `abaco_binomial` (exact whenever the result fits in i64) |
 | [`dsp`](src/dsp.cyr)       | dB ↔ amplitude, MIDI ↔ frequency, envelope time constants, PolyBLEP, panning, crossfade, Hann / Hamming / Blackman / Kaiser windows (symmetric, and periodic / DFT-even for STFT), cubic / sinc interpolation, chromagram helpers, SIMD batch ops, samples ↔ ms, BPM ↔ Hz |
-| [`eval`](src/eval.cyr)     | Tokenizer + recursive-descent parser, 43+ functions, variables, implicit multiplication, `%` operator, scientific notation, `eval_partial` for live-as-you-type feedback |
+| [`eval`](src/eval.cyr)     | Tokenizer + recursive-descent parser, 56 functions, variables, implicit multiplication, `%` operator, scientific notation, `eval_partial` for live-as-you-type feedback |
 | [`units`](src/units.cyr)   | Built-in units in 19 categories with factors exact to the definition (NIST SP 811), O(1) hashmap lookup, reciprocal units (L/100km), pitch (semitones / cents / octaves), BPM via frequency |
 | [`ai`](src/ai.cyr)         | Natural-language parsing (`"convert 5 km to miles"`, `"what is 15% of 230"`), bounded calculation history with JSON save/load, currency cache + a live rates fetch: plaintext from a loopback server, or HTTPS when built with `-D ABACO_TLS` (opt-in, see below) |
 
@@ -60,7 +60,7 @@ stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "tagged",
 
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.5.2"
+tag = "2.6.0"
 modules = ["dist/abaco.cyr"]   # self-contained library bundle
 ```
 
@@ -140,9 +140,10 @@ fn main() {
 - **The response** must carry a `Content-Length` matching its body; no
   redirects, no chunked encoding, 64 KB at most, IPv4 only.
 - **Time:** 10 s per step (the connect, the handshake, the request, each
-  read), and **30 s for the whole fetch** (name resolution has lib/net.cyr's
-  own bound before it), so a peer that keeps every step just under 10 s is
-  cut at 30 s. Both bounds are lib/tls.cyr's own deadline (`tls_set_deadline`)
+  read), and **30 s for the whole fetch**, name lookup included, so a peer
+  that keeps every step just under 10 s is cut at 30 s. (The lookup alone
+  cannot be cut: lib/net.cyr's resolver takes no deadline and gives up after
+  ~32 s at worst.) Both bounds are lib/tls.cyr's own deadline (`tls_set_deadline`)
   on Linux, macOS and Windows; a fetch starts no thread. A fetch still blocks
   its thread for up to that long, so do not fetch on a UI thread.
 - **Cost** (x86_64, Cyrius 6.7.9, abaco 2.5.0): listing `tls` grows a
@@ -159,7 +160,7 @@ Details and error codes: [`docs/guides/consuming-abaco.md`](docs/guides/consumin
 (the 2.4.12, 2.5.0 and 2.5.1 upgrade notes; 2.5.1 lists the Cyrius 6.7.18 TLS
 advisories behind the ≥ 6.7.18 recommendation).
 
-## Supported functions (43+)
+## Supported functions (56)
 
 **Basic** `sqrt`, `abs`, `exp`, `sign`/`sgn`, `deg`, `rad`, `min`, `max`, `pow`, `gcd`, `lcm`, `factorial`, `n!`
 **Trig** `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`
@@ -167,7 +168,7 @@ advisories behind the ≥ 6.7.18 recommendation).
 **Logs** `log` (log10), `ln`, `log2`
 **Rounding** `ceil`, `floor`, `round`, `trunc`, `fract`
 **Statistical** `mean` / `avg`, `median`, `stddev` / `stdev`
-**Number theory** `isprime`, `nextprime`, `prevprime`, `totient`, `fibonacci` / `fib`, `binomial` / `choose`
+**Number theory** `isprime`, `nextprime`, `prevprime`, `totient`, `fibonacci` / `fib`, `binomial` / `choose`, `modinv`, `modpow`, `jacobi`, `mobius`, `numdiv`, `sigma`, `carmichael`, `isqrt`
 
 ## Unit categories (19)
 

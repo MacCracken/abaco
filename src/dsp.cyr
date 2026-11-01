@@ -620,8 +620,12 @@ fn sinc_kernel(x, half_width) {
     if (f64_gt(ax, half_width) == 1) { return f64_from(0); }
     # Hann envelope 0.5 * (1 - cos(pi (x + hw) / hw)) = 0.5 * (1 + cos(pi |x| / hw)),
     # on |x| so k(x) == k(-x) bit for bit (through 2.4.9 it was built from the
-    # signed x + hw, a few ulp asymmetric).
-    var env = f64_mul(DSP_HALF, f64_add(DSP_ONE, f64_cos(f64_div(f64_mul(DSP_PI, ax), half_width))));
+    # signed x + hw, a few ulp asymmetric). The ratio |x| / hw comes first: it
+    # lies in [0, 1] and is exactly 1 at the edge. Through 2.5.2 the product
+    # pi |x| came first, which rounds to a few ulp for a subnormal hw
+    # (sinc_kernel(5e-324, 5e-324) was 0.005, not 0) and overflows past
+    # |x| ~ 5.7e307 (NaN) (2.6.0 P(-1) review).
+    var env = f64_mul(DSP_HALF, f64_add(DSP_ONE, f64_cos(f64_mul(DSP_PI, f64_div(ax, half_width)))));
     return f64_mul(f64_sinc(x), env);
 }
 
