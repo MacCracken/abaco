@@ -198,6 +198,80 @@ source. No magic numbers.
       Functions*, eq. 9.6.12 (the series for I₀).
   - Kaiser, J. F. (1974). "Nonrecursive digital filter design using the
     I₀-sinh window function." *Proc. IEEE ISCAS*, 20–23.
+  - **2.7.0 windows**, each symmetric and periodic under the same
+    conventions: bit-exact symmetric on the integer 2n − d, and periodic(n, N)
+    is symmetric(n, N + 1) bit for bit.
+    - **Nuttall** (4-term, continuous first derivative; −93 dB side lobes):
+      a = 0.3635819, 0.4891775, 0.1365995, 0.0106411.
+    - **Blackman–Harris** (4-term, −92 dB): a = 0.35875, 0.48829, 0.14128,
+      0.01168 (Harris 1978).
+    - **Flat-top** (5-term): a = 0.21557895, 0.41663158, 0.277263158,
+      0.083578947, 0.006947368, the coefficients of
+      `scipy.signal.windows.flattop` and MATLAB's `flattopwin`. Its peak is
+      1.000000003 and its ends dip to −0.000421, as published.
+    - The cosine sums are evaluated in the centred phase φ = θ − π, where
+      cos kθ = (−1)ᵏ cos kφ, so every term is added. The coefficients are the
+      correctly rounded doubles of the published decimals.
+    - **Bartlett:** (d − |2n − d|) / d, one rounding, so it is correctly
+      rounded.
+    - **Tukey(α):** flat over 1 − α, with Hann halves over α/2 at each end.
+      α ≤ 0 is rectangular and α ≥ 1 is Hann bit for bit, as scipy defines
+      the ends.
+    - **Gaussian(σ):** exp(−t²/2) with t = (2n − d)/(2σ), σ in samples
+      (scipy's `std`). σ = 0 is the limit, the centre impulse, and σ = +Inf is
+      rectangular.
+    - **Accuracy:** checked against 45-digit Decimal formulas over every
+      sample of sizes 1–130, 1000 and 4097. The cosine sums and Tukey are
+      within 1.54 ulp of the peak and the Gaussian within 0.65 ulp of the
+      peak; Bartlett is exact.
+    - Nuttall, A. H. (1981). "Some windows with very good sidelobe behavior."
+      *IEEE Trans. Acoustics, Speech, and Signal Processing* 29(1), 84–91.
+      doi:10.1109/TASSP.1981.1163506
+    - Bingham, C., Godfrey, M. D. & Tukey, J. W. (1967). "Modern techniques
+      of power spectrum estimation." *IEEE Trans. Audio and Electroacoustics*
+      15(2), 56–66. doi:10.1109/TAU.1967.1161895
+    - D'Antona, G. & Ferrero, A. (2006). *Digital Signal Processing for
+      Measurement Systems: Theory and Applications.* Springer (the flat-top).
+  - **Window metrics** (2.7.0), defined as in Harris 1978, Table I, for any
+    window buffer:
+    - **Coherent gain:** Σw / N.
+    - **Equivalent noise bandwidth:** N·Σw² / (Σw)², in bins.
+    - **Scalloping loss:** −20 log₁₀(|Σ w(k) e^(−iπk/N)| / Σw), in dB.
+
+    Sums are compensated (Neumaier). For the periodic cosine sums the gain is
+    exactly a₀, and the ENBW is (a₀² + (a₁² + a₂² + …)/2) / a₀². The tests
+    pin rectangular, Hann, Blackman–Harris, Nuttall and flat-top against
+    45-digit references.
+- **Biquad filters (2.7.0)** — `biquad_design`, `biquad_response` and
+  `biquad_process`.
+  - **Design:** the RBJ cookbook's low-pass, high-pass, band-pass (constant
+    skirt and 0 dB peak), notch, all-pass, peaking EQ and both shelves, with
+    the shelves taking Q (S = 1 is Q = 1/√2). The formulas are the
+    bilinear-transform images of the analog prototypes, prewarped so f0 maps
+    exactly. abaco forms 1 − cos w₀ as 2 sin²(w₀/2) and 1 + cos w₀ as
+    2 cos²(w₀/2), which do not cancel near DC or Nyquist. Over 1,135 designs
+    the coefficients are within 3.6 ulp of the largest coefficient, against
+    45-digit Decimal from the exact inputs.
+  - **Response:** each of N(e^jw) and D(e^jw) is expanded about the nearer of
+    DC and Nyquist, in e = sin²(w/2) or cos²(w/2). Near poles at z = ±1 the
+    leading sums 1 ± a₁ + a₂ and a₁ ± 2a₂ are then exact (Sterbenz), where
+    1 + a₁ cos w + a₂ cos 2w and a₁ sin w + a₂ sin 2w cancel. Next to Nyquist,
+    π − w is formed from fs/2 − f, so sin w keeps its relative accuracy.
+    Mid-band, where |cos w| < ½, it uses the direct form.
+  - **Accuracy:** on 10,581 response points (|H| > 1e-9) against exact
+    evaluation of the stored coefficients, p99 is 5.5 ulp, where the direct form gives 250,098.
+    The worst well-conditioned point is 100 ulp, at Q 41 mid-band, which is
+    the rounding of w itself and matches the direct form. The phase is within
+    6.2e-14 rad away from the zeros of H.
+  - **Processing:** transposed direct form II, with the two-sample state
+    owned by the caller.
+  - Bristow-Johnson, R. "Cookbook formulae for audio equalizer biquad filter
+    coefficients." Published as *Audio EQ Cookbook*, W3C Working Group Note,
+    8 June 2021. https://www.w3.org/TR/audio-eq-cookbook/
+  - Smith, J. O. (2007). *Introduction to Digital Filters with Audio
+    Applications.* W3K Publishing (transposed direct form II).
+  - Sterbenz, P. H. (1974). *Floating-Point Computation.* Prentice-Hall (the
+    subtraction of doubles within a factor of 2 of each other is exact).
 - **Windowed-sinc interpolation kernel.**
   - Shannon, C. E. (1949). "Communication in the Presence of Noise."
     *Proc. IRE*, 37(1), 10–21 (Whittaker–Shannon interpolation).
@@ -452,20 +526,43 @@ source. No magic numbers.
   ulp. The remainder R = S − q·n is formed exactly: n ≤ 32 has at most 6
   significant bits, so q's top 27 significant bits times n, and the rest of q
   times n, are each exact. q then steps to its neighbour while 2|R| > n·|q′ − q|,
-  decided exactly as an expansion, with ties to even. The arguments are scaled
-  down by 2ᵏ only when a partial sum overflows. 2.4.10–2.5.2 used a
-  Neumaier-compensated sum of arguments scaled into [1, 2). The 2.6.0 review
-  found 292 of 20,000 random means wrong, some by everything (a 7.6e120 mean
-  came back 0); now 0 of 20,000, and 0 of 5,000 subnormal-heavy ones.
+  decided exactly as an expansion, with ties to even.
+  - **Overflow.** When a partial sum overflows (2.7.0), every argument is
+    split exactly as x = 2ᵏa + b: a = x·2⁻ᵏ rounded, and b = x − 2ᵏa, which
+    lies on the 2⁻¹⁰⁷⁴ grid. Σb is then one exact double B, and
+    S = 2ᵏA + B exactly.
+    - A small A unscales exactly, and the mean finishes on the true grid.
+    - Otherwise every sign the rounding needs, sign(2ᵏX + y), is taken
+      exactly.
+
+    2.6.0 rounded on the scaled grid instead: 619 of 10,000 overflowing means
+    were wrong, up to 31 ulp, and the answer depended on the argument order.
+  - **History.** 2.4.10–2.5.2 used a Neumaier-compensated sum of arguments
+    scaled into [1, 2). The 2.6.0 review found 292 of 20,000 random means
+    wrong, some by everything: a 7.6e120 mean came back 0.
+  - **Checked:** 420,000 means in seven sets, and 80,000 adversarial
+    overflowing ones, all exact.
   - Shewchuk, J. R. (1997). "Adaptive precision floating-point arithmetic and
     fast robust geometric predicates." *Discrete & Computational Geometry* 18,
     305–363. doi:10.1007/PL00009321
 - **stddev / stdev (`_eval_stddev`)** — the population form √(Σ(x − x̄)²/n),
-  on arguments scaled so max |x| lies in [1, 2) (no overflow or underflow of
-  the deviations or squares). From 2.6.0 it uses the corrected two-pass sum
-  Σd² − (Σd)²/n, which takes out the mean's rounding error. Within 9 ulp on
-  10,000 clustered cases, where the uncorrected form of 2.4.10–2.5.2 was off
-  by up to 443,769 ulp.
+  on arguments scaled so that max |x| lies in [1, 2), so neither the
+  deviations nor their squares overflow or underflow.
+  - **2.6.0:** the corrected two-pass sum Σd² − (Σd)²/n. The uncorrected form
+    of 2.4.10–2.5.2 was off by up to 443,769 ulp.
+  - **2.7.0:**
+    - the mean is a double-double, from the exact sum and its exact
+      remainder;
+    - each deviation is an exact two-sum, less the low part, renormalised and
+      squared as a double-double (Dekker's two-product);
+    - Σd² is compensated.
+
+    It is within 1 ulp on every corpus, where 2.6.0 was 57–89 ulp off on data
+    spread less than an ulp of the mean.
+  - Knuth, D. E. (1997). *The Art of Computer Programming*, vol. 2, 3rd ed.,
+    §4.2.2 (two-sum).
+  - Dekker, T. J. (1971). "A floating-point technique for extending the
+    available precision." *Numer. Math.* 18, 224–242 (two-product).
   - Chan, T. F., Golub, G. H. & LeVeque, R. J. (1983). "Algorithms for
     computing the sample variance: analysis and recommendations." *The
     American Statistician* 37(3), 242–247.

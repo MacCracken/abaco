@@ -10,6 +10,8 @@
 - [x] Window functions — Hann, Hamming, Blackman, Kaiser (2026-04-14)
 - [x] Interpolation math — linear lerp, cubic, windowed sinc kernel (2026-04-14)
 - [x] Chromagram helpers — `freq_to_pitch_class`, `freq_to_octave`, `pitch_class_name`, `DSP_C0_FREQ` (2026-04-14)
+- [x] Window catalogue — Nuttall, Blackman–Harris, flat-top, Bartlett, Tukey, Gaussian, symmetric and periodic; coherent gain, ENBW, scalloping loss (2026-10-31, 2.7.0)
+- [x] RBJ biquads — `biquad_design` (nine kinds), `biquad_response`, `biquad_process` in TDF-II (2026-10-31, 2.7.0)
 
 ## Audio Unit Conversions
 

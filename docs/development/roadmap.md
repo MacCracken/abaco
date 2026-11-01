@@ -10,26 +10,6 @@
 > against an oracle that does not call the code under test, and has a bench row
 > before and after.
 
-## 2.7.0 — DSP: window catalogue and biquad design
-
-- [ ] **Windows**: Bartlett, Tukey(α), Gaussian(σ), Nuttall, 4-term
-      Blackman–Harris and flat-top, each in a symmetric and a periodic form.
-      Each is bit-exact symmetric and checked against `scipy.signal`, as the
-      four existing windows are. Source: Harris 1978, *Proc. IEEE* 66(1).
-- [ ] **Window metrics**: coherent gain, equivalent noise bandwidth and
-      scalloping loss for any window buffer (Harris 1978, Table 1).
-- [ ] **Biquad coefficient design** from the RBJ Audio EQ Cookbook:
-      low-pass, high-pass, band-pass (both gains), notch, all-pass,
-      peaking EQ, low shelf and high shelf. Each returns a normalised
-      `(b0, b1, b2, a1, a2)`. Built on the existing `angular_frequency` and
-      `db_gain_factor`.
-- [ ] **`biquad_response(coeffs, f, fs)`**, giving magnitude and phase at a
-      frequency, and **`biquad_process(coeffs, state, src, dst, n)`** in
-      transposed direct form II. The state buffer belongs to the caller; no
-      globals.
-- [ ] **Tests**: the cookbook's analytic gains at DC, Nyquist and f0, and
-      the response function checked against a direct evaluation of H(z).
-
 ## 2.8.0 — DSP: FFT
 
 - [ ] **Radix-2 complex FFT / inverse FFT**, in place, for power-of-two

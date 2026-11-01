@@ -12,7 +12,7 @@ In your project's `cyrius.cyml`:
 ```toml
 [deps.abaco]
 git = "https://github.com/MacCracken/abaco.git"
-tag = "2.6.0"                 # pin to a released tag, never a branch
+tag = "2.7.0"                 # pin to a released tag, never a branch
 modules = ["dist/abaco.cyr"]  # the bundle is the only file you name
 ```
 
@@ -92,7 +92,7 @@ fn main() {
 | Expressions | `Evaluator_new`, `Evaluator_set_variable`, `Evaluator_eval`, `Evaluator_eval_partial` | `eval` |
 | Units | `UnitRegistry_new`, `UnitRegistry_convert`, `UnitRegistry_find`, `UnitRegistry_list` | `units` |
 | Number theory | `is_prime`, `next_prime`, `prev_prime`, `factor`, `totient`, `mod_pow`, `mod_inverse`, `crt`, `jacobi`, `isqrt`, `iroot`, `is_perfect_power`, `mobius`, `num_divisors`, `sum_divisors`, `carmichael`, `primitive_root`, `abaco_binomial` | `ntheory` |
-| DSP | windows (`window_hann` … symmetric, for FIR design; `window_hann_periodic` … DFT-even, for FFT / STFT), `amplitude_to_db`, MIDI↔freq, interpolation, chromagram, batch ops — every value argument an **f64 bit pattern** (`time_constant(f64_from(10), f64_from(48000))`, not `48000`), a sample count included (`samples_to_ms(f64_from(441), f64_from(44100))`; `ms_to_samples` returns an f64 too); the plain integers are window indices and sizes (`window_hann(n, size)`), batch lengths `n`, buffer and out pointers, pitch-class numbers and the octave `freq_to_octave` returns | `dsp` |
+| DSP | windows (`window_hann` … symmetric, for FIR design; `window_hann_periodic` … DFT-even, for FFT / STFT), window metrics (`window_enbw` …), biquads (`biquad_design`, `biquad_response`, `biquad_process`), `amplitude_to_db`, MIDI↔freq, interpolation, chromagram, batch ops — every value argument an **f64 bit pattern** (`time_constant(f64_from(10), f64_from(48000))`, not `48000`), a sample count included (`samples_to_ms(f64_from(441), f64_from(44100))`; `ms_to_samples` returns an f64 too); the plain integers are window indices and sizes (`window_hann(n, size)`), batch lengths `n`, buffer and out pointers, pitch-class numbers and the octave `freq_to_octave` returns | `dsp` |
 | Values | `Value_*`, `Unit`, `ConversionResult` | `core` |
 | NL / history / currency | `nl_parse`, `CalcHistory_*`, `CurrencyCache_*` (`CurrencyCache_set_ca_file` to pin a CA); over `https://` also `abaco_tls_init` — opt-in, `-D ABACO_TLS` plus `tls` in your stdlib | `ai` |
 
@@ -101,6 +101,29 @@ fn main() {
 Bump the `tag` and run `cyrius deps`. abaco follows SemVer (post-1.0): patch and
 minor bumps are source-compatible; a major bump documents breaking changes in
 [`CHANGELOG.md`](../../CHANGELOG.md) with a migration section.
+
+### 2.7.0 — windows, biquads, and three fixes
+
+- **New in the library (`dsp`):**
+  - Windows: `window_nuttall`, `window_blackman_harris`, `window_flattop`,
+    `window_bartlett`, `window_tukey(n, size, alpha)` and
+    `window_gaussian(n, size, sigma)`, each with a `_periodic` form.
+  - Window metrics: `window_coherent_gain`, `window_enbw` and
+    `window_scalloping_loss`, each taking `(w, n)`.
+  - Biquads: `biquad_design(out, kind, f0, fs, q, gain_db)` (`Ok` / `Err`,
+    kinds `DSP_BQ_*`), `biquad_response(c, f, fs)` returning
+    `(magnitude, phase)`, and `biquad_process(c, state, src, dst, n)`.
+
+  A new name can collide with one you define yourself; rename yours if so.
+  `out` is 40 bytes (5 f64s), and `state` is 16 bytes that you zero before
+  the first block.
+- **`mean` results can change** only where a partial sum overflows, that is,
+  with arguments near ±DBL_MAX. That path is now correctly rounded too, and
+  independent of argument order.
+- **`stddev` results can change** by an ulp or two. It is now within 1 ulp,
+  and ~0.5 µs slower for 8 arguments.
+- **A malformed call past 32 arguments is `ABACO_ERR_PARSE`**, as below the
+  cap. A call past the cap that parses is still `ABACO_ERR_ARITY`.
 
 ### 2.6.0 — number theory, and the P(-1) review's fixes
 

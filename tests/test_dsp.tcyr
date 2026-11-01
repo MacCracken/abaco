@@ -827,6 +827,483 @@ fn test_audio_conv() {
     return 0;
 }
 
+# ---- 2.7.0: more windows, window metrics, biquads ----
+
+# |actual - expected| <= tol, absolute: the cosine-sum windows' error is ~1 ulp
+# of the peak, not of the sample, where their terms cancel near the ends.
+fn near_abs(actual, expected, tol, name) {
+    assert(f64_le(f64_abs(f64_sub(actual, expected)), tol) == 1, name);
+    return 0;
+}
+
+# References: python3, the exact rational phase in 45-digit Decimal (Machin pi,
+# Taylor cos and exp) with the published decimal coefficients, rounded once.
+# Every sample of every size 1..130, 1000 and 4097 is within 1.54 ulp of 1.0
+# for the cosine sums and Tukey and 0.65 for the Gaussian; Bartlett is
+# correctly rounded. Rows here allow 4 ulp of 1.0 (2^-50).
+fn test_window_270_values() {
+    var tol = 0x3CD0000000000000;
+    near_abs(window_nuttall(16, 64), 0x3FCE_88E3_A2EB_42E7, tol, "nuttall(16,64)");
+    near_abs(window_nuttall_periodic(16, 64), 0x3FCD_0DC2_6062_4067, tol, "nuttall_p(16,64)");
+    near_abs(window_nuttall(0, 64), 0x3F37_C6C6_228E_A041, tol, "nuttall(0,64) = 0.0003628");
+    near_abs(window_nuttall(32, 65), DSP_ONE, tol, "nuttall centre = 1");
+    near_abs(window_nuttall(200, 1001), 0x3FBC_4ABA_458E_F0EA, tol, "nuttall(200,1001)");
+    near_abs(window_nuttall_periodic(200, 1001), 0x3FBC_333B_BF37_1D8E, tol, "nuttall_p(200,1001)");
+    near_abs(window_blackman_harris(16, 64), 0x3FCD_4E1B_C66E_2945, tol, "blackman_harris(16,64)");
+    near_abs(window_blackman_harris_periodic(16, 64), 0x3FCB_D60E_94EE_392E, tol, "blackman_harris_p(16,64)");
+    near_abs(window_blackman_harris(0, 64), 0x3F0F_7510_4D55_1D69, tol, "blackman_harris(0,64) = 6e-5");
+    near_abs(window_blackman_harris_periodic(200, 1001), 0x3FBA_4823_D3F9_C6ED, tol, "bh_p(200,1001)");
+    near_abs(window_flattop(16, 64), 0xBFA9_BF0A_7EAC_B756, tol, "flattop(16,64) < 0");
+    near_abs(window_flattop_periodic(16, 64), 0xBFAC_0677_935F_6DCF, tol, "flattop_p(16,64)");
+    near_abs(window_flattop(0, 64), 0xBF3B_9810_4662_FF98, tol, "flattop(0,64) = -0.000421051");
+    near_abs(window_flattop(32, 65), 0x3FF0_0000_00CE_288F, tol, "flattop centre = 1.000000003, as published");
+    near_abs(window_flattop_periodic(200, 1001), 0xBFB1_5188_C017_B8C9, tol, "flattop_p(200,1001)");
+    # Tukey alpha 0.5, 0.25, 0.3 (the double nearest 0.3).
+    var a5 = f64_div(DSP_ONE, DSP_TWO);
+    near_abs(window_tukey(5, 64, a5), 0x3FCD_46EC_0908_4AFD, tol, "tukey(5,64,0.5)");
+    near_abs(window_tukey_periodic(5, 64, a5), 0x3FCC_7189_8CA3_2E6F, tol, "tukey_p(5,64,0.5)");
+    near_abs(window_tukey(12, 64, a5), 0x3FEB_BA94_997C_7DB2, tol, "tukey(12,64,0.5)");
+    near_abs(window_tukey_periodic(12, 64, a5), 0x3FEB_504F_333F_9DE6, tol, "tukey_p(12,64,0.5)");
+    near_abs(window_tukey(3, 64, f64_div(DSP_ONE, f64_from(4))), 0x3FD4_4F20_570E_B1B8, tol, "tukey(3,64,0.25)");
+    assert_eq(window_tukey(40, 101, f64_div(f64_from(3), f64_from(10))), DSP_ONE, "tukey(40,101,0.3) is flat: 1");
+    # Gaussian sigma 8, 2.5, 7/3. Far out exp loses ~|t^2/2| ulp to the
+    # rounding of t (the 1e-19 row: t^2 / 2 ~ 42), so that row is relative.
+    var s8 = f64_from(8);
+    near_abs(window_gaussian(16, 64, s8), 0x3FC3_9754_9605_7AD8, tol, "gaussian(16,64,8)");
+    near_abs(window_gaussian_periodic(16, 64, s8), 0x3FC1_52AA_A3BF_81CC, tol, "gaussian_p(16,64,8)");
+    near_ulp(window_gaussian(0, 64, s8), 0x3F3C_2C8F_521F_84CB, 16, "gaussian(0,64,8)");
+    near_ulp(window_gaussian_periodic(0, 64, s8), 0x3F35_FC21_0410_27AD, 16, "gaussian_p(0,64,8)");
+    var s25 = f64_div(f64_from(5), DSP_TWO);
+    assert_eq(window_gaussian(500, 1001, s25), DSP_ONE, "gaussian centre is exactly 1");
+    near_abs(window_gaussian_periodic(500, 1001, s25), 0x3FEF_5DC9_9BAD_EC5B, tol, "gaussian_p(500,1001,2.5)");
+    near_rel(window_gaussian(10, 64, f64_div(f64_from(7), f64_from(3))), 0x3C1B_0265_1EAA_90EF, "gaussian far tail");
+    # Bartlett: (d - |2n - d|) / d, one rounding.
+    assert_eq(window_bartlett(16, 64), 0x3FE0_4104_1041_0410, "bartlett(16,64) = 32/63, correctly rounded");
+    assert_eq(window_bartlett_periodic(16, 64), DSP_HALF, "bartlett_p(16,64) = 1/2");
+    assert_eq(window_bartlett(200, 1001), 0x3FD9_9999_9999_999A, "bartlett(200,1001) = 0.4");
+    assert_eq(window_bartlett(0, 64), 0, "bartlett ends are 0");
+    assert_eq(window_bartlett(32, 65), DSP_ONE, "bartlett centre is 1");
+    return 0;
+}
+
+# Every new window: bit-exact symmetric, and periodic(n, N) == symmetric(n, N+1)
+# with w(n) == w(N - n), as the 2.4.x windows.
+fn test_window_270_structure() {
+    var a3 = f64_div(f64_from(3), f64_from(10));
+    var sg = f64_div(f64_from(15), DSP_TWO);
+    var sym = 0;
+    var sizes = 0;
+    while (sizes < 4) {
+        var size = 7;
+        if (sizes == 1) { size = 64; }
+        if (sizes == 2) { size = 1001; }
+        if (sizes == 3) { size = 4096; }
+        var n = 0;
+        while (n < size) {
+            var m = size - 1 - n;
+            if (window_nuttall(n, size) != window_nuttall(m, size)) { sym = sym + 1; }
+            if (window_blackman_harris(n, size) != window_blackman_harris(m, size)) { sym = sym + 1; }
+            if (window_flattop(n, size) != window_flattop(m, size)) { sym = sym + 1; }
+            if (window_bartlett(n, size) != window_bartlett(m, size)) { sym = sym + 1; }
+            if (window_tukey(n, size, a3) != window_tukey(m, size, a3)) { sym = sym + 1; }
+            if (window_gaussian(n, size, sg) != window_gaussian(m, size, sg)) { sym = sym + 1; }
+            n = n + 1;
+        }
+        sizes = sizes + 1;
+    }
+    assert_eq(sym, 0, "every 2.7.0 window is bit-exact symmetric");
+    var ext = 0;
+    var psym = 0;
+    var sz = 2;
+    while (sz <= 257) {
+        var k = 0;
+        while (k < sz) {
+            var w0 = window_nuttall_periodic(k, sz);
+            var w1 = window_blackman_harris_periodic(k, sz);
+            var w2 = window_flattop_periodic(k, sz);
+            var w3 = window_bartlett_periodic(k, sz);
+            var w4 = window_tukey_periodic(k, sz, a3);
+            var w5 = window_gaussian_periodic(k, sz, sg);
+            if (w0 != window_nuttall(k, sz + 1)) { ext = ext + 1; }
+            if (w1 != window_blackman_harris(k, sz + 1)) { ext = ext + 1; }
+            if (w2 != window_flattop(k, sz + 1)) { ext = ext + 1; }
+            if (w3 != window_bartlett(k, sz + 1)) { ext = ext + 1; }
+            if (w4 != window_tukey(k, sz + 1, a3)) { ext = ext + 1; }
+            if (w5 != window_gaussian(k, sz + 1, sg)) { ext = ext + 1; }
+            if (k >= 1) {
+                var r = sz - k;
+                if (w0 != window_nuttall_periodic(r, sz)) { psym = psym + 1; }
+                if (w1 != window_blackman_harris_periodic(r, sz)) { psym = psym + 1; }
+                if (w2 != window_flattop_periodic(r, sz)) { psym = psym + 1; }
+                if (w3 != window_bartlett_periodic(r, sz)) { psym = psym + 1; }
+                if (w4 != window_tukey_periodic(r, sz, a3)) { psym = psym + 1; }
+                if (w5 != window_gaussian_periodic(r, sz, sg)) { psym = psym + 1; }
+            }
+            k = k + 1;
+        }
+        sz = sz + 1;
+    }
+    assert_eq(ext, 0, "2.7.0 periodic(n, N) == symmetric(n, N + 1), N = 2..257");
+    assert_eq(psym, 0, "2.7.0 periodic w(n) == w(N - n), N = 2..257");
+    return 0;
+}
+
+# Bounds, and the parameters' ends: Tukey's alpha <= 0 is rectangular and
+# alpha >= 1 is Hann bit for bit; Gaussian's sigma +Inf is rectangular, 0 the
+# centre impulse, -sigma is sigma; a NaN parameter gives NaN.
+fn test_window_270_params() {
+    var nan = 0x7FF8_0000_0000_0000;
+    var inf = 0x7FF0_0000_0000_0000;
+    var a5 = f64_div(DSP_ONE, DSP_TWO);
+    assert_eq(window_nuttall(64, 64), 0, "nuttall n = size is 0");
+    assert_eq(window_flattop_periodic(0 - 1, 64), 0, "flattop_p n = -1 is 0");
+    assert_eq(window_tukey(3, 3, a5), 0, "tukey past the end is 0");
+    assert_eq(window_gaussian(0, 0 - 4, DSP_ONE), 0, "gaussian negative size is empty");
+    assert_eq(window_blackman_harris(0, 1), DSP_ONE, "blackman_harris(0,1) = 1");
+    assert_eq(window_bartlett_periodic(0, 1), DSP_ONE, "bartlett_p(0,1) = 1");
+    assert_eq(window_tukey(0, 1, nan), DSP_ONE, "tukey(0,1) = 1, as kaiser, whatever alpha");
+    var bad = 0;
+    var n = 0;
+    while (n < 64) {
+        if (window_tukey(n, 64, f64_from(0)) != DSP_ONE) { bad = bad + 1; }
+        if (window_tukey(n, 64, f64_neg(a5)) != DSP_ONE) { bad = bad + 1; }
+        if (window_tukey(n, 64, DSP_ONE) != window_hann(n, 64)) { bad = bad + 1; }
+        if (window_tukey(n, 64, f64_from(2)) != window_hann(n, 64)) { bad = bad + 1; }
+        if (window_tukey_periodic(n, 64, DSP_ONE) != window_hann_periodic(n, 64)) { bad = bad + 1; }
+        if (window_gaussian(n, 64, inf) != DSP_ONE) { bad = bad + 1; }
+        if (window_gaussian(n, 64, f64_neg(f64_from(8))) != window_gaussian(n, 64, f64_from(8))) { bad = bad + 1; }
+        if (window_gaussian(n, 64, f64_from(0)) != 0) { bad = bad + 1; }
+        n = n + 1;
+    }
+    assert_eq(bad, 0, "tukey and gaussian parameter ends");
+    assert_eq(window_gaussian(32, 65, f64_from(0)), DSP_ONE, "sigma 0: the centre sample is 1");
+    assert_eq(window_gaussian(31, 65, f64_from(0)), 0, "sigma 0: its neighbour is 0");
+    assert(f64_eq(window_tukey(5, 64, nan), window_tukey(5, 64, nan)) == 0, "tukey NaN alpha is NaN");
+    assert(f64_eq(window_gaussian(5, 64, nan), window_gaussian(5, 64, nan)) == 0, "gaussian NaN sigma is NaN");
+    return 0;
+}
+
+# Harris 1978, Table I, on python3 references (45-digit Decimal, the exact
+# windows): coherent gain, ENBW in bins, and scalloping loss in dB. For the
+# periodic cosine sums the gain is exactly a0 and ENBW is
+# (a0^2 + (a1^2 + a2^2 + ...) / 2) / a0^2.
+fn _fill_win(kind, size) {
+    var w = alloc(size * 8);
+    var i = 0;
+    while (i < size) {
+        var v = DSP_ONE;
+        if (kind == 1) { v = window_hann_periodic(i, size); }
+        if (kind == 2) { v = window_blackman_harris_periodic(i, size); }
+        if (kind == 3) { v = window_nuttall_periodic(i, size); }
+        if (kind == 4) { v = window_flattop_periodic(i, size); }
+        store64(w + i * 8, v);
+        i = i + 1;
+    }
+    return w;
+}
+
+fn test_window_metrics() {
+    var r = _fill_win(0, 64);
+    assert_eq(window_coherent_gain(r, 64), DSP_ONE, "rectangular gain is 1");
+    assert_eq(window_enbw(r, 64), DSP_ONE, "rectangular ENBW is 1 bin");
+    near_rel(window_scalloping_loss(r, 64), 0x400F_5F48_BEE5_0777, "rectangular scalloping 3.92 dB");
+    var h = _fill_win(1, 64);
+    near_rel(window_coherent_gain(h, 64), DSP_HALF, "hann_p gain 0.5");
+    near_rel(window_enbw(h, 64), 0x3FF8_0000_0000_0000, "hann_p ENBW 1.5 bins");
+    near_rel(window_scalloping_loss(h, 64), 0x3FF6_C728_0C70_D502, "hann_p scalloping 1.42 dB");
+    var b = _fill_win(2, 64);
+    near_rel(window_coherent_gain(b, 64), 0x3FD6_F5C2_8F5C_28F6, "blackman_harris_p gain 0.35875");
+    near_rel(window_enbw(b, 64), 0x4000_08EA_317A_4513, "blackman_harris_p ENBW 2.004 bins");
+    near_rel(window_scalloping_loss(b, 64), 0x3FEA_6B16_C97D_BC8C, "blackman_harris_p scalloping 0.83 dB");
+    var nt = _fill_win(3, 1024);
+    near_rel(window_coherent_gain(nt, 1024), 0x3FD7_44ED_047A_B904, "nuttall_p gain 0.3635819");
+    near_rel(window_enbw(nt, 1024), 0x3FFF_9E24_C511_ACB2, "nuttall_p ENBW 1.976 bins");
+    near_rel(window_scalloping_loss(nt, 1024), 0x3FEB_37C2_4AE1_8B52, "nuttall_p scalloping 0.85 dB");
+    var ft = _fill_win(4, 256);
+    near_rel(window_enbw(ft, 256), 0x400E_2976_F82D_09A5, "flattop_p ENBW 3.77 bins");
+    var ftl = window_scalloping_loss(ft, 256);
+    near_abs(ftl, 0x3F84_0672_ADB2_D5BD, 0x3CD0000000000000, "flattop_p scalloping 0.0098 dB");
+    assert(f64_eq(window_enbw(r, 0), window_enbw(r, 0)) == 0, "ENBW of no samples is NaN");
+    assert(f64_eq(window_coherent_gain(r, 0), window_coherent_gain(r, 0)) == 0, "gain of no samples is NaN");
+    assert(f64_eq(window_scalloping_loss(r, 0), window_scalloping_loss(r, 0)) == 0, "scalloping of no samples is NaN");
+    return 0;
+}
+
+# The biquad's magnitude and phase at f.
+fn _bq_mag(c, f, fs) {
+    var m, p = biquad_response(c, f, fs);
+    return m;
+}
+fn _bq_ph(c, f, fs) {
+    var m, p = biquad_response(c, f, fs);
+    return p;
+}
+
+# Design a section; asserts Ok.
+fn _bq(kind, f0, q, g, name) {
+    var c = alloc(40);
+    var st, v = biquad_design(c, kind, f0, f64_from(48000), q, g);
+    assert_eq(is_ok(st), 1, name);
+    return c;
+}
+
+# The RBJ cookbook's analytic gains, through biquad_response: low-pass and
+# high-pass reach Q at f0 with -pi/2 and +pi/2; the band-passes 1 and Q; the
+# notch 0; the all-pass 1 everywhere and -pi at f0; the peak A^2 at f0; the
+# shelves A^2 on their side, A at f0, 1 on the other (A = 10^(gain / 40)).
+# 10^(gain / 20) references from python3 Decimal.
+fn test_biquad_gains() {
+    var fs = f64_from(48000);
+    var f0 = f64_from(1000);
+    var ny = f64_from(24000);
+    var z = f64_from(0);
+    var q = 0x3FE6_A09E_667F_3BCC;   # 1/sqrt(2)
+    var g6 = f64_from(6);
+    # Phases and near-zeros within 2^-40 (9e-13). At f0 the phase turns at
+    # ~2Q / w0 rad per rad, ~60 here, so the coefficients' own rounding moves
+    # it by ~1e-14 (the band-pass reads 1.4e-14 at f0).
+    var tol = 0x3D70000000000000;
+    var c = _bq(DSP_BQ_LOWPASS, f0, q, z, "lowpass designs");
+    near_rel(_bq_mag(c, z, fs), DSP_ONE, "lowpass: 1 at DC");
+    near_rel(_bq_mag(c, f0, fs), q, "lowpass: Q at f0");
+    near_abs(_bq_ph(c, f0, fs), f64_neg(DSP_PI_2), tol, "lowpass: -pi/2 at f0");
+    assert_eq(_bq_mag(c, ny, fs), 0, "lowpass: exactly 0 at Nyquist");
+    c = _bq(DSP_BQ_HIGHPASS, f0, q, z, "highpass designs");
+    assert_eq(_bq_mag(c, z, fs), 0, "highpass: exactly 0 at DC");
+    near_rel(_bq_mag(c, f0, fs), q, "highpass: Q at f0");
+    near_abs(_bq_ph(c, f0, fs), DSP_PI_2, tol, "highpass: +pi/2 at f0");
+    near_rel(_bq_mag(c, ny, fs), DSP_ONE, "highpass: 1 at Nyquist");
+    c = _bq(DSP_BQ_BANDPASS, f0, f64_from(4), z, "bandpass designs");
+    near_rel(_bq_mag(c, f0, fs), DSP_ONE, "bandpass: 1 at f0");
+    near_abs(_bq_ph(c, f0, fs), z, tol, "bandpass: phase 0 at f0");
+    assert_eq(_bq_mag(c, z, fs), 0, "bandpass: 0 at DC");
+    assert_eq(_bq_mag(c, ny, fs), 0, "bandpass: 0 at Nyquist");
+    c = _bq(DSP_BQ_BANDPASS_SKIRT, f0, f64_from(4), z, "bandpass_skirt designs");
+    near_rel(_bq_mag(c, f0, fs), f64_from(4), "bandpass_skirt: Q at f0");
+    c = _bq(DSP_BQ_NOTCH, f0, q, z, "notch designs");
+    near_abs(_bq_mag(c, f0, fs), z, tol, "notch: 0 at f0");
+    near_rel(_bq_mag(c, z, fs), DSP_ONE, "notch: 1 at DC");
+    near_rel(_bq_mag(c, ny, fs), DSP_ONE, "notch: 1 at Nyquist");
+    c = _bq(DSP_BQ_ALLPASS, f0, q, z, "allpass designs");
+    var bad = 0;
+    var i = 0;
+    while (i <= 48) {
+        var f = f64_from(i * 500);
+        if (ulp_dist(_bq_mag(c, f, fs), DSP_ONE) > 8) { bad = bad + 1; }
+        i = i + 1;
+    }
+    assert_eq(bad, 0, "allpass: |H| = 1 within 8 ulp, 0..24 kHz");
+    near_abs(f64_abs(_bq_ph(c, f0, fs)), DSP_PI, tol, "allpass: -pi at f0");
+    c = _bq(DSP_BQ_PEAK, f0, DSP_TWO, g6, "peak designs");
+    near_rel(_bq_mag(c, f0, fs), 0x3FFF_EC98_2D5B_B8AF, "peak +6 dB: 10^(6/20) at f0");
+    near_rel(_bq_mag(c, z, fs), DSP_ONE, "peak: 1 at DC");
+    near_rel(_bq_mag(c, ny, fs), DSP_ONE, "peak: 1 at Nyquist");
+    c = _bq(DSP_BQ_LOWSHELF, f0, q, g6, "lowshelf designs");
+    near_rel(_bq_mag(c, z, fs), 0x3FFF_EC98_2D5B_B8AF, "lowshelf +6 dB at DC");
+    near_rel(_bq_mag(c, f0, fs), 0x3FF6_99C0_F7E8_6E10, "lowshelf +3 dB at f0");
+    near_rel(_bq_mag(c, ny, fs), DSP_ONE, "lowshelf: 1 at Nyquist");
+    c = _bq(DSP_BQ_HIGHSHELF, f0, q, f64_neg(f64_from(12)), "highshelf designs");
+    near_rel(_bq_mag(c, ny, fs), 0x3FD0_1379_87DD_704C, "highshelf -12 dB at Nyquist");
+    near_rel(_bq_mag(c, f0, fs), 0x3FE0_09B9_CF33_4252, "highshelf -6 dB at f0");
+    near_rel(_bq_mag(c, z, fs), DSP_ONE, "highshelf: 1 at DC");
+    return 0;
+}
+
+# Coefficients against the cookbook formulas in 45-digit Decimal from the
+# exact inputs, within 4 ulp each (1,135 designs: within 3.6 ulp of the
+# largest coefficient).
+fn test_biquad_coeffs() {
+    var c = _bq(DSP_BQ_LOWPASS, f64_from(1000), 0x3FE6_A09E_667F_3BCC, f64_from(0), "lowpass 1 kHz");
+    near_ulp(load64(c), 0x3F70_0A5B_3EF1_D8CC, 4, "lowpass b0");
+    near_ulp(load64(c + 8), 0x3F80_0A5B_3EF1_D8CC, 4, "lowpass b1");
+    near_ulp(load64(c + 16), 0x3F70_0A5B_3EF1_D8CC, 4, "lowpass b2");
+    near_ulp(load64(c + 24), 0xBFFD_0BA3_1754_D255, 4, "lowpass a1");
+    near_ulp(load64(c + 32), 0x3FEA_9799_08A1_3371, 4, "lowpass a2");
+    c = _bq(DSP_BQ_PEAK, f64_from(1000), DSP_TWO, f64_from(6), "peak 1 kHz");
+    near_ulp(load64(c), 0x3FF0_5C0C_67C8_E0C9, 4, "peak b0");
+    near_ulp(load64(c + 8), 0xBFFF_0286_8815_4208, 4, "peak b1");
+    near_ulp(load64(c + 16), 0x3FED_D5F4_E0FE_2410, 4, "peak b2");
+    near_ulp(load64(c + 24), 0xBFFF_0286_8815_4208, 4, "peak a1");
+    near_ulp(load64(c + 32), 0x3FEE_8E0D_B08F_E5A2, 4, "peak a2");
+    c = _bq(DSP_BQ_LOWSHELF, f64_from(1000), 0x3FE6_A09E_667F_3BCC, f64_from(6), "lowshelf 1 kHz");
+    near_ulp(load64(c), 0x3FF0_8560_3D09_FFC9, 4, "lowshelf b0");
+    near_ulp(load64(c + 8), 0xBFFD_6BF5_2EED_5752, 4, "lowshelf b1");
+    near_ulp(load64(c + 16), 0x3FEA_8519_DD18_3FD1, 4, "lowshelf b2");
+    near_ulp(load64(c + 24), 0xBFFD_82E5_3435_6B98, 4, "lowshelf a1");
+    near_ulp(load64(c + 32), 0x3FEB_61FA_4C9C_16D9, 4, "lowshelf a2");
+    return 0;
+}
+
+# biquad_response on pinned coefficients, against H(e^jw) evaluated exactly
+# on those coefficients (45-digit Decimal). The rows sit where the direct
+# 1 + a1 cos w + a2 cos 2w cancels (in brackets, python3's direct form): a
+# 20 Hz, Q 20 low-pass at 48 kHz near DC, and a 23 kHz low-pass next to
+# Nyquist.
+fn _bq_set(c, b0, b1, b2, a1, a2) {
+    store64(c, b0);
+    store64(c + 8, b1);
+    store64(c + 16, b2);
+    store64(c + 24, a1);
+    store64(c + 32, a2);
+    return c;
+}
+
+fn test_biquad_response_accuracy() {
+    var fs = f64_from(48000);
+    var c = _bq_set(alloc(40), 0x3EBC_BED3_191E_3284, 0x3ECC_BED3_191E_3284, 0x3EBC_BED3_191E_3284,
+      0xBFFF_FF6F_9083_BC7D, 0x3FEF_FEED_8071_0588);
+    near_ulp(_bq_mag(c, f64_from(20), fs), 0x4033_FFFF_FFFF_EE79, 4, "20 Hz Q 20 at f0 (direct: ~11,500 ulp)");
+    near_ulp(_bq_mag(c, f64_from(10), fs), 0x3FF5_524C_DBF0_4043, 4, "20 Hz Q 20 at 10 Hz (direct: ~5,000 ulp)");
+    near_ulp(_bq_mag(c, f64_from(0), fs), 0x3FF0_0000_0001_391A, 4, "20 Hz Q 20 at DC: its stored gain");
+    c = _bq_set(c, 0x3FED_2BB7_CDD2_B607, 0x3FFD_2BB7_CDD2_B607, 0x3FED_2BB7_CDD2_B607,
+      0x3FFD_0BA3_1754_D255, 0x3FEA_9799_08A1_3372);
+    near_ulp(_bq_mag(c, f64_from(23999), fs), 0x3EB0_BAB5_0122_7820, 8,
+      "23 kHz low-pass at 23,999 Hz (direct: ~370,000 ulp)");
+    near_ulp(_bq_mag(c, f64_from(23990), fs), 0x3F1A_23BB_4B94_B28A, 8, "23 kHz low-pass at 23,990 Hz");
+    return 0;
+}
+
+# biquad_process in TDF-II: the impulse response against exact rational long
+# division of H(z) on the stored coefficients (python3 Fraction); blocks chain
+# through the state; in place is the same; a steady tone comes out at
+# |H(f)| and arg H(f); n = 0 leaves the state alone.
+fn test_biquad_process() {
+    var fs = f64_from(48000);
+    var c = _bq(DSP_BQ_LOWPASS, f64_from(1000), 0x3FE6_A09E_667F_3BCC, f64_from(0), "lowpass 1 kHz");
+    var st = alloc(16);
+    store64(st, 0);
+    store64(st + 8, 0);
+    var x = alloc(8 * 8);
+    var y = alloc(8 * 8);
+    var i = 0;
+    while (i < 8) { store64(x + i * 8, 0); i = i + 1; }
+    store64(x, DSP_ONE);
+    assert_eq(biquad_process(c, st, x, y, 8), 0, "biquad_process returns 0");
+    near_rel(load64(y), 0x3F70_0A5B_3EF1_D8CC, "h[0] = b0");
+    near_rel(load64(y + 8), 0x3F8E_9993_3FCD_673B, "h[1]");
+    near_rel(load64(y + 16), 0x3F9C_73CB_12DE_C9B2, "h[2]");
+    near_rel(load64(y + 24), 0x3FA3_77D9_2F2C_4E35, "h[3]");
+    near_rel(load64(y + 56), 0x3FAD_DEF0_DDF6_ECC2, "h[7]");
+    # A tone at 3 kHz: 4800 samples, one block, then two blocks, then in place.
+    var n = 4800;
+    var w = angular_frequency(f64_from(3000), fs);
+    var src = alloc(n * 8);
+    var d1 = alloc(n * 8);
+    var d2 = alloc(n * 8);
+    i = 0;
+    while (i < n) { store64(src + i * 8, f64_sin(f64_mul(w, f64_from(i)))); i = i + 1; }
+    store64(st, 0);
+    store64(st + 8, 0);
+    biquad_process(c, st, src, d1, n);
+    var s1 = load64(st);
+    store64(st, 0);
+    store64(st + 8, 0);
+    biquad_process(c, st, src, d2, 1777);
+    biquad_process(c, st, src + 1777 * 8, d2 + 1777 * 8, n - 1777);
+    var diff = 0;
+    i = 0;
+    while (i < n) { if (load64(d1 + i * 8) != load64(d2 + i * 8)) { diff = diff + 1; } i = i + 1; }
+    assert_eq(diff, 0, "two blocks through the state == one block, bit for bit");
+    assert_eq(load64(st), s1, "the state after two blocks == after one");
+    store64(st, 0);
+    store64(st + 8, 0);
+    biquad_process(c, st, src, src, n);
+    diff = 0;
+    i = 0;
+    while (i < n) { if (load64(src + i * 8) != load64(d1 + i * 8)) { diff = diff + 1; } i = i + 1; }
+    assert_eq(diff, 0, "in place (dst == src) == out of place");
+    var mag, ph = biquad_response(c, f64_from(3000), fs);
+    var worst = f64_from(0);
+    i = n - 64;
+    while (i < n) {
+        var want = f64_mul(mag, f64_sin(f64_add(f64_mul(w, f64_from(i)), ph)));
+        var e = f64_abs(f64_sub(load64(d1 + i * 8), want));
+        if (f64_gt(e, worst) == 1) { worst = e; }
+        i = i + 1;
+    }
+    assert(f64_lt(worst, 0x3DDB7CDFD9D7BDBB) == 1, "steady 3 kHz tone = |H| sin(w n + arg H) within 1e-10");
+    var before = load64(st);
+    biquad_process(c, st, src, d1, 0);
+    assert_eq(load64(st), before, "n = 0 leaves the state alone");
+    return 0;
+}
+
+# Err(0), with out untouched, for each refused input; the gain is checked only
+# where it is used.
+fn _bq_err(kind, f0, fs, q, g, name) {
+    var c = alloc(40);
+    store64(c, 0x7FF4_0000_DEAD_0001);
+    var st, v = biquad_design(c, kind, f0, fs, q, g);
+    assert_eq(is_ok(st), 0, name);
+    assert_eq(load64(c), 0x7FF4_0000_DEAD_0001, name);
+    return 0;
+}
+
+fn test_biquad_design_errors() {
+    var fs = f64_from(48000);
+    var f0 = f64_from(1000);
+    var q = DSP_ONE;
+    var z = f64_from(0);
+    var nan = 0x7FF8_0000_0000_0000;
+    var inf = 0x7FF0_0000_0000_0000;
+    _bq_err(0 - 1, f0, fs, q, z, "kind -1");
+    _bq_err(9, f0, fs, q, z, "kind 9");
+    _bq_err(DSP_BQ_LOWPASS, f0, z, q, z, "fs 0");
+    _bq_err(DSP_BQ_LOWPASS, f0, f64_neg(fs), q, z, "fs < 0");
+    _bq_err(DSP_BQ_LOWPASS, f0, nan, q, z, "fs NaN");
+    _bq_err(DSP_BQ_LOWPASS, f0, inf, q, z, "fs Inf");
+    _bq_err(DSP_BQ_LOWPASS, f0, fs, z, z, "q 0");
+    _bq_err(DSP_BQ_LOWPASS, f0, fs, f64_neg(q), z, "q < 0");
+    _bq_err(DSP_BQ_LOWPASS, f0, fs, nan, z, "q NaN");
+    _bq_err(DSP_BQ_LOWPASS, f0, fs, inf, z, "q Inf");
+    _bq_err(DSP_BQ_LOWPASS, z, fs, q, z, "f0 0");
+    _bq_err(DSP_BQ_LOWPASS, f64_from(24000), fs, q, z, "f0 = fs/2");
+    _bq_err(DSP_BQ_LOWPASS, f64_from(30000), fs, q, z, "f0 > fs/2");
+    _bq_err(DSP_BQ_LOWPASS, nan, fs, q, z, "f0 NaN");
+    _bq_err(DSP_BQ_PEAK, f0, fs, q, nan, "peak gain NaN");
+    _bq_err(DSP_BQ_LOWSHELF, f0, fs, q, inf, "lowshelf gain Inf");
+    _bq_err(DSP_BQ_HIGHSHELF, f0, fs, q, f64_neg(inf), "highshelf gain -Inf");
+    _bq_err(DSP_BQ_PEAK, f0, fs, q, f64_from(20000), "peak +20,000 dB overflows");
+    var c = alloc(40);
+    var st, v = biquad_design(c, DSP_BQ_LOWPASS, f0, fs, q, nan);
+    assert_eq(is_ok(st), 1, "lowpass ignores the gain, NaN included");
+    return 0;
+}
+
+# Every design that succeeds is stable: |a2| < 1 and |a1| < 1 + a2, the
+# second-order triangle (RBJ poles lie inside the unit circle for alpha > 0
+# and 0 < w0 < pi). 20,000 designs, every kind, f0 / fs in [1e-4, 0.5),
+# q in [0.1, 50], gain in [-30, 30] dB, from a fixed LCG.
+fn test_biquad_stability() {
+    var c = alloc(40);
+    var fs = f64_from(48000);
+    var seed = 270;
+    var bad = 0;
+    var errs = 0;
+    var i = 0;
+    while (i < 20000) {
+        seed = (seed * 6364136223846793005 + 1442695040888963407);
+        var u1 = f64_div(f64_from((seed >> 11) & 0xFFFFF), f64_from(1048576));
+        seed = (seed * 6364136223846793005 + 1442695040888963407);
+        var u2 = f64_div(f64_from((seed >> 11) & 0xFFFFF), f64_from(1048576));
+        seed = (seed * 6364136223846793005 + 1442695040888963407);
+        var u3 = f64_div(f64_from((seed >> 11) & 0xFFFFF), f64_from(1048576));
+        var f0 = f64_mul(fs, f64_add(f64_div(DSP_ONE, f64_from(10000)), f64_mul(u1, 0x3FDF_FCB9_23A2_9C78)));
+        var q = f64_add(f64_div(DSP_ONE, f64_from(10)), f64_mul(u2, f64_from(50)));
+        var g = f64_sub(f64_mul(u3, f64_from(60)), f64_from(30));
+        var st, v = biquad_design(c, i % 9, f0, fs, q, g);
+        if (is_ok(st) == 0) { errs = errs + 1; }
+        var a1 = load64(c + 24);
+        var a2 = load64(c + 32);
+        if (f64_lt(f64_abs(a2), DSP_ONE) == 0) { bad = bad + 1; }
+        if (f64_lt(f64_abs(a1), f64_add(DSP_ONE, a2)) == 0) { bad = bad + 1; }
+        i = i + 1;
+    }
+    assert_eq(errs, 0, "20,000 valid designs: all Ok");
+    assert_eq(bad, 0, "20,000 designs: all stable");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("=== abaco dsp tests ===");
@@ -864,6 +1341,16 @@ fn main() {
     test_round_edges();
     test_db_constants_exact();
     test_nan_and_domain();
+    test_window_270_values();
+    test_window_270_structure();
+    test_window_270_params();
+    test_window_metrics();
+    test_biquad_gains();
+    test_biquad_coeffs();
+    test_biquad_response_accuracy();
+    test_biquad_process();
+    test_biquad_design_errors();
+    test_biquad_stability();
     # Propagate failure to the process exit code. assert_summary() RETURNS
     # _assert_fail; discarding it and returning 0 made a red suite exit 0, and
     # CI gates on the exit code — so failures shipped green (fixed 2.4.4).

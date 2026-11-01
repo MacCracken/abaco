@@ -5,6 +5,136 @@ All notable changes to Abaco will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.0] — 2026-10-31
+
+**DSP: six more windows, window metrics, and RBJ biquads.** Before them, the
+P(-1) pass reviewed the 2.6.0 changes
+([`docs/audit/2026-10-31-fix-audit.md`](docs/audit/2026-10-31-fix-audit.md)).
+It found 3 issues (1 low, 2 info), and all are fixed:
+- `mean`'s overflow path is now correctly rounded too;
+- `stddev` is within 1 ulp;
+- a malformed call past the argument cap is `ABACO_ERR_PARSE`.
+
+Suite 2435 → **2633** asserts; fuzz 4/4 at 20,000 iterations; fmt / lint / vet
+clean; aarch64 (qemu) green.
+
+### Added
+
+- **Windows (`src/dsp.cyr`):** Nuttall, Blackman–Harris (4-term), flat-top
+  (5-term), Bartlett, Tukey(α) and Gaussian(σ), each as `window_<name>(n,
+  size[, p])` and `window_<name>_periodic(n, size[, p])`.
+  - The conventions are the existing windows': 0 outside [0, size) and [1]
+    for size 1. Every window is bit-exact symmetric on the integer 2n − d, and
+    periodic(n, N) is symmetric(n, N + 1) bit for bit.
+  - **Accuracy,** against 45-digit Decimal formulas over every sample of sizes
+    1–130, 1000 and 4097:
+    - the cosine sums and Tukey are within 1.54 ulp of the peak;
+    - the Gaussian is within 0.65 ulp of the peak;
+    - Bartlett, (d − |2n − d|)/d, is correctly rounded.
+  - **Tukey:** α ≤ 0 is rectangular and α ≥ 1 is Hann bit for bit.
+  - **Gaussian:** σ is in samples (scipy's `std`). σ = 0 is the centre
+    impulse and +Inf is rectangular.
+  - A NaN parameter gives NaN.
+- **Window metrics:** `window_coherent_gain(w, n)`, `window_enbw(w, n)` (in
+  bins) and `window_scalloping_loss(w, n)` (in dB), as Harris 1978 tabulates
+  them. The sums are compensated, and no samples give NaN.
+- **Biquads, from the RBJ Audio EQ Cookbook:**
+  - **`biquad_design(out, kind, f0, fs, q, gain_db)`** writes
+    `b0, b1, b2, a1, a2` (normalised by a0) and returns `Ok` / `Err`. The
+    kinds are `DSP_BQ_LOWPASS`, `_HIGHPASS`, `_BANDPASS` (0 dB peak),
+    `_BANDPASS_SKIRT`, `_NOTCH`, `_ALLPASS`, `_PEAK`, `_LOWSHELF` and
+    `_HIGHSHELF`.
+    - It returns `Err` for an unknown kind, an fs or q that is not finite and
+      positive, an f0 outside (0, fs/2), a non-finite gain where one is used,
+      or a design that overflows.
+    - The coefficients are within 3.6 ulp of a 45-digit reference over 1,135
+      designs.
+    - 1 ∓ cos w₀ is formed as 2 sin²(w₀/2) or 2 cos²(w₀/2), so low and high
+      corners do not cancel.
+  - **`biquad_response(c, f, fs)`** returns `(magnitude, phase)`. Near DC
+    and near Nyquist it expands about that end, where the sums of the
+    coefficients are exact; mid-band it uses the direct form.
+    - Over 10,581 points against exact evaluation of the stored
+      coefficients, p99 is 5.5 ulp, where the direct form gives 250,098.
+    - For a 20 Hz, Q 20 low-pass at 48 kHz the direct form is ~11,500 ulp
+      off at f0, and this is 1 ulp off.
+  - **`biquad_process(c, state, src, dst, n)`** is transposed direct form II.
+    The state is the caller's 16 bytes, blocks chain through it, and in place
+    works.
+- **Tests:**
+  - **`test_dsp`** (252 → 427 asserts):
+    - window values, symmetry, periodic structure, parameter ends and
+      metrics;
+    - the cookbook's analytic gains at DC, f0 and Nyquist for all nine
+      kinds;
+    - coefficients against Decimal;
+    - responses on pinned coefficients where the direct form cancels;
+    - TDF-II impulse response against exact long division, block chaining,
+      in place, and a steady tone at |H| and arg H;
+    - every refused input;
+    - 20,000 random designs, all stable.
+  - **Mutants caught:** the tests catch 14 of 16 mutants. The two misses are
+    equivalent within rounding: a 1-ulp change in a coefficient, and
+    (φ+φ)+φ for 3φ.
+- **Bench rows:** `window_nuttall` (158 ns), `window_blackman_harris` (158),
+  `window_flattop` (200), `window_bartlett` (15), `window_tukey` (78),
+  `window_gaussian` (49), `window_enbw_1024` (15.6 µs),
+  `window_scalloping_1024` (111 µs), `biquad_design_peak` (176 ns),
+  `biquad_response` (273 ns), `biquad_process_256` (3.0 µs, ~12 ns a
+  sample), `stddev8` (3.2 µs), `mean_ovf` (6.0 µs).
+
+### Fixed
+
+From the P(-1) review. Each fix has tests that fail on 2.6.0.
+
+- **`mean`'s overflow path is correctly rounded** (low; a 2.6.0 regression).
+  When a partial sum overflowed, 2.6.0 scaled every argument by 2^-k and
+  rounded on the scaled grid. That flushed small arguments and their
+  tie-breaks, and rounded results below 2^(k−1022) on a grid 2^k times too
+  coarse, normal results included. The answer also depended on the argument
+  order:
+  - `mean(M, M, -M, -M, 1.78e-307)` was 27 ulp off, with M = DBL_MAX;
+  - `mean(M, M, -M, -M, 2^-1070)` was 0.
+
+  Now each argument is split exactly as 2^k·a + b, so the residues sum to
+  one exact double, and the mean either unscales exactly or takes every sign
+  exactly. The review's corpus went from 619 of 10,000 wrong to 0; 80,000
+  adversarial overflowing means and 420,000 others are exact.
+- **`stddev` is within 1 ulp** (info). With data spread less than an ulp of
+  the mean, the mean's own rounding swamped the spread: 31 values one ulp
+  apart near 3.8e9 gave 57 ulp, and the review saw 89. Now:
+  - the mean is a double-double;
+  - each deviation is an exact two-sum, renormalised and squared as a
+    double-double;
+  - Σd² is compensated.
+
+  The worst over every corpus went from 62 ulp to 1. Both pinned cases are
+  exact. `stddev8` costs 2.7 → 3.2 µs.
+- **A malformed call past the 32-argument cap is `ABACO_ERR_PARSE`** (info).
+  2.6.0 reported ARITY at the 33rd comma before reading the rest, so
+  `mean(1, …, 1,)` with 32 ones was ARITY. Arguments past the cap are now
+  parsed and dropped:
+  - a call that parses is ARITY;
+  - one that does not is PARSE;
+  - an argument's own error, such as an unknown variable, stands first, as
+    it always did before the cap.
+
+### Changed
+
+- **Differential, 97,944 records against 2.6.0:** 147 differ, all `stddev` /
+  `stdev`. 145 move by 1 ulp and 2 by 2 ulp, from 1 ulp below the exact
+  value to 1 ulp above it. 110 are closer to the exact value, 35 are 1 ulp
+  further, and 2 are the same distance. Over the 3,188 scorable `stddev` records, 2.6.0 had 2,906
+  exact and 282 at 1 ulp; 2.7.0 has 2,981 and 207. Nothing else changed.
+- **Benchmarks:** an interleaved A/B against 2.6.0 (5 rounds, one core) has a
+  median of 1.000 over 112 rows.
+  - The slow tail is `bench_units` rows, which swing between processes.
+    Their minimums are level.
+  - `value_as_f64` (21 → 27 ns) and `sci_mul` (+5%) are bench-binary layout:
+    the 2.7.0 library built with the 2.6.0 bench files times them as 2.6.0
+    does.
+- `dist/abaco.cyr` is 326,813 B / 7,939 lines (was 301,816 / 7,369).
+
 ## [2.6.0] — 2026-10-31
 
 **Number theory: modular arithmetic, integer roots and the multiplicative

@@ -301,6 +301,93 @@ fn _bench_window_kaiser_periodic() {
     return 0;
 }
 
+# 2.7.0: the new windows (one sample, as above), the window metrics on a
+# 1024-sample periodic Blackman-Harris, and the RBJ biquad: a peaking design,
+# one response point, and 256 samples through the section.
+fn _bench_window_nuttall() {
+    window_nuttall(16, 64);
+    return 0;
+}
+
+fn _bench_window_blackman_harris() {
+    window_blackman_harris(16, 64);
+    return 0;
+}
+
+fn _bench_window_flattop() {
+    window_flattop(16, 64);
+    return 0;
+}
+
+fn _bench_window_bartlett() {
+    window_bartlett(16, 64);
+    return 0;
+}
+
+fn _bench_window_tukey() {
+    window_tukey(5, 64, f64_div(f64_from(1), f64_from(2)));
+    return 0;
+}
+
+fn _bench_window_gaussian() {
+    window_gaussian(16, 64, f64_from(8));
+    return 0;
+}
+
+var _bench_win = 0;
+var _bench_bq = 0;
+var _bench_bq_state = 0;
+var _bench_bq_buf = 0;
+var _bench_bq_out = 0;
+
+fn _bench_dsp_setup() {
+    _bench_win = alloc(1024 * 8);
+    var i = 0;
+    while (i < 1024) {
+        store64(_bench_win + i * 8, window_blackman_harris_periodic(i, 1024));
+        i = i + 1;
+    }
+    _bench_bq = alloc(40);
+    biquad_design(_bench_bq, DSP_BQ_PEAK, f64_from(1000), f64_from(48000), f64_from(2), f64_from(6));
+    _bench_bq_state = alloc(16);
+    store64(_bench_bq_state, 0);
+    store64(_bench_bq_state + 8, 0);
+    _bench_bq_buf = alloc(256 * 8);
+    _bench_bq_out = alloc(256 * 8);
+    i = 0;
+    while (i < 256) {
+        store64(_bench_bq_buf + i * 8, f64_div(f64_from((i % 17) - 8), f64_from(8)));
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _bench_window_enbw_1024() {
+    window_enbw(_bench_win, 1024);
+    return 0;
+}
+
+fn _bench_window_scalloping_1024() {
+    window_scalloping_loss(_bench_win, 1024);
+    return 0;
+}
+
+fn _bench_biquad_design_peak() {
+    var c = alloc(40);
+    biquad_design(c, DSP_BQ_PEAK, f64_from(1000), f64_from(48000), f64_from(2), f64_from(6));
+    return 0;
+}
+
+fn _bench_biquad_response() {
+    biquad_response(_bench_bq, f64_from(20), f64_from(48000));
+    return 0;
+}
+
+fn _bench_biquad_process_256() {
+    biquad_process(_bench_bq, _bench_bq_state, _bench_bq_buf, _bench_bq_out, 256);
+    return 0;
+}
+
 fn run_dsp_benches() {
     println("--- dsp ---");
 
@@ -414,6 +501,52 @@ fn run_dsp_benches() {
 
     b = bench_new("window_kaiser_periodic");
     bench_run(b, &_bench_window_kaiser_periodic, BENCH_ITERS);
+    bench_report(b);
+
+    _bench_dsp_setup();
+
+    b = bench_new("window_nuttall");
+    bench_run(b, &_bench_window_nuttall, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("window_blackman_harris");
+    bench_run(b, &_bench_window_blackman_harris, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("window_flattop");
+    bench_run(b, &_bench_window_flattop, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("window_bartlett");
+    bench_run(b, &_bench_window_bartlett, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("window_tukey");
+    bench_run(b, &_bench_window_tukey, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("window_gaussian");
+    bench_run(b, &_bench_window_gaussian, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("window_enbw_1024");
+    bench_run(b, &_bench_window_enbw_1024, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("window_scalloping_1024");
+    bench_run(b, &_bench_window_scalloping_1024, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("biquad_design_peak");
+    bench_run(b, &_bench_biquad_design_peak, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("biquad_response");
+    bench_run(b, &_bench_biquad_response, BENCH_ITERS);
+    bench_report(b);
+
+    b = bench_new("biquad_process_256");
+    bench_run(b, &_bench_biquad_process_256, BENCH_ITERS);
     bench_report(b);
 
     return 0;
